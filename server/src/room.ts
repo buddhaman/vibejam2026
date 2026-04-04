@@ -1,7 +1,7 @@
 import { Room, type Client } from "colyseus";
 import { GameState, Player, Blob, Building } from "./state.js";
 import { CONFIG } from "./config.js";
-import { BuildingType, getBlobRadius, isBuildingType } from "../../shared/game-rules.js";
+import { BuildingType, getSquadRadius, isBuildingType } from "../../shared/game-rules.js";
 import { MessageType, type IntentMessage, type BuildMessage, type TrainMessage } from "../../shared/protocol.js";
 
 let nextId = 1;
@@ -27,6 +27,8 @@ export class BattleRoom extends Room<{ state: GameState }> {
   state = new GameState();
 
   onCreate() {
+    this.state.terrainSeed = Math.floor(Math.random() * 0xffffffff);
+
     const intervalMs = 1000 / CONFIG.TICK_HZ;
     this.setSimulationInterval((dt) => this.tick(dt), intervalMs);
 
@@ -91,7 +93,7 @@ export class BattleRoom extends Room<{ state: GameState }> {
       blob.targetX = blob.x;
       blob.targetY = blob.y;
       blob.unitCount = CONFIG.DEFAULT_UNIT_COUNT;
-      blob.radius = getBlobRadius(blob.unitCount);
+      blob.radius = getSquadRadius(blob.unitCount);
       blob.health = CONFIG.DEFAULT_BLOB_HEALTH;
       this.state.blobs.set(blob.id, blob);
     });
@@ -120,7 +122,7 @@ export class BattleRoom extends Room<{ state: GameState }> {
       blob.targetX = blob.x;
       blob.targetY = blob.y;
       blob.unitCount = CONFIG.DEFAULT_UNIT_COUNT;
-      blob.radius = getBlobRadius(blob.unitCount);
+      blob.radius = getSquadRadius(blob.unitCount);
       blob.health = CONFIG.DEFAULT_BLOB_HEALTH;
       this.state.blobs.set(blob.id, blob);
     }
@@ -148,6 +150,7 @@ export class BattleRoom extends Room<{ state: GameState }> {
     const speed = CONFIG.BLOB_MOVE_SPEED;
 
     for (const blob of this.state.blobs.values()) {
+      blob.radius = getSquadRadius(blob.unitCount);
       const dx = blob.targetX - blob.x;
       const dy = blob.targetY - blob.y;
       const dist = Math.hypot(dx, dy);

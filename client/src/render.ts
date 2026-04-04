@@ -1,7 +1,9 @@
 import * as THREE from "three";
+import { GAME_RULES } from "../../shared/game-rules.js";
 import type { Game } from "./game.js";
 import { createHudCanvas, createHudState, drawHUD, hitTestDeselect, hitTestMenu, hitTestSelectionAction } from "./hud.js";
 import type { SelectionInfo } from "./entity.js";
+import { createTerrainMesh } from "./terrain.js";
 
 const CAM = {
   polarFromDownDeg: 45,
@@ -13,6 +15,15 @@ const CAM = {
   fov: 52,
 } as const;
 
+const SUN = {
+  direction: new THREE.Vector3(-0.55, 1, -0.35).normalize(),
+  intensity: 0.8,
+  shadowRadius: 44,
+  shadowDepth: 160,
+  shadowDistance: 90,
+  mapSize: 2048,
+} as const;
+
 export function startRender(game: Game) {
   const canvas = document.createElement("canvas");
   canvas.style.cssText = "display:block;width:100%;height:100%;";
@@ -21,32 +32,44 @@ export function startRender(game: Game) {
   const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
   renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
   renderer.setSize(window.innerWidth, window.innerHeight);
-  renderer.setClearColor(0x0f1218, 1);
+  renderer.setClearColor(0xb8e4ff, 1);
+  renderer.shadowMap.enabled = true;
+  renderer.shadowMap.type = THREE.VSMShadowMap;
+  renderer.toneMapping = THREE.ACESFilmicToneMapping;
+  renderer.toneMappingExposure = 1.08;
 
   const { scene } = game;
-  scene.fog = new THREE.Fog(0x0f1218, 120, 520);
-  scene.add(new THREE.HemisphereLight(0xcfd8ff, 0x1a1f2e, 0.95));
+  scene.fog = new THREE.Fog(0xb8e4ff, 180, 620);
+  scene.add(new THREE.AmbientLight(0xfff6d8, 0.5));
+  scene.add(new THREE.HemisphereLight(0xeaf8ff, 0x9bc67a, 1.35));
 
-  const dir = new THREE.DirectionalLight(0xffffff, 0.55);
-  dir.position.set(40, 80, 20);
+  const dir = new THREE.DirectionalLight(0xfff3d6, SUN.intensity);
+  dir.castShadow = true;
+  dir.shadow.mapSize.setScalar(SUN.mapSize);
+  dir.shadow.bias = -0.00008;
+  dir.shadow.normalBias = 0.01;
+  dir.shadow.radius = 2.5;
+  dir.shadow.blurSamples = 8;
+  dir.shadow.camera.near = 1;
+  dir.shadow.camera.far = SUN.shadowDepth;
+  dir.shadow.camera.left = -SUN.shadowRadius;
+  dir.shadow.camera.right = SUN.shadowRadius;
+  dir.shadow.camera.top = SUN.shadowRadius;
+  dir.shadow.camera.bottom = -SUN.shadowRadius;
   scene.add(dir);
+  scene.add(dir.target);
 
-  const ground = new THREE.Mesh(
-    new THREE.PlaneGeometry(280, 280),
-    new THREE.MeshStandardMaterial({ color: 0x1e2433, roughness: 0.92, metalness: 0.05 })
-  );
-  ground.rotation.x = -Math.PI / 2;
-  scene.add(ground);
-
-  const grid = new THREE.GridHelper(260, 52, 0x2a3348, 0x222a3a);
-  grid.position.y = 0.02;
-  scene.add(grid);
+  const terrainSeed = (game.room.state as { terrainSeed: number }).terrainSeed;
+  const terrain = createTerrainMesh(terrainSeed);
+  scene.add(terrain);
 
   const camera = new THREE.PerspectiveCamera(CAM.fov, window.innerWidth / Math.max(window.innerHeight, 1), 0.5, 2500);
   camera.up.set(0, 1, 0);
 
   let distance = CAM.distanceStart;
   const lookTarget = new THREE.Vector3(0, 0, 0);
+  const shadowCenter = new THREE.Vector3();
+  const shadowOffset = SUN.direction.clone().multiplyScalar(SUN.shadowDistance);
 
   function placeCamera() {
     const theta = THREE.MathUtils.degToRad(CAM.polarFromDownDeg);
@@ -57,6 +80,12 @@ export function startRender(game: Game) {
       lookTarget.z + distance * Math.sin(theta) * Math.cos(phi)
     );
     camera.lookAt(lookTarget);
+
+    const forward = new THREE.Vector3(lookTarget.x - camera.position.x, 0, lookTarget.z - camera.position.z).normalize();
+    shadowCenter.copy(lookTarget).addScaledVector(forward, SUN.shadowRadius * 0.35);
+    dir.target.position.copy(shadowCenter);
+    dir.position.copy(shadowCenter).add(shadowOffset);
+    dir.target.updateMatrixWorld();
   }
   placeCamera();
 
@@ -208,6 +237,7 @@ export function startRender(game: Game) {
     requestAnimationFrame(tick);
     game.sync();
     for (const entity of game.entities) entity.render();
+    dir.shadow.camera.updateProjectionMatrix();
     renderer.render(scene, camera);
 
     const myColor = game.getPlayerColor(game.room.sessionId);

@@ -58,6 +58,8 @@ export class Game {
       entity.sync(blob as {
         x: number;
         y: number;
+        targetX: number;
+        targetY: number;
         ownerId: string;
         unitCount: number;
         health: number;

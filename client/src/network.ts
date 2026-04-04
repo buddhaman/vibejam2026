@@ -28,8 +28,8 @@ export async function joinBattle(): Promise<Room> {
 /** Wait until synced state exposes the `blobs` collection. */
 export function waitForSyncedGameState(room: Room): Promise<void> {
   const ok = (state: unknown) => {
-    const s = state as { blobs?: unknown } | null | undefined;
-    return s?.blobs != null;
+    const s = state as { blobs?: unknown; terrainSeed?: unknown } | null | undefined;
+    return s?.blobs != null && typeof s.terrainSeed === "number";
   };
 
   if (ok(room.state)) {
@@ -52,7 +52,7 @@ export function waitForSyncedGameState(room: Room): Promise<void> {
       } else {
         reject(
           new Error(
-            "Room state missing `blobs`. Ensure colyseus + @colyseus/sdk + @colyseus/schema versions match the server."
+            "Room state missing `blobs` or `terrainSeed`. Ensure colyseus + @colyseus/sdk + @colyseus/schema versions match the server."
           )
         );
       }

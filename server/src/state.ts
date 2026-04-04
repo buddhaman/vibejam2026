@@ -32,6 +32,7 @@ export class Building extends Schema {
 
 /** Authoritative world — gameplay truth only. */
 export class GameState extends Schema {
+  @type("uint32") terrainSeed: number = 0;
   @type({ map: Player }) players = new MapSchema<Player>();
   @type({ map: Blob }) blobs = new MapSchema<Blob>();
   @type({ map: Building }) buildings = new MapSchema<Building>();

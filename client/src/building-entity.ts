@@ -31,10 +31,13 @@ export class BuildingEntity extends Entity {
 
   protected createMesh(): BuildingVisual {
     const def = getBuildingDef(BuildingType.BARRACKS);
-    return new THREE.Mesh(
+    const mesh = new THREE.Mesh(
       def.geom,
       new THREE.MeshStandardMaterial({ color: 0x8899aa, roughness: 0.7, metalness: 0.1 })
     );
+    mesh.castShadow = true;
+    mesh.receiveShadow = true;
+    return mesh;
   }
 
   public sync(building: {
