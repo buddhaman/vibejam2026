@@ -4,8 +4,9 @@
   "version": "0.1.0",
   "type": "module",
   "scripts": {
-    "dev": "concurrently -n server,client -c blue,green \"npm run dev:server\" \"npm run dev:client\"",
+    "dev": "concurrently -n server,client -c blue,green \"npm run dev:server\" \"npm run dev:client:wait\"",
     "dev:server": "tsx watch --tsconfig tsconfig.server.json server/src/index.ts",
+    "dev:client:wait": "node scripts/wait-for-colyseus.mjs && vite client",
     "dev:client": "vite client",
     "build": "npm run build:server && npm run build:client",
     "build:server": "tsc -p tsconfig.server.json && node -e \"require('fs').writeFileSync('dist/server/package.json', JSON.stringify({ type: 'commonjs' }))\"",

@@ -103,6 +103,7 @@ npm run dev
 
 - **Server:** listens on **2567** by default. HTTP `GET /` returns a short plain-text message; gameplay uses the Colyseus WebSocket endpoint behind that origin.
 - **Client:** Vite (usually `http://localhost:5173`). In **development**, the client uses the **`/colyseus` Vite proxy** (see `client/vite.config.ts`) so matchmaking hits the same origin as the page. That avoids **CORS** issues with the SDK’s credentialed `fetch` to `/matchmake`. In production builds, the client uses **`window.location` + `VITE_COLYSEUS_PORT`** (default **2567**).
+- **Startup order:** `npm run dev` starts the server and a small **`scripts/wait-for-colyseus.mjs`** loop that opens **Vite only after** Colyseus accepts TCP on **`PORT`** (default **2567**). That avoids Vite proxy `ECONNREFUSED` when the browser opens too early. If you use **`npm run dev:client` alone**, start the server first or expect that error until Colyseus is up.
 
 ### “Failed to fetch” in the browser
 
