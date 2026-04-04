@@ -49,16 +49,22 @@ State is the single source of truth. The client detects what changed:
 | Entity added to `buildings` | spawn building mesh |
 | Entity removed from `buildings` | collapse + debris (future) |
 
-### Type safety without string lookups
+### Shared protocol and gameplay rules
 
-Building types are `uint8` on the wire — a shared numeric constant used by both server and client:
+Packet names, payload shapes, and gameplay numbers that matter to both server authority and client prediction live in one place:
 
 ```
-server/src/constants.ts  ←  BuildingType { BARRACKS: 1, TOWER: 2 }
-client/src/constants.ts  ←  same (kept in sync manually)
+shared/protocol.ts    # wire message names + payload types
+shared/game-rules.ts  # building ids + gameplay tuning used on both sides
 ```
 
-`Building.buildingType` is `@type("uint8")` in the Schema. The client switches on the number directly — no string comparison, no enum-name serialization.
+This is important:
+
+- Do not redefine packet payloads in `client/` and `server/` separately.
+- Do not duplicate gameplay values like move speed, world bounds, or build type ids.
+- If the client needs a value for prediction, interpolation, or validation, define it in `shared/` and import it from both sides.
+
+That keeps prediction honest and avoids server/client drift.
 
 ### Message protocol (client → server)
 
@@ -74,7 +80,7 @@ World coordinates: server uses `x` / `y` for the 2D ground plane. Three.js uses 
 | Layer | Owns |
 |---|---|
 | Server | truth: positions, health, counts, ownership |
-| Client | visuals: meshes, physics, effects, camera, HUD |
+| Client | visuals: meshes, prediction, effects, camera, HUD |
 
 The server only updates numbers. The client interprets those numbers as a living world.
 
@@ -173,7 +179,7 @@ No deep `systems/` tree — add files only when they earn their place.
 ## Tech notes
 
 - Server **Schema** needs `experimentalDecorators` and `useDefineForClassFields: false` (see `tsconfig.server.json`). **`npm run dev:server`** passes that file to `tsx` (`--tsconfig tsconfig.server.json`) so decorators work.
-- Client state listeners use **`Callbacks.get(room)`** from `@colyseus/sdk` / `@colyseus/schema` ([State sync callbacks](https://docs.colyseus.io/sdk/state-sync-callbacks)), e.g. `callbacks.onAdd("blobs", ...)`.
+- Client sync is entity-driven through `Game.sync()`: each frame the client reconciles Colyseus room state into client entities, then renders those entities.
 
 ---
 

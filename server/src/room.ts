@@ -1,10 +1,8 @@
 import { Room, type Client } from "colyseus";
 import { GameState, Player, Blob, Building } from "./state.js";
 import { CONFIG } from "./config.js";
-import { BuildingType, VALID_BUILDING_TYPES } from "./constants.js";
-
-type IntentPayload = { blobId: string; targetX: number; targetY: number };
-type BuildPayload  = { type: number; worldX: number; worldZ: number };
+import { BuildingType, isBuildingType } from "../../shared/game-rules.js";
+import { MessageType, type IntentMessage, type BuildMessage } from "../../shared/protocol.js";
 
 let nextId = 1;
 function makeId(prefix: string) {
@@ -32,8 +30,8 @@ export class BattleRoom extends Room<{ state: GameState }> {
     const intervalMs = 1000 / CONFIG.TICK_HZ;
     this.setSimulationInterval((dt) => this.tick(dt), intervalMs);
 
-    this.onMessage("intent", (client, raw) => {
-      const msg = raw as IntentPayload;
+    this.onMessage(MessageType.INTENT, (client, raw) => {
+      const msg = raw as IntentMessage;
       if (
         typeof msg?.blobId !== "string" ||
         typeof msg.targetX !== "number" ||
@@ -47,10 +45,10 @@ export class BattleRoom extends Room<{ state: GameState }> {
       blob.targetY = clamp(msg.targetY, CONFIG.WORLD_MIN, CONFIG.WORLD_MAX);
     });
 
-    this.onMessage("build", (client, raw) => {
-      const msg = raw as BuildPayload;
+    this.onMessage(MessageType.BUILD, (client, raw) => {
+      const msg = raw as BuildMessage;
       if (
-        !VALID_BUILDING_TYPES.has(msg?.type) ||
+        !isBuildingType(msg?.type) ||
         typeof msg.worldX !== "number" ||
         typeof msg.worldZ !== "number"
       ) {

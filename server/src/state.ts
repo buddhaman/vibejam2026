@@ -1,4 +1,5 @@
 import { Schema, type, MapSchema } from "@colyseus/schema";
+import type { BuildingType } from "../../shared/game-rules.js";
 
 /** Identity + ownership bookkeeping (blobs/buildings reference ownerId). */
 export class Player extends Schema {
@@ -25,7 +26,7 @@ export class Building extends Schema {
   @type("number") x: number = 0;
   @type("number") y: number = 0;
   /** Numeric type — see BuildingType constants. uint8 keeps wire size minimal. */
-  @type("uint8") buildingType: number = 0;
+  @type("uint8") buildingType: BuildingType = 0 as BuildingType;
   @type("number") health: number = 0;
 }
 

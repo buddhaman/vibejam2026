@@ -4,7 +4,7 @@
  * All hit-testing is done manually in render.ts.
  */
 
-import { BuildingType } from "./constants.js";
+import { BuildingType } from "../../shared/game-rules.js";
 
 type Rect = { x: number; y: number; w: number; h: number };
 

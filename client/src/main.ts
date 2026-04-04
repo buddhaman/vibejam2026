@@ -1,11 +1,11 @@
 import { joinBattle, waitForSyncedGameState } from "./network.js";
-import { createGame } from "./game.js";
+import { Game } from "./game.js";
 import { startRender } from "./render.js";
 
 async function boot() {
   const room = await joinBattle();
   await waitForSyncedGameState(room);
-  const game = createGame(room);
+  const game = new Game(room);
   startRender(room, game);
 }
 
