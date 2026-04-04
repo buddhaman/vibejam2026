@@ -18,6 +18,68 @@ This project follows the **0.17** line described in the official docs:
 
 Keep **server**, **schema**, **ws-transport**, and **@colyseus/sdk** on compatible **0.17.x** releases so the binary protocol and schema handshake match.
 
+## Architecture: state-driven sync
+
+**Core principle:** the server sends authoritative state, not gameplay events. The client derives all visuals and effects from state changes over time.
+
+### Data flow
+
+```
+Server tick (20 Hz)
+  1. process inputs
+  2. mutate Schema (players / blobs / buildings)
+  3. Colyseus auto-sends binary diff to all clients
+
+Client frame (60 FPS)
+  4. Colyseus applies diff → local state mirror updated
+  5. onAdd / onRemove callbacks fire for new/removed entities
+  6. render loop reads current state → syncs visuals
+```
+
+### No gameplay events rule
+
+The server never broadcasts `"unitDied"`, `"buildingDestroyed"`, etc.
+State is the single source of truth. The client detects what changed:
+
+| Diff | Client reaction |
+|---|---|
+| Entity added to `blobs` | spawn visual group |
+| Entity removed from `blobs` | remove visual, trigger death FX |
+| `unitCount` decreased | kill some ragdolls, spawn hit effects |
+| Entity added to `buildings` | spawn building mesh |
+| Entity removed from `buildings` | collapse + debris (future) |
+
+### Type safety without string lookups
+
+Building types are `uint8` on the wire — a shared numeric constant used by both server and client:
+
+```
+server/src/constants.ts  ←  BuildingType { BARRACKS: 1, TOWER: 2 }
+client/src/constants.ts  ←  same (kept in sync manually)
+```
+
+`Building.buildingType` is `@type("uint8")` in the Schema. The client switches on the number directly — no string comparison, no enum-name serialization.
+
+### Message protocol (client → server)
+
+| Message | Payload | Effect |
+|---|---|---|
+| `"intent"` | `{ blobId, targetX, targetY }` | move a blob toward a world point |
+| `"build"` | `{ type: number, worldX, worldZ }` | place a building at a world point |
+
+World coordinates: server uses `x` / `y` for the 2D ground plane. Three.js uses `x` / `z` — translation happens only at the render boundary (`position.set(s.x, height, s.y)`).
+
+### Layer responsibilities
+
+| Layer | Owns |
+|---|---|
+| Server | truth: positions, health, counts, ownership |
+| Client | visuals: meshes, physics, effects, camera, HUD |
+
+The server only updates numbers. The client interprets those numbers as a living world.
+
+---
+
 ## Direction (not implemented yet)
 
 Aggregate RTS: many **visual** units per blob, **instancing**, local ragdoll/floppy physics, fake arrows and blood — all **client-only**. The server keeps **tens** of entities; the client may show **hundreds** of decorative bodies. **Bandwidth stays small** because only aggregates sync.

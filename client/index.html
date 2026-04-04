@@ -5,41 +5,15 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Vibejam — battle</title>
     <style>
-      * {
-        box-sizing: border-box;
-      }
-      html,
-      body {
+      * { box-sizing: border-box; }
+      html, body {
         margin: 0;
         overflow: hidden;
-        font-family: system-ui, sans-serif;
         background: #0f1218;
-        color: #e8eaef;
-      }
-      #hud {
-        position: fixed;
-        left: 12px;
-        top: 12px;
-        pointer-events: none;
-        font-size: 13px;
-        line-height: 1.5;
-        text-shadow: 0 1px 2px #000;
-        max-width: 320px;
-      }
-      #hud kbd {
-        background: #2a3142;
-        padding: 2px 6px;
-        border-radius: 4px;
-        font-size: 12px;
       }
     </style>
   </head>
   <body>
-    <div id="hud">
-      <div><strong>Click</strong> a blob to select (yours only).</div>
-      <div><strong>Click ground</strong> to set move target.</div>
-      <div style="opacity: 0.75; margin-top: 8px">Server is authoritative · Two blobs per player</div>
-    </div>
     <script type="module" src="/src/main.ts"></script>
   </body>
 </html>

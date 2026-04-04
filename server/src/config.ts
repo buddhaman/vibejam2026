@@ -23,4 +23,7 @@ export const CONFIG = {
   DEFAULT_UNIT_COUNT: 40,
   /** Offset between the two starter blobs */
   START_BLOB_SPACING: 10,
+  BARRACKS_HEALTH: 200,
+  TOWER_HEALTH: 300,
+  MAX_BUILDINGS_PER_PLAYER: 8,
 } as const;

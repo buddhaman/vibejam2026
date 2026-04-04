@@ -1,8 +1,10 @@
 import { Room, type Client } from "colyseus";
-import { GameState, Player, Blob } from "./state.js";
+import { GameState, Player, Blob, Building } from "./state.js";
 import { CONFIG } from "./config.js";
+import { BuildingType, VALID_BUILDING_TYPES } from "./constants.js";
 
 type IntentPayload = { blobId: string; targetX: number; targetY: number };
+type BuildPayload  = { type: number; worldX: number; worldZ: number };
 
 let nextId = 1;
 function makeId(prefix: string) {
@@ -40,11 +42,36 @@ export class BattleRoom extends Room<{ state: GameState }> {
         return;
       }
       const blob = this.state.blobs.get(msg.blobId);
-      if (!blob || blob.ownerId !== client.sessionId) {
-        return;
-      }
+      if (!blob || blob.ownerId !== client.sessionId) return;
       blob.targetX = clamp(msg.targetX, CONFIG.WORLD_MIN, CONFIG.WORLD_MAX);
       blob.targetY = clamp(msg.targetY, CONFIG.WORLD_MIN, CONFIG.WORLD_MAX);
+    });
+
+    this.onMessage("build", (client, raw) => {
+      const msg = raw as BuildPayload;
+      if (
+        !VALID_BUILDING_TYPES.has(msg?.type) ||
+        typeof msg.worldX !== "number" ||
+        typeof msg.worldZ !== "number"
+      ) {
+        return;
+      }
+
+      // enforce per-player building cap
+      let count = 0;
+      this.state.buildings.forEach((b) => { if (b.ownerId === client.sessionId) count++; });
+      if (count >= CONFIG.MAX_BUILDINGS_PER_PLAYER) return;
+
+      const building = new Building();
+      building.id = makeId("bld");
+      building.ownerId = client.sessionId;
+      building.x = clamp(msg.worldX, CONFIG.WORLD_MIN, CONFIG.WORLD_MAX);
+      building.y = clamp(msg.worldZ, CONFIG.WORLD_MIN, CONFIG.WORLD_MAX);
+      building.buildingType = msg.type;
+      building.health =
+        msg.type === BuildingType.TOWER ? CONFIG.TOWER_HEALTH : CONFIG.BARRACKS_HEALTH;
+
+      this.state.buildings.set(building.id, building);
     });
   }
 
@@ -80,24 +107,18 @@ export class BattleRoom extends Room<{ state: GameState }> {
   onLeave(client: Client, _code: number) {
     const sid = client.sessionId;
     this.state.players.delete(sid);
+
     const blobIds: string[] = [];
     this.state.blobs.forEach((b, id) => {
-      if (b.ownerId === sid) {
-        blobIds.push(id as string);
-      }
+      if (b.ownerId === sid) blobIds.push(id as string);
     });
-    for (const id of blobIds) {
-      this.state.blobs.delete(id);
-    }
+    for (const id of blobIds) this.state.blobs.delete(id);
+
     const buildingIds: string[] = [];
     this.state.buildings.forEach((b, id) => {
-      if (b.ownerId === sid) {
-        buildingIds.push(id as string);
-      }
+      if (b.ownerId === sid) buildingIds.push(id as string);
     });
-    for (const id of buildingIds) {
-      this.state.buildings.delete(id);
-    }
+    for (const id of buildingIds) this.state.buildings.delete(id);
   }
 
   private tick(dtMs: number) {

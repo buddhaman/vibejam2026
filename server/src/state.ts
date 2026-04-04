@@ -24,7 +24,8 @@ export class Building extends Schema {
   @type("string") ownerId: string = "";
   @type("number") x: number = 0;
   @type("number") y: number = 0;
-  @type("string") buildingType: string = "none";
+  /** Numeric type — see BuildingType constants. uint8 keeps wire size minimal. */
+  @type("uint8") buildingType: number = 0;
   @type("number") health: number = 0;
 }
 
