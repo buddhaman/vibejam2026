@@ -30,14 +30,14 @@ export const GAME_RULES = {
   WORLD_MIN: -120,
   WORLD_MAX: 120,
   TILE_SIZE: 12,
-  BLOB_MOVE_SPEED: 28,
-  BLOB_ACCELERATION: 26,
+  BLOB_MOVE_SPEED: 11,
+  BLOB_ACCELERATION: 10,
   BLOB_DECELERATION_RADIUS: 14,
   BLOB_STOP_EPSILON: 0.65,
   CLIENT_PREDICTION_LEAD: 0.09,
-  UNIT_RADIUS: 0.42,
-  UNIT_HEIGHT: 0.78,
-  UNIT_SPACING: 1.1,
+  UNIT_RADIUS: 0.56,
+  UNIT_HEIGHT: 1.18,
+  UNIT_SPACING: 1.22,
   SQUAD_PACKING_DENSITY: 0.74,
   SQUAD_STRETCH_MAX: 1.55,
   SQUAD_STRETCH_DISTANCE: 18,
@@ -48,6 +48,48 @@ export const GAME_RULES = {
   TOWER_HEALTH: 300,
   MAX_BUILDINGS_PER_PLAYER: 8,
 } as const;
+
+const TILE_HALF = GAME_RULES.TILE_SIZE * 0.5;
+const TILE_CENTER_MIN = GAME_RULES.WORLD_MIN + TILE_HALF;
+const TILE_CENTER_MAX = GAME_RULES.WORLD_MAX - TILE_HALF;
+
+export const BUILDING_RULES = {
+  [BuildingType.BARRACKS]: {
+    health: GAME_RULES.BARRACKS_HEALTH,
+    footprintWidth: GAME_RULES.TILE_SIZE,
+    footprintDepth: GAME_RULES.TILE_SIZE,
+    selectionWidth: GAME_RULES.TILE_SIZE,
+    selectionDepth: GAME_RULES.TILE_SIZE,
+    height: 6.2,
+    trainSpawnOffsetX: GAME_RULES.TILE_SIZE,
+  },
+  [BuildingType.TOWER]: {
+    health: GAME_RULES.TOWER_HEALTH,
+    footprintWidth: GAME_RULES.TILE_SIZE * 0.78,
+    footprintDepth: GAME_RULES.TILE_SIZE * 0.78,
+    selectionWidth: GAME_RULES.TILE_SIZE * 0.86,
+    selectionDepth: GAME_RULES.TILE_SIZE * 0.86,
+    height: 15.5,
+    trainSpawnOffsetX: GAME_RULES.TILE_SIZE * 0.9,
+  },
+} as const;
+
+export function getBuildingRules(buildingType: BuildingType) {
+  return BUILDING_RULES[buildingType] ?? BUILDING_RULES[BuildingType.BARRACKS];
+}
+
+export function snapCoordinateToTileCenter(value: number): number {
+  const clamped = Math.max(TILE_CENTER_MIN, Math.min(TILE_CENTER_MAX, value));
+  const tileIndex = Math.round((clamped - TILE_CENTER_MIN) / GAME_RULES.TILE_SIZE);
+  return TILE_CENTER_MIN + tileIndex * GAME_RULES.TILE_SIZE;
+}
+
+export function snapWorldToTileCenter(x: number, z: number) {
+  return {
+    x: snapCoordinateToTileCenter(x),
+    z: snapCoordinateToTileCenter(z),
+  };
+}
 
 export function getSquadArea(unitCount: number): number {
   return getSquadAreaForSpread(unitCount, SquadSpread.DEFAULT);
@@ -61,13 +103,13 @@ export function getSquadAreaForSpread(unitCount: number, spread: SquadSpread): n
 }
 
 export function getSquadSpacingMultiplier(spread: SquadSpread): number {
-  if (spread === SquadSpread.WIDE) return 1.46;
+  if (spread === SquadSpread.WIDE) return 1.72;
   if (spread === SquadSpread.DEFAULT) return 1.18;
   return 0.98;
 }
 
 export function getSquadBaseStretch(spread: SquadSpread): number {
-  if (spread === SquadSpread.WIDE) return 0.76;
+  if (spread === SquadSpread.WIDE) return 0.72;
   if (spread === SquadSpread.DEFAULT) return 1.28;
   return 1.08;
 }
@@ -85,10 +127,7 @@ export function getSquadAxes(unitCount: number, moveDistance: number, speed: num
     Math.PI * GAME_RULES.UNIT_RADIUS * GAME_RULES.UNIT_RADIUS
   );
   const travelStretch = getSquadTravelStretch(moveDistance, speed);
-  const stretch =
-    spread === SquadSpread.WIDE
-      ? getSquadBaseStretch(spread) / Math.sqrt(travelStretch)
-      : getSquadBaseStretch(spread) * travelStretch;
+  const stretch = getSquadBaseStretch(spread) * travelStretch;
   const minor = Math.sqrt(area / (Math.PI * stretch));
   const major = minor * stretch;
   return { major, minor };

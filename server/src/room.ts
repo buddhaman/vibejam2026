@@ -1,7 +1,15 @@
 import { Room, type Client } from "colyseus";
 import { GameState, Player, Blob, Building } from "./state.js";
 import { CONFIG } from "./config.js";
-import { BuildingType, SquadSpread, getSquadRadius, isBuildingType, isSquadSpread } from "../../shared/game-rules.js";
+import {
+  BuildingType,
+  SquadSpread,
+  getBuildingRules,
+  getSquadRadius,
+  isBuildingType,
+  isSquadSpread,
+  snapWorldToTileCenter,
+} from "../../shared/game-rules.js";
 import { MessageType, type IntentMessage, type BuildMessage, type SquadSpreadMessage, type TrainMessage } from "../../shared/protocol.js";
 
 let nextId = 1;
@@ -74,13 +82,13 @@ export class BattleRoom extends Room<{ state: GameState }> {
       if (count >= CONFIG.MAX_BUILDINGS_PER_PLAYER) return;
 
       const building = new Building();
+      const snapped = snapWorldToTileCenter(msg.worldX, msg.worldZ);
       building.id = makeId("bld");
       building.ownerId = client.sessionId;
-      building.x = clamp(msg.worldX, CONFIG.WORLD_MIN, CONFIG.WORLD_MAX);
-      building.y = clamp(msg.worldZ, CONFIG.WORLD_MIN, CONFIG.WORLD_MAX);
+      building.x = snapped.x;
+      building.y = snapped.z;
       building.buildingType = msg.type;
-      building.health =
-        msg.type === BuildingType.TOWER ? CONFIG.TOWER_HEALTH : CONFIG.BARRACKS_HEALTH;
+      building.health = getBuildingRules(msg.type).health;
 
       this.state.buildings.set(building.id, building);
     });
@@ -97,9 +105,10 @@ export class BattleRoom extends Room<{ state: GameState }> {
       }
 
       const blob = new Blob();
+      const buildingRules = getBuildingRules(building.buildingType);
       blob.id = makeId("blob");
       blob.ownerId = client.sessionId;
-      blob.x = clamp(building.x + 6, CONFIG.WORLD_MIN, CONFIG.WORLD_MAX);
+      blob.x = clamp(building.x + buildingRules.trainSpawnOffsetX, CONFIG.WORLD_MIN, CONFIG.WORLD_MAX);
       blob.y = clamp(building.y, CONFIG.WORLD_MIN, CONFIG.WORLD_MAX);
       blob.targetX = blob.x;
       blob.targetY = blob.y;

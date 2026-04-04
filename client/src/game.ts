@@ -1,7 +1,12 @@
 import * as THREE from "three";
 import type { Room } from "@colyseus/sdk";
 import type { Entity } from "./entity.js";
-import { SquadSpread, type BuildingType as BuildingTypeValue, type SquadSpread as SquadSpreadValue } from "../../shared/game-rules.js";
+import {
+  SquadSpread,
+  snapWorldToTileCenter,
+  type BuildingType as BuildingTypeValue,
+  type SquadSpread as SquadSpreadValue,
+} from "../../shared/game-rules.js";
 import { MessageType, type BuildMessage, type IntentMessage, type SquadSpreadMessage, type TrainMessage } from "../../shared/protocol.js";
 import { BlobEntity } from "./blob-entity.js";
 import { BuildingEntity } from "./building-entity.js";
@@ -117,6 +122,24 @@ export class Game {
     return best;
   }
 
+  public pickOwnedEntityFromRay(raycaster: THREE.Raycaster): Entity | null {
+    let best: Entity | null = null;
+    let bestDistance = Infinity;
+
+    for (const entity of this.entities) {
+      if (!entity.isOwnedByMe()) continue;
+      const hits = raycaster.intersectObject(entity.mesh, true);
+      if (hits.length === 0) continue;
+      const distance = hits[0].distance;
+      if (distance < bestDistance) {
+        bestDistance = distance;
+        best = entity;
+      }
+    }
+
+    return best;
+  }
+
   public getMySquadCount(): number {
     let count = 0;
     for (const entity of this.entities) {
@@ -136,7 +159,8 @@ export class Game {
   }
 
   public sendBuildIntent(type: BuildMessage["type"], worldX: number, worldZ: number): void {
-    this.room.send(MessageType.BUILD, { type, worldX, worldZ } satisfies BuildMessage);
+    const snapped = snapWorldToTileCenter(worldX, worldZ);
+    this.room.send(MessageType.BUILD, { type, worldX: snapped.x, worldZ: snapped.z } satisfies BuildMessage);
   }
 
   public sendTrainIntent(buildingId: string): void {

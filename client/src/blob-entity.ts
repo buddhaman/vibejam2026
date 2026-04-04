@@ -34,11 +34,22 @@ const DUMMY = new THREE.Object3D();
 const GOLDEN_ANGLE = Math.PI * (3 - Math.sqrt(5));
 const VISUAL_STEP = 1 / 120;
 const VISUAL_CATCHUP = 12;
-const DIRECTION_SMOOTHING = 7;
+const DIRECTION_SMOOTHING = 3.2;
 const MIN_DIRECTION_SPEED = 0.2;
+const UNIT_SPRING = 20;
+const UNIT_DAMPING = 0.24;
+const UNIT_WALK_SPEED = 4.4;
+
+type UnitState = {
+  x: number;
+  z: number;
+  vx: number;
+  vz: number;
+};
 
 export class BlobEntity extends Entity {
   public mesh: THREE.Group;
+  private ovalRoot!: THREE.Group;
   private units!: THREE.InstancedMesh;
   private ovalFill!: THREE.Mesh<THREE.CircleGeometry, THREE.MeshBasicMaterial>;
   private ovalRing!: THREE.Mesh<THREE.RingGeometry, THREE.MeshBasicMaterial>;
@@ -62,6 +73,7 @@ export class BlobEntity extends Entity {
   private visualTime = 0;
   private forwardX = 0;
   private forwardY = 1;
+  private unitStates: UnitState[] = [];
 
   public constructor(game: Game, id: string) {
     super(game, id);
@@ -74,6 +86,8 @@ export class BlobEntity extends Entity {
     this.units.castShadow = true;
     this.units.receiveShadow = true;
 
+    this.ovalRoot = new THREE.Group();
+
     this.ovalFill = new THREE.Mesh(OVAL_FILL_GEOM, OVAL_FILL_MAT.clone());
     this.ovalFill.rotation.x = -Math.PI / 2;
     this.ovalFill.position.y = 0.02;
@@ -82,9 +96,11 @@ export class BlobEntity extends Entity {
     this.ovalRing.rotation.x = -Math.PI / 2;
     this.ovalRing.position.y = 0.03;
 
+    this.ovalRoot.add(this.ovalFill);
+    this.ovalRoot.add(this.ovalRing);
+
     const group = new THREE.Group();
-    group.add(this.ovalFill);
-    group.add(this.ovalRing);
+    group.add(this.ovalRoot);
     group.add(this.units);
     return group;
   }
@@ -112,6 +128,52 @@ export class BlobEntity extends Entity {
         this.forwardX = blob.vx / speed;
         this.forwardY = blob.vy / speed;
       }
+    }
+  }
+
+  private ensureUnitStateCount(count: number): void {
+    while (this.unitStates.length < count) {
+      this.unitStates.push({ x: 0, z: 0, vx: 0, vz: 0 });
+    }
+    if (this.unitStates.length > count) {
+      this.unitStates.length = count;
+    }
+  }
+
+  private getSlotPosition(index: number, count: number, major: number, minor: number) {
+    const t = (index + 0.5) / Math.max(1, count);
+    const radius = Math.sqrt(t);
+    const angle = index * GOLDEN_ANGLE;
+    return {
+      x: Math.cos(angle) * radius * minor * 0.82,
+      z: Math.sin(angle) * radius * major * 0.82,
+    };
+  }
+
+  private stepUnits(dt: number, layout: { major: number; minor: number }): void {
+    const count = Math.min(this.blob?.unitCount ?? 0, this.units.instanceMatrix.count);
+    this.ensureUnitStateCount(count);
+
+    for (let i = 0; i < count; i++) {
+      const state = this.unitStates[i];
+      const slot = this.getSlotPosition(i, count, layout.major, layout.minor);
+      const dx = slot.x - state.x;
+      const dz = slot.z - state.z;
+
+      state.vx += dx * UNIT_SPRING * dt;
+      state.vz += dz * UNIT_SPRING * dt;
+      state.vx *= Math.exp(-UNIT_DAMPING * UNIT_SPRING * dt);
+      state.vz *= Math.exp(-UNIT_DAMPING * UNIT_SPRING * dt);
+
+      const speed = Math.hypot(state.vx, state.vz);
+      if (speed > UNIT_WALK_SPEED) {
+        const scale = UNIT_WALK_SPEED / speed;
+        state.vx *= scale;
+        state.vz *= scale;
+      }
+
+      state.x += state.vx * dt;
+      state.z += state.vz * dt;
     }
   }
 
@@ -215,7 +277,8 @@ export class BlobEntity extends Entity {
     const tint = new THREE.Color(color);
 
     this.mesh.position.set(layout.x, terrainY, layout.y);
-    this.mesh.rotation.y = layout.heading;
+    this.mesh.rotation.y = 0;
+    this.ovalRoot.rotation.y = layout.heading;
 
     this.ovalFill.scale.set(layout.minor, layout.major, 1);
     this.ovalRing.scale.set(layout.minor * 1.04, layout.major * 1.04, 1);
@@ -230,16 +293,19 @@ export class BlobEntity extends Entity {
     unitsMaterial.transparent = !this.isMine();
 
     this.units.count = Math.min(this.blob.unitCount, this.units.instanceMatrix.count);
+    this.stepUnits(Math.min(0.05, dt), layout);
 
     const unitHeight = GAME_RULES.UNIT_HEIGHT;
+    const rightX = Math.cos(layout.heading);
+    const rightZ = -Math.sin(layout.heading);
+    const forwardX = Math.sin(layout.heading);
+    const forwardZ = Math.cos(layout.heading);
     for (let i = 0; i < this.units.count; i++) {
-      const t = (i + 0.5) / this.units.count;
-      const radius = Math.sqrt(t);
-      const angle = i * GOLDEN_ANGLE;
-      const px = Math.cos(angle) * radius * layout.minor * 0.82;
-      const pz = Math.sin(angle) * radius * layout.major * 0.82;
+      const state = this.unitStates[i];
+      const px = rightX * state.x + forwardX * state.z;
+      const pz = rightZ * state.x + forwardZ * state.z;
       DUMMY.position.set(px, unitHeight * 0.5 + 0.02, pz);
-      DUMMY.rotation.y = layout.heading;
+      DUMMY.rotation.y = 0;
       DUMMY.updateMatrix();
       this.units.setMatrixAt(i, DUMMY.matrix);
     }

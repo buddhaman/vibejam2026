@@ -10,8 +10,8 @@ import type { SelectionInfo } from "./entity.js";
 type Rect = { x: number; y: number; w: number; h: number };
 
 const BUILD_ITEMS = [
-  { label: "Barracks", icon: "⚔", type: BuildingType.BARRACKS },
-  { label: "Tower", icon: "🗼", type: BuildingType.TOWER },
+  { label: "Barracks", icon: "⚔", type: BuildingType.BARRACKS, color: "#c03510", glow: "#ff5522" },
+  { label: "Tower",    icon: "🗼", type: BuildingType.TOWER,    color: "#1050c8", glow: "#3a80ff" },
 ] as const;
 
 export type BuildAction = (typeof BUILD_ITEMS)[number]["type"];
@@ -26,13 +26,23 @@ export type HudState = {
   };
 };
 
-const BAR_H = 50;
-const CARD_W = 326;
-const CARD_H = 112;
-const CARD_PAD = 10;
-const CLOSE_SIZE = 20;
-const ACTION_SIZE = 52;
-const ACTION_GAP = 8;
+// Layout constants
+const BAR_H      = 54;
+const CARD_W     = 330;
+const CARD_H     = 124;
+const CARD_PAD   = 10;
+const CARD_R     = 14;
+const CLOSE_SIZE = 22;
+const ACTION_SIZE = 58;
+const ACTION_GAP  = 8;
+
+// Palette — AoM warm dark panels + Snakebird saturated accents
+const PANEL_BG         = "rgba(18, 11, 4, 0.97)";
+const BORDER_GOLD      = "#c8911e";
+const BORDER_GOLD_DIM  = "rgba(255,210,80,0.18)";
+const TEXT_GOLD        = "#ffd060";
+const TEXT_CREAM       = "#ffe8b0";
+const TEXT_MUTED       = "rgba(255,210,130,0.40)";
 
 export function createHudState(): HudState {
   return { buildMenu: { visible: false, screenX: 0, screenY: 0, worldX: 0, worldZ: 0 } };
@@ -51,13 +61,15 @@ export function createHudCanvas(): HTMLCanvasElement {
   return canvas;
 }
 
+// ─── Layout helpers ─────────────────────────────────────────────────────────
+
 function selectionCardRect(W: number, H: number): Rect {
   return { x: CARD_PAD, y: H - BAR_H - CARD_H - 8, w: CARD_W, h: CARD_H };
 }
 
 function closeBtnRect(W: number, H: number): Rect {
   const card = selectionCardRect(W, H);
-  return { x: card.x + card.w - CLOSE_SIZE - 6, y: card.y + 6, w: CLOSE_SIZE, h: CLOSE_SIZE };
+  return { x: card.x + card.w - CLOSE_SIZE - 7, y: card.y + 7, w: CLOSE_SIZE, h: CLOSE_SIZE };
 }
 
 function selectionActionRects(W: number, H: number, count: number): Rect[] {
@@ -66,7 +78,7 @@ function selectionActionRects(W: number, H: number, count: number): Rect[] {
   const startX = card.x + card.w - totalW - 12;
   return Array.from({ length: count }, (_, i) => ({
     x: startX + i * (ACTION_SIZE + ACTION_GAP),
-    y: card.y + 34,
+    y: card.y + 40,
     w: ACTION_SIZE,
     h: ACTION_SIZE,
   }));
@@ -75,14 +87,14 @@ function selectionActionRects(W: number, H: number, count: number): Rect[] {
 function menuLayout(sx: number, sy: number) {
   const W = window.innerWidth;
   const H = window.innerHeight;
-  const ITEM_W = 96;
-  const ITEM_H = 74;
-  const PAD = 12;
-  const GAP = 8;
-  const TITLE_H = 30;
-  const count = BUILD_ITEMS.length;
-  const menuW = PAD * 2 + count * ITEM_W + (count - 1) * GAP;
-  const menuH = TITLE_H + ITEM_H + PAD;
+  const ITEM_W   = 108;
+  const ITEM_H   = 88;
+  const PAD      = 14;
+  const GAP      = 10;
+  const TITLE_H  = 34;
+  const count    = BUILD_ITEMS.length;
+  const menuW    = PAD * 2 + count * ITEM_W + (count - 1) * GAP;
+  const menuH    = TITLE_H + ITEM_H + PAD;
 
   let mx = sx - menuW / 2;
   let my = sy - menuH - 18;
@@ -94,16 +106,14 @@ function menuLayout(sx: number, sy: number) {
     rect: { x: mx + PAD + i * (ITEM_W + GAP), y: my + TITLE_H, w: ITEM_W, h: ITEM_H } as Rect,
   }));
 
-  return {
-    panel: { x: mx, y: my, w: menuW, h: menuH } as Rect,
-    items,
-    anchor: { x: sx, y: sy },
-  };
+  return { panel: { x: mx, y: my, w: menuW, h: menuH } as Rect, items, anchor: { x: sx, y: sy } };
 }
 
-function inRect(px: number, py: number, rect: Rect) {
-  return px >= rect.x && px <= rect.x + rect.w && py >= rect.y && py <= rect.y + rect.h;
+function inRect(px: number, py: number, r: Rect) {
+  return px >= r.x && px <= r.x + r.w && py >= r.y && py <= r.y + r.h;
 }
+
+// ─── Hit-testing (public) ────────────────────────────────────────────────────
 
 export function hitTestDeselect(x: number, y: number, selected: boolean): boolean {
   return selected && inRect(x, y, closeBtnRect(window.innerWidth, window.innerHeight));
@@ -127,6 +137,8 @@ export function hitTestMenu(hud: HudState, x: number, y: number): BuildAction | 
   return inRect(x, y, panel) ? "dismiss" : null;
 }
 
+// ─── Main draw ───────────────────────────────────────────────────────────────
+
 export function drawHUD(
   canvas: HTMLCanvasElement,
   hud: HudState,
@@ -145,6 +157,34 @@ export function drawHUD(
   if (hud.buildMenu.visible) drawBuildMenu(ctx, menuLayout(hud.buildMenu.screenX, hud.buildMenu.screenY), t);
 }
 
+// ─── Draw helpers ────────────────────────────────────────────────────────────
+
+/** AoM-style dark panel with gold double-border. */
+function drawPanel(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, r: number) {
+  ctx.save();
+  ctx.shadowColor = "rgba(0,0,0,0.80)";
+  ctx.shadowBlur = 24;
+  ctx.shadowOffsetY = 5;
+  ctx.fillStyle = PANEL_BG;
+  rr(ctx, x, y, w, h, r);
+  ctx.fill();
+  ctx.restore();
+
+  // Outer gold border
+  ctx.save();
+  ctx.strokeStyle = BORDER_GOLD;
+  ctx.lineWidth = 2;
+  rr(ctx, x, y, w, h, r);
+  ctx.stroke();
+
+  // Inner subtle highlight (inset 3.5 px)
+  ctx.strokeStyle = BORDER_GOLD_DIM;
+  ctx.lineWidth = 1;
+  rr(ctx, x + 3.5, y + 3.5, w - 7, h - 7, Math.max(r - 3, 4));
+  ctx.stroke();
+  ctx.restore();
+}
+
 function drawBottomBar(
   ctx: CanvasRenderingContext2D,
   W: number,
@@ -156,163 +196,178 @@ function drawBottomBar(
   const top = H - BAR_H;
   const mid = top + BAR_H / 2;
 
-  ctx.fillStyle = "rgba(8,12,22,0.78)";
+  // Background
+  ctx.save();
+  ctx.fillStyle = "rgba(16, 9, 3, 0.92)";
   ctx.fillRect(0, top, W, BAR_H);
-  ctx.strokeStyle = "rgba(255,255,255,0.06)";
-  ctx.lineWidth = 1;
-  ctx.beginPath();
-  ctx.moveTo(0, top);
-  ctx.lineTo(W, top);
-  ctx.stroke();
 
-  const r = (color >> 16) & 0xff;
-  const g = (color >> 8) & 0xff;
-  const b = color & 0xff;
-  ctx.save();
-  ctx.beginPath();
-  ctx.arc(22, mid, 9, 0, Math.PI * 2);
-  ctx.fillStyle = `rgb(${r},${g},${b})`;
-  ctx.fill();
-  ctx.strokeStyle = "rgba(255,255,255,0.25)";
+  // Gold top edge
+  ctx.strokeStyle = "rgba(175, 120, 25, 0.75)";
   ctx.lineWidth = 1.5;
-  ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(0, top); ctx.lineTo(W, top); ctx.stroke();
+
+  // Subtle warm inner line
+  ctx.strokeStyle = "rgba(255,170,50,0.10)";
+  ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.moveTo(0, top + 2); ctx.lineTo(W, top + 2); ctx.stroke();
   ctx.restore();
 
+  // Player color — gold ring + inner color fill
+  const r = (color >> 16) & 0xff;
+  const g = (color >> 8)  & 0xff;
+  const b =  color        & 0xff;
   ctx.save();
-  ctx.font = "bold 13px system-ui,sans-serif";
-  ctx.fillStyle = "#dde4f0";
-  ctx.textBaseline = "middle";
-  ctx.fillText(`${count} squad${count !== 1 ? "s" : ""}`, 40, mid);
+  ctx.beginPath(); ctx.arc(26, mid, 13, 0, Math.PI * 2);
+  ctx.fillStyle = BORDER_GOLD; ctx.fill();
+  ctx.beginPath(); ctx.arc(26, mid, 9.5, 0, Math.PI * 2);
+  ctx.fillStyle = `rgb(${r},${g},${b})`; ctx.fill();
   ctx.restore();
 
+  // Squad count
+  ctx.save();
+  ctx.font = "bold 14px system-ui,sans-serif";
+  ctx.fillStyle = TEXT_CREAM;
+  ctx.textBaseline = "middle";
+  ctx.fillText(`${count} squad${count !== 1 ? "s" : ""}`, 48, mid);
+  ctx.restore();
+
+  // Hint text (touch-friendly copy)
   ctx.save();
   ctx.font = "11px system-ui,sans-serif";
-  ctx.fillStyle = "rgba(180,200,230,0.38)";
+  ctx.fillStyle = TEXT_MUTED;
   ctx.textBaseline = "middle";
   ctx.textAlign = "right";
   ctx.fillText(
     hasSelection
-      ? "click ground → move  ·  double-click ground → build"
-      : "click squad or building → select  ·  double-click ground → build  ·  drag → pan  ·  scroll → zoom",
-    W - 14,
-    mid
+      ? "tap ground → move  ·  double-tap → build"
+      : "tap unit/building → select  ·  double-tap ground → build  ·  drag → pan  ·  pinch → zoom",
+    W - 14, mid
   );
   ctx.restore();
 }
 
 function drawSelectionCard(ctx: CanvasRenderingContext2D, W: number, H: number, info: SelectionInfo) {
-  const card = selectionCardRect(W, H);
-  const close = closeBtnRect(W, H);
+  const card      = selectionCardRect(W, H);
+  const close     = closeBtnRect(W, H);
   const actionRects = selectionActionRects(W, H, info.actions.length);
 
-  ctx.save();
-  ctx.shadowColor = "rgba(0,0,0,0.6)";
-  ctx.shadowBlur = 18;
-  ctx.fillStyle = "rgba(10,16,32,0.92)";
-  rr(ctx, card.x, card.y, card.w, card.h, 10);
-  ctx.fill();
-  ctx.shadowBlur = 0;
-  ctx.strokeStyle = "rgba(255,255,255,0.08)";
-  ctx.lineWidth = 1;
-  rr(ctx, card.x, card.y, card.w, card.h, 10);
-  ctx.stroke();
-  ctx.restore();
+  // Panel frame
+  drawPanel(ctx, card.x, card.y, card.w, card.h, CARD_R);
 
+  // "◆ SELECTED ◆" header label
   ctx.save();
-  ctx.font = "9px system-ui,sans-serif";
-  ctx.fillStyle = "rgba(120,160,220,0.5)";
+  ctx.font = "bold 9px system-ui,sans-serif";
+  ctx.fillStyle = "rgba(195,145,28,0.70)";
   ctx.textBaseline = "top";
-  ctx.fillText("S E L E C T E D", card.x + 10, card.y + 8);
+  ctx.letterSpacing = "2px";
+  ctx.fillText("◆  SELECTED  ◆", card.x + 12, card.y + 9);
   ctx.restore();
 
-  const dotX = card.x + 14;
-  const dotY = card.y + 34;
-  const cr = (info.color >> 16) & 0xff;
-  const cg = (info.color >> 8) & 0xff;
-  const cb = info.color & 0xff;
+  // Gold divider
   ctx.save();
-  ctx.beginPath();
-  ctx.arc(dotX, dotY, 7, 0, Math.PI * 2);
-  ctx.fillStyle = `rgb(${cr},${cg},${cb})`;
-  ctx.fill();
-  ctx.strokeStyle = "rgba(255,255,255,0.3)";
-  ctx.lineWidth = 1.5;
-  ctx.stroke();
-  ctx.restore();
-
-  ctx.save();
-  ctx.font = "bold 14px system-ui,sans-serif";
-  ctx.fillStyle = "#dde4f0";
-  ctx.textBaseline = "middle";
-  ctx.fillText(info.title, dotX + 14, dotY - 8);
-  ctx.font = "12px system-ui,sans-serif";
-  ctx.fillStyle = "rgba(210,220,240,0.72)";
-  ctx.fillText(info.detail, dotX + 14, dotY + 12);
-  ctx.restore();
-
-  const barX = card.x + 10;
-  const barY = card.y + CARD_H - 18;
-  const actionTotalW =
-    info.actions.length > 0 ? info.actions.length * ACTION_SIZE + (info.actions.length - 1) * ACTION_GAP + 8 : 0;
-  const barW = card.w - 20 - actionTotalW;
-  const barH = 6;
-  const pct = Math.max(0, Math.min(1, info.health / info.maxHealth));
-
-  ctx.save();
-  ctx.fillStyle = "rgba(255,255,255,0.08)";
-  rr(ctx, barX, barY, barW, barH, 3);
-  ctx.fill();
-  const hue = pct > 0.5 ? 120 : pct > 0.25 ? 50 : 0;
-  ctx.fillStyle = `hsl(${hue},70%,48%)`;
-  rr(ctx, barX, barY, barW * pct, barH, 3);
-  ctx.fill();
-  ctx.restore();
-
-  ctx.save();
-  ctx.fillStyle = "rgba(255,80,80,0.15)";
-  rr(ctx, close.x, close.y, close.w, close.h, 5);
-  ctx.fill();
-  ctx.strokeStyle = "rgba(255,100,100,0.5)";
+  ctx.strokeStyle = "rgba(180,130,28,0.32)";
   ctx.lineWidth = 1;
-  rr(ctx, close.x, close.y, close.w, close.h, 5);
+  ctx.beginPath();
+  ctx.moveTo(card.x + 10, card.y + 24);
+  ctx.lineTo(card.x + card.w - 10, card.y + 24);
   ctx.stroke();
+  ctx.restore();
+
+  // Entity color dot — gold ring + player color
+  const dotX = card.x + 18;
+  const dotY = card.y + 48;
+  const cr = (info.color >> 16) & 0xff;
+  const cg = (info.color >> 8)  & 0xff;
+  const cb =  info.color        & 0xff;
+  ctx.save();
+  ctx.beginPath(); ctx.arc(dotX, dotY, 10, 0, Math.PI * 2);
+  ctx.fillStyle = BORDER_GOLD; ctx.fill();
+  ctx.beginPath(); ctx.arc(dotX, dotY, 7.5, 0, Math.PI * 2);
+  ctx.fillStyle = `rgb(${cr},${cg},${cb})`; ctx.fill();
+  ctx.restore();
+
+  // Title + detail
+  ctx.save();
+  ctx.textBaseline = "middle";
+  ctx.font = "bold 15px system-ui,sans-serif";
+  ctx.fillStyle = TEXT_CREAM;
+  ctx.fillText(info.title, dotX + 17, dotY - 8);
+  ctx.font = "12px system-ui,sans-serif";
+  ctx.fillStyle = "rgba(255,215,130,0.62)";
+  ctx.fillText(info.detail, dotX + 17, dotY + 10);
+  ctx.restore();
+
+  // Health bar
+  const actionTotalW = info.actions.length > 0
+    ? info.actions.length * ACTION_SIZE + (info.actions.length - 1) * ACTION_GAP + 8
+    : 0;
+  const barX = card.x + 12;
+  const barY = card.y + CARD_H - 20;
+  const barW = card.w - 24 - actionTotalW;
+  const pct  = Math.max(0, Math.min(1, info.health / info.maxHealth));
+
+  ctx.save();
+  // Track
+  ctx.fillStyle = "rgba(0,0,0,0.38)";
+  rr(ctx, barX, barY, barW, 8, 4); ctx.fill();
+  ctx.strokeStyle = "rgba(175,130,28,0.40)";
+  ctx.lineWidth = 1;
+  rr(ctx, barX, barY, barW, 8, 4); ctx.stroke();
+  // Fill — bright Snakebird colors
+  if (pct > 0) {
+    const hue = pct > 0.5 ? 108 : pct > 0.25 ? 42 : 4;
+    ctx.fillStyle = `hsl(${hue},88%,50%)`;
+    rr(ctx, barX, barY, barW * pct, 8, 4); ctx.fill();
+  }
+  ctx.restore();
+
+  // Close button — bright red X
+  ctx.save();
+  ctx.fillStyle = "rgba(205, 32, 32, 0.88)";
+  rr(ctx, close.x, close.y, close.w, close.h, 6); ctx.fill();
+  ctx.strokeStyle = "rgba(255,100,100,0.75)";
+  ctx.lineWidth = 1.5;
+  rr(ctx, close.x, close.y, close.w, close.h, 6); ctx.stroke();
   const cx = close.x + close.w / 2;
   const cy = close.y + close.h / 2;
-  const arm = 4.5;
-  ctx.strokeStyle = "rgba(255,160,160,0.9)";
-  ctx.lineWidth = 1.5;
+  ctx.strokeStyle = "#ffffff";
+  ctx.lineWidth = 2;
   ctx.lineCap = "round";
   ctx.beginPath();
-  ctx.moveTo(cx - arm, cy - arm);
-  ctx.lineTo(cx + arm, cy + arm);
-  ctx.moveTo(cx + arm, cy - arm);
-  ctx.lineTo(cx - arm, cy + arm);
+  ctx.moveTo(cx - 5, cy - 5); ctx.lineTo(cx + 5, cy + 5);
+  ctx.moveTo(cx + 5, cy - 5); ctx.lineTo(cx - 5, cy + 5);
   ctx.stroke();
   ctx.restore();
 
+  // Action buttons — chunky Snakebird colors
   for (let i = 0; i < info.actions.length; i++) {
     const action = info.actions[i];
-    const rect = actionRects[i];
+    const rect   = actionRects[i];
+    const bg     = action.active ? "#36b818" : "#1a58e0";
+    const border = action.active ? "#7cf04a" : "#60a6ff";
+    const glow   = action.active ? "rgba(50,190,20,0.40)" : "rgba(26,80,220,0.40)";
+
     ctx.save();
-    ctx.fillStyle = action.active ? "rgba(85,140,80,0.95)" : "rgba(45,78,138,0.95)";
-    rr(ctx, rect.x, rect.y, rect.w, rect.h, 8);
-    ctx.fill();
-    ctx.strokeStyle = action.active ? "rgba(190,255,170,0.75)" : "rgba(140,190,255,0.6)";
-    ctx.lineWidth = 1.2;
-    rr(ctx, rect.x, rect.y, rect.w, rect.h, 8);
-    ctx.stroke();
-    ctx.fillStyle = "#eef5ff";
+    ctx.shadowColor = glow; ctx.shadowBlur = 12;
+    ctx.fillStyle = bg;
+    rr(ctx, rect.x, rect.y, rect.w, rect.h, 12); ctx.fill();
+    ctx.shadowBlur = 0;
+    ctx.strokeStyle = border; ctx.lineWidth = 2;
+    rr(ctx, rect.x, rect.y, rect.w, rect.h, 12); ctx.stroke();
+    ctx.restore();
+
+    ctx.save();
+    ctx.fillStyle = "#ffffff";
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
-    ctx.font = info.actions.length > 1 ? "bold 10px system-ui,sans-serif" : "bold 22px system-ui,sans-serif";
-    ctx.fillText(
-      info.actions.length > 1 ? action.label : "+",
-      rect.x + rect.w / 2,
-      rect.y + (info.actions.length > 1 ? rect.h / 2 : 18)
-    );
-    if (info.actions.length === 1) {
+    if (info.actions.length > 1) {
       ctx.font = "bold 10px system-ui,sans-serif";
-      ctx.fillText(action.label, rect.x + rect.w / 2, rect.y + 38);
+      ctx.fillText(action.label, rect.x + rect.w / 2, rect.y + rect.h / 2);
+    } else {
+      ctx.font = "bold 26px system-ui,sans-serif";
+      ctx.fillText("+", rect.x + rect.w / 2, rect.y + 20);
+      ctx.font = "bold 10px system-ui,sans-serif";
+      ctx.fillText(action.label, rect.x + rect.w / 2, rect.y + 42);
     }
     ctx.restore();
   }
@@ -321,10 +376,11 @@ function drawSelectionCard(ctx: CanvasRenderingContext2D, W: number, H: number, 
 function drawBuildMenu(ctx: CanvasRenderingContext2D, layout: ReturnType<typeof menuLayout>, t: number) {
   const { panel, items, anchor } = layout;
 
+  // Amber dashed connector line
   ctx.save();
-  ctx.strokeStyle = "rgba(90,150,255,0.35)";
+  ctx.strokeStyle = "rgba(200,140,28,0.55)";
   ctx.lineWidth = 1.5;
-  ctx.setLineDash([3, 5]);
+  ctx.setLineDash([4, 6]);
   ctx.beginPath();
   ctx.moveTo(panel.x + panel.w / 2, panel.y + panel.h);
   ctx.lineTo(anchor.x, anchor.y);
@@ -332,55 +388,71 @@ function drawBuildMenu(ctx: CanvasRenderingContext2D, layout: ReturnType<typeof 
   ctx.setLineDash([]);
   ctx.restore();
 
+  // Panel frame
+  drawPanel(ctx, panel.x, panel.y, panel.w, panel.h, 14);
+
+  // "BUILD" gold title
   ctx.save();
-  ctx.shadowColor = "rgba(0,0,0,0.65)";
-  ctx.shadowBlur = 30;
-  ctx.fillStyle = "rgba(12,18,34,0.95)";
-  rr(ctx, panel.x, panel.y, panel.w, panel.h, 10);
-  ctx.fill();
-  ctx.shadowBlur = 0;
-  ctx.strokeStyle = "rgba(255,255,255,0.09)";
+  ctx.font = "bold 12px system-ui,sans-serif";
+  ctx.fillStyle = TEXT_GOLD;
+  ctx.textBaseline = "middle";
+  ctx.textAlign = "center";
+  ctx.letterSpacing = "3px";
+  ctx.fillText("BUILD", panel.x + panel.w / 2, panel.y + 17);
+  ctx.restore();
+
+  // Divider under title
+  ctx.save();
+  ctx.strokeStyle = "rgba(175,128,28,0.36)";
   ctx.lineWidth = 1;
-  rr(ctx, panel.x, panel.y, panel.w, panel.h, 10);
+  ctx.beginPath();
+  ctx.moveTo(panel.x + 14, panel.y + 28);
+  ctx.lineTo(panel.x + panel.w - 14, panel.y + 28);
   ctx.stroke();
   ctx.restore();
 
-  ctx.save();
-  ctx.fillStyle = "rgba(150,180,230,0.55)";
-  ctx.font = "10px system-ui,sans-serif";
-  ctx.textBaseline = "middle";
-  ctx.textAlign = "center";
-  ctx.fillText("B U I L D", panel.x + panel.w / 2, panel.y + 15);
-  ctx.restore();
-
   for (let i = 0; i < items.length; i++) {
-    const item = items[i];
-    const glowA = 0.38 + 0.22 * Math.sin(t * 2.4 + i * 1.3);
-    const pulse = 1 + 0.05 * Math.sin(t * 3.6 + i * 0.8);
+    const item  = items[i];
+    const pulse = 1 + 0.04 * Math.sin(t * 3.2 + i * 1.1);
+    const glowA = 0.45 + 0.28 * Math.sin(t * 2.6 + i * 1.3);
 
     ctx.save();
-    ctx.fillStyle = "rgba(22,38,72,0.9)";
-    rr(ctx, item.rect.x, item.rect.y, item.rect.w, item.rect.h, 7);
-    ctx.fill();
-    ctx.strokeStyle = `rgba(80,140,255,${glowA})`;
+    // Colored card with glow
+    ctx.shadowColor = item.glow;
+    ctx.shadowBlur  = 14 * glowA;
+    ctx.fillStyle   = item.color;
+    rr(ctx, item.rect.x, item.rect.y, item.rect.w, item.rect.h, 12); ctx.fill();
+    ctx.shadowBlur = 0;
+
+    // Snakebird top-highlight sheen
+    const shine = ctx.createLinearGradient(item.rect.x, item.rect.y, item.rect.x, item.rect.y + item.rect.h * 0.55);
+    shine.addColorStop(0, "rgba(255,255,255,0.24)");
+    shine.addColorStop(1, "rgba(255,255,255,0)");
+    ctx.fillStyle = shine;
+    rr(ctx, item.rect.x, item.rect.y, item.rect.w, item.rect.h, 12); ctx.fill();
+
+    // White border
+    ctx.strokeStyle = "rgba(255,255,255,0.30)";
     ctx.lineWidth = 1.5;
-    rr(ctx, item.rect.x, item.rect.y, item.rect.w, item.rect.h, 7);
-    ctx.stroke();
+    rr(ctx, item.rect.x, item.rect.y, item.rect.w, item.rect.h, 12); ctx.stroke();
     ctx.restore();
 
+    // Icon (pulsing scale)
     ctx.save();
-    ctx.font = `${22 * pulse}px system-ui`;
+    ctx.font = `${28 * pulse}px system-ui`;
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
     ctx.fillText(item.icon, item.rect.x + item.rect.w / 2, item.rect.y + item.rect.h * 0.42);
     ctx.restore();
 
+    // Label
     ctx.save();
-    ctx.fillStyle = "#b8ccf8";
+    ctx.fillStyle = "#ffffff";
     ctx.font = "bold 11px system-ui,sans-serif";
     ctx.textAlign = "center";
     ctx.textBaseline = "bottom";
-    ctx.fillText(item.label, item.rect.x + item.rect.w / 2, item.rect.y + item.rect.h - 6);
+    ctx.shadowColor = "rgba(0,0,0,0.6)"; ctx.shadowBlur = 4;
+    ctx.fillText(item.label, item.rect.x + item.rect.w / 2, item.rect.y + item.rect.h - 5);
     ctx.restore();
   }
 }

@@ -1,5 +1,5 @@
 import * as THREE from "three";
-import { GAME_RULES } from "../../shared/game-rules.js";
+import { GAME_RULES, snapWorldToTileCenter } from "../../shared/game-rules.js";
 import type { Game } from "./game.js";
 import { createHudCanvas, createHudState, drawHUD, hitTestDeselect, hitTestMenu, hitTestSelectionAction } from "./hud.js";
 import type { SelectionInfo } from "./entity.js";
@@ -66,7 +66,7 @@ export function startRender(game: Game) {
   const camera = new THREE.PerspectiveCamera(CAM.fov, window.innerWidth / Math.max(window.innerHeight, 1), 0.5, 2500);
   camera.up.set(0, 1, 0);
 
-  let distance = CAM.distanceStart;
+  let distance: number = CAM.distanceStart;
   const lookTarget = new THREE.Vector3(0, 0, 0);
   const shadowCenter = new THREE.Vector3();
   const shadowOffset = SUN.direction.clone().multiplyScalar(SUN.shadowDistance);
@@ -100,9 +100,21 @@ export function startRender(game: Game) {
 
   let drag: { startX: number; startY: number; prevX: number; prevY: number; moved: boolean } | null = null;
   let lastGroundTap = { t: 0, x: 0, y: 0, wx: 0, wz: 0 };
-  const DOUBLE_MS = 420;
-  const DOUBLE_SCREEN_PX = 32;
-  const DOUBLE_WORLD = 18;
+  /** Second tap within this window + distance → build menu (never blocked by move). */
+  const DOUBLE_MS = 450;
+  const DOUBLE_SCREEN_PX = 36;
+  const DOUBLE_WORLD = 22;
+  /** Move is issued only after this delay so a double-tap can cancel it and open build. */
+  const MOVE_DELAY_MS = 280;
+
+  let pendingMoveTimer: ReturnType<typeof setTimeout> | null = null;
+
+  function cancelPendingMove() {
+    if (pendingMoveTimer !== null) {
+      clearTimeout(pendingMoveTimer);
+      pendingMoveTimer = null;
+    }
+  }
 
   function groundHit(clientX: number, clientY: number): THREE.Vector3 | null {
     ndcV.set((clientX / window.innerWidth) * 2 - 1, -(clientY / window.innerHeight) * 2 + 1);
@@ -120,6 +132,7 @@ export function startRender(game: Game) {
   }
 
   function deselect() {
+    cancelPendingMove();
     game.clearSelection();
     hud.buildMenu.visible = false;
   }
@@ -134,12 +147,14 @@ export function startRender(game: Game) {
 
     const selectionAction = hitTestSelectionAction(clientX, clientY, selectedInfo);
     if (selectionAction !== null) {
+      cancelPendingMove();
       game.runSelectionAction(selectionAction);
       return;
     }
 
     const menuAction = hitTestMenu(hud, clientX, clientY);
     if (menuAction !== null) {
+      cancelPendingMove();
       if (menuAction !== "dismiss") {
         game.sendBuildIntent(menuAction, hud.buildMenu.worldX, hud.buildMenu.worldZ);
       }
@@ -147,19 +162,23 @@ export function startRender(game: Game) {
       return;
     }
     if (hud.buildMenu.visible) {
+      cancelPendingMove();
       hud.buildMenu.visible = false;
       return;
     }
 
-    const point = groundHit(clientX, clientY);
-    if (!point) return;
-
-    const picked = game.pickOwnedEntity(point.x, point.z);
+    ndcV.set((clientX / window.innerWidth) * 2 - 1, -(clientY / window.innerHeight) * 2 + 1);
+    raycaster.setFromCamera(ndcV, camera);
+    const picked = game.pickOwnedEntityFromRay(raycaster);
     if (picked) {
+      cancelPendingMove();
       game.toggleSelection(picked.id);
       lastGroundTap.t = 0;
       return;
     }
+
+    const point = raycaster.ray.intersectPlane(groundPlane, hit) ? hit.clone() : null;
+    if (!point) return;
 
     const now = performance.now();
     const dtMs = now - lastGroundTap.t;
@@ -173,15 +192,24 @@ export function startRender(game: Game) {
       dW < DOUBLE_WORLD;
 
     if (isDouble) {
+      cancelPendingMove();
       game.clearSelection();
-      hud.buildMenu = { visible: true, screenX: clientX, screenY: clientY, worldX: point.x, worldZ: point.z };
+      const snapped = snapWorldToTileCenter(point.x, point.z);
+      hud.buildMenu = { visible: true, screenX: clientX, screenY: clientY, worldX: snapped.x, worldZ: snapped.z };
       lastGroundTap.t = 0;
       return;
     }
 
     lastGroundTap = { t: now, x: clientX, y: clientY, wx: point.x, wz: point.z };
+
     if (game.getSelectedBlobEntity()) {
-      game.sendMoveIntent(point.x, point.z);
+      cancelPendingMove();
+      const tx = point.x;
+      const tz = point.z;
+      pendingMoveTimer = setTimeout(() => {
+        pendingMoveTimer = null;
+        game.sendMoveIntent(tx, tz);
+      }, MOVE_DELAY_MS);
     }
   }
 
@@ -196,6 +224,7 @@ export function startRender(game: Game) {
     const dy = ev.clientY - drag.startY;
     if (!drag.moved && Math.hypot(dx, dy) > DRAG_THRESHOLD) {
       drag.moved = true;
+      cancelPendingMove();
       game.clearSelection();
       hud.buildMenu.visible = false;
     }
