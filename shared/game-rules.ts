@@ -61,15 +61,15 @@ export function getSquadAreaForSpread(unitCount: number, spread: SquadSpread): n
 }
 
 export function getSquadSpacingMultiplier(spread: SquadSpread): number {
-  if (spread === SquadSpread.WIDE) return 1.34;
-  if (spread === SquadSpread.DEFAULT) return 1.12;
-  return 0.9;
+  if (spread === SquadSpread.WIDE) return 1.46;
+  if (spread === SquadSpread.DEFAULT) return 1.18;
+  return 0.98;
 }
 
 export function getSquadBaseStretch(spread: SquadSpread): number {
-  if (spread === SquadSpread.WIDE) return 1.75;
+  if (spread === SquadSpread.WIDE) return 0.76;
   if (spread === SquadSpread.DEFAULT) return 1.28;
-  return 1;
+  return 1.08;
 }
 
 export function getSquadTravelStretch(moveDistance: number, speed: number): number {
@@ -84,7 +84,11 @@ export function getSquadAxes(unitCount: number, moveDistance: number, speed: num
     getSquadAreaForSpread(unitCount, spread),
     Math.PI * GAME_RULES.UNIT_RADIUS * GAME_RULES.UNIT_RADIUS
   );
-  const stretch = getSquadBaseStretch(spread) * getSquadTravelStretch(moveDistance, speed);
+  const travelStretch = getSquadTravelStretch(moveDistance, speed);
+  const stretch =
+    spread === SquadSpread.WIDE
+      ? getSquadBaseStretch(spread) / Math.sqrt(travelStretch)
+      : getSquadBaseStretch(spread) * travelStretch;
   const minor = Math.sqrt(area / (Math.PI * stretch));
   const major = minor * stretch;
   return { major, minor };
