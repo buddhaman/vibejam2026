@@ -5,9 +5,23 @@
 export const BuildingType = {
   BARRACKS: 1,
   TOWER: 2,
+  TOWN_CENTER: 3,
 } as const;
 
 export type BuildingType = (typeof BuildingType)[keyof typeof BuildingType];
+
+export const UnitType = {
+  VILLAGER: 1,
+  WARBAND: 2,
+} as const;
+
+export type UnitType = (typeof UnitType)[keyof typeof UnitType];
+
+export type ResourceCost = {
+  food: number;
+  wood: number;
+  gold: number;
+};
 
 export const SquadSpread = {
   TIGHT: 0,
@@ -18,7 +32,11 @@ export const SquadSpread = {
 export type SquadSpread = (typeof SquadSpread)[keyof typeof SquadSpread];
 
 export function isBuildingType(value: unknown): value is BuildingType {
-  return value === BuildingType.BARRACKS || value === BuildingType.TOWER;
+  return value === BuildingType.BARRACKS || value === BuildingType.TOWER || value === BuildingType.TOWN_CENTER;
+}
+
+export function isUnitType(value: unknown): value is UnitType {
+  return value === UnitType.VILLAGER || value === UnitType.WARBAND;
 }
 
 export function isSquadSpread(value: unknown): value is SquadSpread {
@@ -44,8 +62,12 @@ export const GAME_RULES = {
   DEFAULT_BLOB_HEALTH: 100,
   DEFAULT_UNIT_COUNT: 40,
   START_BLOB_SPACING: 10,
+  START_FOOD: 500,
+  START_WOOD: 300,
+  START_GOLD: 200,
   BARRACKS_HEALTH: 200,
   TOWER_HEALTH: 300,
+  TOWN_CENTER_HEALTH: 950,
   MAX_BUILDINGS_PER_PLAYER: 8,
 } as const;
 
@@ -55,27 +77,97 @@ const TILE_CENTER_MAX = GAME_RULES.WORLD_MAX - TILE_HALF;
 
 export const BUILDING_RULES = {
   [BuildingType.BARRACKS]: {
+    label: "Barracks",
     health: GAME_RULES.BARRACKS_HEALTH,
+    buildable: true,
+    cost: { food: 0, wood: 175, gold: 0 },
     footprintWidth: GAME_RULES.TILE_SIZE,
     footprintDepth: GAME_RULES.TILE_SIZE,
     selectionWidth: GAME_RULES.TILE_SIZE,
     selectionDepth: GAME_RULES.TILE_SIZE,
     height: 6.2,
     trainSpawnOffsetX: GAME_RULES.TILE_SIZE,
+    producibleUnits: [UnitType.WARBAND],
   },
   [BuildingType.TOWER]: {
+    label: "Tower",
     health: GAME_RULES.TOWER_HEALTH,
+    buildable: true,
+    cost: { food: 0, wood: 125, gold: 50 },
     footprintWidth: GAME_RULES.TILE_SIZE * 0.78,
     footprintDepth: GAME_RULES.TILE_SIZE * 0.78,
     selectionWidth: GAME_RULES.TILE_SIZE * 0.86,
     selectionDepth: GAME_RULES.TILE_SIZE * 0.86,
     height: 15.5,
     trainSpawnOffsetX: GAME_RULES.TILE_SIZE * 0.9,
+    producibleUnits: [],
+  },
+  [BuildingType.TOWN_CENTER]: {
+    label: "Town Center",
+    health: GAME_RULES.TOWN_CENTER_HEALTH,
+    buildable: false,
+    cost: { food: 0, wood: 0, gold: 0 },
+    footprintWidth: GAME_RULES.TILE_SIZE * 1.36,
+    footprintDepth: GAME_RULES.TILE_SIZE * 1.36,
+    selectionWidth: GAME_RULES.TILE_SIZE * 1.4,
+    selectionDepth: GAME_RULES.TILE_SIZE * 1.4,
+    height: 8.8,
+    trainSpawnOffsetX: GAME_RULES.TILE_SIZE * 1.1,
+    producibleUnits: [UnitType.VILLAGER],
+  },
+} as const;
+
+export const UNIT_RULES = {
+  [UnitType.VILLAGER]: {
+    label: "Villager",
+    detail: "Gatherer",
+    cost: { food: 50, wood: 0, gold: 0 },
+    trainTimeMs: 9000,
+    health: 55,
+    unitCount: 1,
+    visualScale: 0.82,
+  },
+  [UnitType.WARBAND]: {
+    label: "Warband",
+    detail: "Heavy infantry squad",
+    cost: { food: 80, wood: 0, gold: 35 },
+    trainTimeMs: 12000,
+    health: GAME_RULES.DEFAULT_BLOB_HEALTH,
+    unitCount: 12,
+    visualScale: 1,
   },
 } as const;
 
 export function getBuildingRules(buildingType: BuildingType) {
   return BUILDING_RULES[buildingType] ?? BUILDING_RULES[BuildingType.BARRACKS];
+}
+
+export function getUnitRules(unitType: UnitType) {
+  return UNIT_RULES[unitType] ?? UNIT_RULES[UnitType.WARBAND];
+}
+
+export function canBuildingProduceUnit(buildingType: BuildingType, unitType: UnitType): boolean {
+  return getBuildingRules(buildingType).producibleUnits.some((candidate) => candidate === unitType);
+}
+
+export function formatResourceCost(cost: ResourceCost): string {
+  const parts: string[] = [];
+  if (cost.food > 0) parts.push(`${cost.food}F`);
+  if (cost.wood > 0) parts.push(`${cost.wood}W`);
+  if (cost.gold > 0) parts.push(`${cost.gold}G`);
+  return parts.length > 0 ? parts.join("  ") : "Free";
+}
+
+export function canAfford(resources: ResourceCost, cost: ResourceCost): boolean {
+  return resources.food >= cost.food && resources.wood >= cost.wood && resources.gold >= cost.gold;
+}
+
+export function subtractCost(resources: ResourceCost, cost: ResourceCost): ResourceCost {
+  return {
+    food: resources.food - cost.food,
+    wood: resources.wood - cost.wood,
+    gold: resources.gold - cost.gold,
+  };
 }
 
 export function snapCoordinateToTileCenter(value: number): number {

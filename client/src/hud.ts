@@ -4,14 +4,28 @@
  * All hit-testing is done manually in render.ts.
  */
 
-import { BuildingType } from "../../shared/game-rules.js";
+import { BuildingType, formatResourceCost, getBuildingRules, type ResourceCost } from "../../shared/game-rules.js";
 import type { SelectionInfo } from "./entity.js";
 
 type Rect = { x: number; y: number; w: number; h: number };
 
 const BUILD_ITEMS = [
-  { label: "Barracks", icon: "⚔", type: BuildingType.BARRACKS, color: "#c03510", glow: "#ff5522" },
-  { label: "Tower",    icon: "🗼", type: BuildingType.TOWER,    color: "#1050c8", glow: "#3a80ff" },
+  {
+    label: getBuildingRules(BuildingType.BARRACKS).label,
+    icon: "⚔",
+    type: BuildingType.BARRACKS,
+    color: "#c03510",
+    glow: "#ff5522",
+    cost: getBuildingRules(BuildingType.BARRACKS).cost,
+  },
+  {
+    label: getBuildingRules(BuildingType.TOWER).label,
+    icon: "🗼",
+    type: BuildingType.TOWER,
+    color: "#1050c8",
+    glow: "#3a80ff",
+    cost: getBuildingRules(BuildingType.TOWER).cost,
+  },
 ] as const;
 
 export type BuildAction = (typeof BUILD_ITEMS)[number]["type"];
@@ -35,6 +49,8 @@ const CARD_R     = 14;
 const CLOSE_SIZE = 22;
 const ACTION_SIZE = 58;
 const ACTION_GAP  = 8;
+const RESOURCE_PILL_W = 88;
+const RESOURCE_PILL_H = 28;
 
 // Palette — AoM warm dark panels + Snakebird saturated accents
 const PANEL_BG         = "rgba(18, 11, 4, 0.97)";
@@ -144,6 +160,7 @@ export function drawHUD(
   hud: HudState,
   myColor: number,
   mySquadCount: number,
+  resources: ResourceCost,
   selected: SelectionInfo | null,
   t: number
 ) {
@@ -152,7 +169,7 @@ export function drawHUD(
   const H = canvas.height;
   ctx.clearRect(0, 0, W, H);
 
-  drawBottomBar(ctx, W, H, myColor, mySquadCount, selected !== null);
+  drawBottomBar(ctx, W, H, myColor, mySquadCount, resources, selected !== null);
   if (selected) drawSelectionCard(ctx, W, H, selected);
   if (hud.buildMenu.visible) drawBuildMenu(ctx, menuLayout(hud.buildMenu.screenX, hud.buildMenu.screenY), t);
 }
@@ -191,6 +208,7 @@ function drawBottomBar(
   H: number,
   color: number,
   count: number,
+  resources: ResourceCost,
   hasSelection: boolean
 ) {
   const top = H - BAR_H;
@@ -231,6 +249,10 @@ function drawBottomBar(
   ctx.fillText(`${count} squad${count !== 1 ? "s" : ""}`, 48, mid);
   ctx.restore();
 
+  drawResourcePill(ctx, 156, mid, "#8bcf57", "Food", resources.food);
+  drawResourcePill(ctx, 252, mid, "#c8954d", "Wood", resources.wood);
+  drawResourcePill(ctx, 348, mid, "#f0d46f", "Gold", resources.gold);
+
   // Hint text (touch-friendly copy)
   ctx.save();
   ctx.font = "11px system-ui,sans-serif";
@@ -262,6 +284,10 @@ function drawSelectionCard(ctx: CanvasRenderingContext2D, W: number, H: number, 
   ctx.letterSpacing = "2px";
   ctx.fillText("◆  SELECTED  ◆", card.x + 12, card.y + 9);
   ctx.restore();
+
+  if (info.production) {
+    drawProductionPanel(ctx, card.x + 12, card.y + 74, card.w - 24, 24, info.production);
+  }
 
   // Gold divider
   ctx.save();
@@ -343,9 +369,9 @@ function drawSelectionCard(ctx: CanvasRenderingContext2D, W: number, H: number, 
   for (let i = 0; i < info.actions.length; i++) {
     const action = info.actions[i];
     const rect   = actionRects[i];
-    const bg     = action.active ? "#36b818" : "#1a58e0";
-    const border = action.active ? "#7cf04a" : "#60a6ff";
-    const glow   = action.active ? "rgba(50,190,20,0.40)" : "rgba(26,80,220,0.40)";
+    const bg     = action.disabled ? "#484848" : action.active ? "#36b818" : "#1a58e0";
+    const border = action.disabled ? "#8e8e8e" : action.active ? "#7cf04a" : "#60a6ff";
+    const glow   = action.disabled ? "rgba(80,80,80,0.20)" : action.active ? "rgba(50,190,20,0.40)" : "rgba(26,80,220,0.40)";
 
     ctx.save();
     ctx.shadowColor = glow; ctx.shadowBlur = 12;
@@ -362,12 +388,22 @@ function drawSelectionCard(ctx: CanvasRenderingContext2D, W: number, H: number, 
     ctx.textBaseline = "middle";
     if (info.actions.length > 1) {
       ctx.font = "bold 10px system-ui,sans-serif";
-      ctx.fillText(action.label, rect.x + rect.w / 2, rect.y + rect.h / 2);
+      ctx.fillText(action.label, rect.x + rect.w / 2, rect.y + 16);
+      ctx.font = "9px system-ui,sans-serif";
+      ctx.fillText(action.cost ? formatResourceCost(action.cost) : "", rect.x + rect.w / 2, rect.y + 31);
+      ctx.fillText(action.timeMs ? `${Math.ceil(action.timeMs / 1000)}s` : "", rect.x + rect.w / 2, rect.y + 44);
+      if ((action.queueCount ?? 0) > 0) {
+        ctx.font = "bold 10px system-ui,sans-serif";
+        ctx.fillText(`x${action.queueCount}`, rect.x + rect.w / 2, rect.y + 55);
+      }
     } else {
       ctx.font = "bold 26px system-ui,sans-serif";
-      ctx.fillText("+", rect.x + rect.w / 2, rect.y + 20);
+      ctx.fillText("+", rect.x + rect.w / 2, rect.y + 15);
       ctx.font = "bold 10px system-ui,sans-serif";
-      ctx.fillText(action.label, rect.x + rect.w / 2, rect.y + 42);
+      ctx.fillText(action.label, rect.x + rect.w / 2, rect.y + 30);
+      ctx.font = "9px system-ui,sans-serif";
+      ctx.fillText(action.cost ? formatResourceCost(action.cost) : "", rect.x + rect.w / 2, rect.y + 43);
+      ctx.fillText(action.timeMs ? `${Math.ceil(action.timeMs / 1000)}s` : "", rect.x + rect.w / 2, rect.y + 54);
     }
     ctx.restore();
   }
@@ -452,9 +488,80 @@ function drawBuildMenu(ctx: CanvasRenderingContext2D, layout: ReturnType<typeof 
     ctx.textAlign = "center";
     ctx.textBaseline = "bottom";
     ctx.shadowColor = "rgba(0,0,0,0.6)"; ctx.shadowBlur = 4;
-    ctx.fillText(item.label, item.rect.x + item.rect.w / 2, item.rect.y + item.rect.h - 5);
+    ctx.fillText(item.label, item.rect.x + item.rect.w / 2, item.rect.y + item.rect.h - 18);
+    ctx.font = "10px system-ui,sans-serif";
+    ctx.fillText(formatResourceCost(item.cost), item.rect.x + item.rect.w / 2, item.rect.y + item.rect.h - 5);
     ctx.restore();
   }
+}
+
+function drawResourcePill(
+  ctx: CanvasRenderingContext2D,
+  x: number,
+  midY: number,
+  color: string,
+  label: string,
+  value: number
+) {
+  const y = midY - RESOURCE_PILL_H * 0.5;
+  ctx.save();
+  ctx.fillStyle = "rgba(42,26,10,0.95)";
+  rr(ctx, x, y, RESOURCE_PILL_W, RESOURCE_PILL_H, 14);
+  ctx.fill();
+  ctx.strokeStyle = "rgba(255,214,120,0.2)";
+  ctx.lineWidth = 1;
+  rr(ctx, x, y, RESOURCE_PILL_W, RESOURCE_PILL_H, 14);
+  ctx.stroke();
+
+  ctx.fillStyle = color;
+  ctx.beginPath();
+  ctx.arc(x + 16, midY, 6, 0, Math.PI * 2);
+  ctx.fill();
+
+  ctx.fillStyle = TEXT_CREAM;
+  ctx.font = "bold 10px system-ui,sans-serif";
+  ctx.textBaseline = "middle";
+  ctx.fillText(label, x + 28, midY - 6);
+  ctx.font = "bold 12px system-ui,sans-serif";
+  ctx.fillText(String(value), x + 28, midY + 7);
+  ctx.restore();
+}
+
+function drawProductionPanel(
+  ctx: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  w: number,
+  h: number,
+  production: NonNullable<SelectionInfo["production"]>
+) {
+  ctx.save();
+  ctx.fillStyle = "rgba(0,0,0,0.28)";
+  rr(ctx, x, y, w, h, 8);
+  ctx.fill();
+  ctx.strokeStyle = "rgba(255,205,90,0.18)";
+  ctx.lineWidth = 1;
+  rr(ctx, x, y, w, h, 8);
+  ctx.stroke();
+
+  const barX = x + 122;
+  const barY = y + 7;
+  const barW = Math.max(60, w - 206);
+
+  ctx.fillStyle = TEXT_CREAM;
+  ctx.font = "bold 10px system-ui,sans-serif";
+  ctx.textBaseline = "middle";
+  ctx.fillText(`${production.label} x${production.queueCount}`, x + 10, y + h / 2);
+  ctx.textAlign = "right";
+  ctx.fillText(`${Math.ceil(production.remainingMs / 1000)}s`, x + w - 10, y + h / 2);
+
+  ctx.fillStyle = "rgba(28,18,6,0.85)";
+  rr(ctx, barX, barY, barW, 10, 5);
+  ctx.fill();
+  ctx.fillStyle = "#e5b949";
+  rr(ctx, barX, barY, barW * production.progress, 10, 5);
+  ctx.fill();
+  ctx.restore();
 }
 
 function rr(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, r = 8) {

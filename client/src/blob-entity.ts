@@ -1,5 +1,13 @@
 import * as THREE from "three";
-import { GAME_RULES, SquadSpread, type SquadSpread as SquadSpreadValue, getSquadAxes } from "../../shared/game-rules.js";
+import {
+  GAME_RULES,
+  SquadSpread,
+  UnitType,
+  getSquadAxes,
+  getUnitRules,
+  type SquadSpread as SquadSpreadValue,
+  type UnitType as UnitTypeValue,
+} from "../../shared/game-rules.js";
 import type { Game } from "./game.js";
 import { Entity, type SelectionInfo } from "./entity.js";
 import { getTerrainHeightAt } from "./terrain.js";
@@ -64,6 +72,7 @@ export class BlobEntity extends Entity {
     unitCount: number;
     health: number;
     spread: SquadSpreadValue;
+    unitType: UnitTypeValue;
   } | null = null;
   private heading = 0;
   private visualX: number | null = null;
@@ -116,6 +125,7 @@ export class BlobEntity extends Entity {
     unitCount: number;
     health: number;
     spread: SquadSpreadValue;
+    unitType: UnitTypeValue;
   }): void {
     this.blob = blob;
     if (this.visualX === null || this.visualY === null) {
@@ -296,6 +306,7 @@ export class BlobEntity extends Entity {
     this.stepUnits(Math.min(0.05, dt), layout);
 
     const unitHeight = GAME_RULES.UNIT_HEIGHT;
+    const unitRules = getUnitRules(this.blob.unitType);
     const rightX = Math.cos(layout.heading);
     const rightZ = -Math.sin(layout.heading);
     const forwardX = Math.sin(layout.heading);
@@ -306,6 +317,7 @@ export class BlobEntity extends Entity {
       const pz = rightZ * state.x + forwardZ * state.z;
       DUMMY.position.set(px, unitHeight * 0.5 + 0.02, pz);
       DUMMY.rotation.y = 0;
+      DUMMY.scale.setScalar(unitRules.visualScale);
       DUMMY.updateMatrix();
       this.units.setMatrixAt(i, DUMMY.matrix);
     }
@@ -358,19 +370,21 @@ export class BlobEntity extends Entity {
 
   public getSelectionInfo(): SelectionInfo | null {
     if (!this.blob) return null;
+    const unitRules = getUnitRules(this.blob.unitType);
     return {
-      title: "Squad",
-      detail: `${this.blob.unitCount} units`,
+      title: unitRules.label,
+      detail: this.blob.unitType === UnitType.VILLAGER ? "Can gather resources" : `${this.blob.unitCount} units`,
       health: this.blob.health,
-      maxHealth: 100,
+      maxHealth: unitRules.health,
       color: this.game.getPlayerColor(this.blob.ownerId),
-      actions: this.isMine()
+      actions: this.isMine() && this.blob.unitType !== UnitType.VILLAGER
         ? [
             { id: "spread:tight", label: "Tight", active: this.blob.spread === SquadSpread.TIGHT },
             { id: "spread:default", label: "Default", active: this.blob.spread === SquadSpread.DEFAULT },
             { id: "spread:wide", label: "Wide", active: this.blob.spread === SquadSpread.WIDE },
           ]
         : [],
+      production: null,
     };
   }
 }

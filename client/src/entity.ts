@@ -1,10 +1,22 @@
 import * as THREE from "three";
+import type { ResourceCost } from "../../shared/game-rules.js";
 import type { Game } from "./game.js";
 
 export type SelectionAction = {
   id: string;
   label: string;
   active?: boolean;
+  disabled?: boolean;
+  cost?: ResourceCost;
+  timeMs?: number;
+  queueCount?: number;
+};
+
+export type ProductionInfo = {
+  label: string;
+  queueCount: number;
+  remainingMs: number;
+  progress: number;
 };
 
 export type SelectionInfo = {
@@ -14,6 +26,7 @@ export type SelectionInfo = {
   maxHealth: number;
   color: number;
   actions: SelectionAction[];
+  production?: ProductionInfo | null;
 };
 
 export abstract class Entity {

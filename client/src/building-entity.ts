@@ -1,8 +1,11 @@
 import * as THREE from "three";
 import {
   BuildingType,
+  canAfford,
   getBuildingRules,
+  getUnitRules,
   type BuildingType as BuildingTypeValue,
+  type UnitType as UnitTypeValue,
 } from "../../shared/game-rules.js";
 import type { Game } from "./game.js";
 import { Entity, type SelectionInfo } from "./entity.js";
@@ -110,10 +113,34 @@ function createTowerVariant(): BuildingVariant {
   return { root, tintMaterials, accentMaterials };
 }
 
+function createTownCenterVariant(): BuildingVariant {
+  const rules = getBuildingRules(BuildingType.TOWN_CENTER);
+  const root = new THREE.Group();
+  const tintMaterials = [
+    createMaterial(0xc6ab7b, 0.9, 0.04),
+    createMaterial(0x9d7850, 0.95, 0.02),
+  ];
+  const accentMaterials = [
+    createMaterial(0x5f4530, 0.98, 0),
+    createMaterial(0xdfcfaa, 0.72, 0.05),
+  ];
+
+  root.add(createBox({ x: rules.footprintWidth, y: 0.8, z: rules.footprintDepth }, { x: 0, y: 0.4, z: 0 }, accentMaterials[0]));
+  root.add(createBox({ x: rules.footprintWidth - 1.4, y: 4.9, z: rules.footprintDepth - 1.4 }, { x: 0, y: 3.25, z: 0 }, tintMaterials[0]));
+  root.add(createBox({ x: rules.footprintWidth - 0.8, y: 0.55, z: rules.footprintDepth - 0.8 }, { x: 0, y: 5.95, z: 0 }, accentMaterials[1]));
+  root.add(createBox({ x: rules.footprintWidth - 4.2, y: 2.1, z: rules.footprintDepth - 4.2 }, { x: 0, y: 7.05, z: 0 }, tintMaterials[1]));
+  root.add(createBox({ x: 2.4, y: 2.8, z: 1.3 }, { x: 0, y: 2.2, z: rules.footprintDepth * 0.42 }, accentMaterials[1]));
+  root.add(createBox({ x: 1.3, y: 3.2, z: 1.3 }, { x: -rules.footprintWidth * 0.31, y: 8.1, z: -rules.footprintDepth * 0.31 }, accentMaterials[0]));
+  root.add(createBox({ x: 1.3, y: 3.2, z: 1.3 }, { x: rules.footprintWidth * 0.31, y: 8.1, z: -rules.footprintDepth * 0.31 }, accentMaterials[0]));
+
+  return { root, tintMaterials, accentMaterials };
+}
+
 function createBuildingSet(): BuildingSet {
   return {
     [BuildingType.BARRACKS]: createBarracksVariant(),
     [BuildingType.TOWER]: createTowerVariant(),
+    [BuildingType.TOWN_CENTER]: createTownCenterVariant(),
   };
 }
 
@@ -130,6 +157,8 @@ export class BuildingEntity extends Entity {
     buildingType: BuildingTypeValue;
     health: number;
     ownerId: string;
+    productionQueue: UnitTypeValue[];
+    productionProgressMs: number;
   } | null = null;
 
   public constructor(game: Game, id: string) {
@@ -155,8 +184,13 @@ export class BuildingEntity extends Entity {
     buildingType: BuildingTypeValue;
     health: number;
     ownerId: string;
+    productionQueue: ArrayLike<UnitTypeValue>;
+    productionProgressMs: number;
   }): void {
-    this.building = building;
+    this.building = {
+      ...building,
+      productionQueue: Array.from(building.productionQueue ?? []),
+    };
   }
 
   public render(_dt: number): void {
@@ -167,8 +201,6 @@ export class BuildingEntity extends Entity {
       this.building.y,
       (this.game.room.state as { terrainSeed: number }).terrainSeed
     );
-    const activeVariant =
-      this.variants[this.building.buildingType] ?? this.variants[BuildingType.BARRACKS];
     const tint = getTint(this.game.getPlayerColor(this.building.ownerId));
     const accent = tint.clone().offsetHSL(0.015, -0.12, -0.24);
     const trim = tint.clone().offsetHSL(-0.01, 0.08, 0.22);
@@ -208,15 +240,42 @@ export class BuildingEntity extends Entity {
 
   public getSelectionInfo(): SelectionInfo | null {
     if (!this.building) return null;
-    const isBarracks = this.building.buildingType === BuildingType.BARRACKS;
     const rules = getBuildingRules(this.building.buildingType);
+    const resources = this.game.getMyResources();
+    const currentUnitType = this.building.productionQueue[0] ?? null;
+    const queueCount = this.building.productionQueue.length;
+    const currentUnitRules = currentUnitType ? getUnitRules(currentUnitType) : null;
     return {
-      title: isBarracks ? "Barracks" : "Tower",
-      detail: isBarracks ? "Creates squads" : "Defensive structure",
+      title: rules.label,
+      detail:
+        this.building.buildingType === BuildingType.TOWN_CENTER
+          ? "Produces villagers"
+          : this.building.buildingType === BuildingType.BARRACKS
+            ? "Produces warbands"
+            : "Defensive structure",
       health: this.building.health,
       maxHealth: rules.health,
       color: this.game.getPlayerColor(this.building.ownerId),
-      actions: isBarracks ? [{ id: "train", label: "Train" }] : [],
+      actions: rules.producibleUnits.map((unitType) => {
+        const unitRules = getUnitRules(unitType);
+        const count = this.building.productionQueue.filter((queuedType) => queuedType === unitType).length;
+        return {
+          id: `train:${unitType}`,
+          label: unitRules.label,
+          disabled: !canAfford(resources, unitRules.cost),
+          cost: unitRules.cost,
+          timeMs: unitRules.trainTimeMs,
+          queueCount: count,
+        };
+      }),
+      production: currentUnitRules
+        ? {
+            label: currentUnitRules.label,
+            queueCount,
+            remainingMs: Math.max(0, currentUnitRules.trainTimeMs - this.building.productionProgressMs),
+            progress: Math.max(0, Math.min(1, this.building.productionProgressMs / currentUnitRules.trainTimeMs)),
+          }
+        : null,
     };
   }
 }

@@ -1,11 +1,14 @@
-import { Schema, type, MapSchema } from "@colyseus/schema";
-import type { BuildingType, SquadSpread } from "../../shared/game-rules.js";
+import { Schema, type, MapSchema, ArraySchema } from "@colyseus/schema";
+import type { BuildingType, SquadSpread, UnitType } from "../../shared/game-rules.js";
 
 /** Identity + ownership bookkeeping (blobs/buildings reference ownerId). */
 export class Player extends Schema {
   @type("string") sessionId: string = "";
   /** Packed RGB for client tint */
   @type("uint32") color: number = 0xffffff;
+  @type("uint16") food: number = 0;
+  @type("uint16") wood: number = 0;
+  @type("uint16") gold: number = 0;
 }
 
 export class Blob extends Schema {
@@ -21,6 +24,7 @@ export class Blob extends Schema {
   @type("number") health: number = 0;
   @type("uint32") unitCount: number = 0;
   @type("uint8") spread: SquadSpread = 0 as SquadSpread;
+  @type("uint8") unitType: UnitType = 0 as UnitType;
 }
 
 export class Building extends Schema {
@@ -31,6 +35,8 @@ export class Building extends Schema {
   /** Numeric type — see BuildingType constants. uint8 keeps wire size minimal. */
   @type("uint8") buildingType: BuildingType = 0 as BuildingType;
   @type("number") health: number = 0;
+  @type(["uint8"]) productionQueue = new ArraySchema<UnitType>();
+  @type("number") productionProgressMs: number = 0;
 }
 
 /** Authoritative world — gameplay truth only. */

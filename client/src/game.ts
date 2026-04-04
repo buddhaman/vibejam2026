@@ -2,10 +2,13 @@ import * as THREE from "three";
 import type { Room } from "@colyseus/sdk";
 import type { Entity } from "./entity.js";
 import {
+  BuildingType,
   SquadSpread,
+  type ResourceCost,
   snapWorldToTileCenter,
   type BuildingType as BuildingTypeValue,
   type SquadSpread as SquadSpreadValue,
+  type UnitType as UnitTypeValue,
 } from "../../shared/game-rules.js";
 import { MessageType, type BuildMessage, type IntentMessage, type SquadSpreadMessage, type TrainMessage } from "../../shared/protocol.js";
 import { BlobEntity } from "./blob-entity.js";
@@ -71,6 +74,7 @@ export class Game {
         unitCount: number;
         health: number;
         spread: SquadSpreadValue;
+        unitType: UnitTypeValue;
       });
     });
 
@@ -83,6 +87,8 @@ export class Game {
         buildingType: BuildingTypeValue;
         health: number;
         ownerId: string;
+        productionQueue: ArrayLike<UnitTypeValue>;
+        productionProgressMs: number;
       });
     });
 
@@ -148,6 +154,27 @@ export class Game {
     return count;
   }
 
+  public getMyResources(): ResourceCost {
+    const player = this.room.state.players.get(this.room.sessionId) as
+      | { food?: number; wood?: number; gold?: number }
+      | undefined;
+    return {
+      food: player?.food ?? 0,
+      wood: player?.wood ?? 0,
+      gold: player?.gold ?? 0,
+    };
+  }
+
+  public getMyTownCenterPosition(): { x: number; z: number } | null {
+    let best: { x: number; z: number } | null = null;
+    this.room.state.buildings.forEach((building) => {
+      const candidate = building as { ownerId?: string; buildingType?: BuildingTypeValue; x?: number; y?: number };
+      if (candidate.ownerId !== this.room.sessionId || candidate.buildingType !== BuildingType.TOWN_CENTER) return;
+      best = { x: candidate.x ?? 0, z: candidate.y ?? 0 };
+    });
+    return best;
+  }
+
   public isMyBlob(ownerId: string): boolean {
     return ownerId === this.room.sessionId;
   }
@@ -163,8 +190,8 @@ export class Game {
     this.room.send(MessageType.BUILD, { type, worldX: snapped.x, worldZ: snapped.z } satisfies BuildMessage);
   }
 
-  public sendTrainIntent(buildingId: string): void {
-    this.room.send(MessageType.TRAIN, { buildingId } satisfies TrainMessage);
+  public sendTrainIntent(buildingId: string, unitType: UnitTypeValue): void {
+    this.room.send(MessageType.TRAIN, { buildingId, unitType } satisfies TrainMessage);
   }
 
   public sendSquadSpreadIntent(blobId: string, spread: SquadSpreadValue): void {
@@ -174,8 +201,9 @@ export class Game {
   public runSelectionAction(actionId: string): void {
     const selected = this.getSelectedEntity();
     if (!selected) return;
-    if (actionId === "train") {
-      this.sendTrainIntent(selected.id);
+    if (actionId.startsWith("train:")) {
+      const unitType = Number(actionId.slice("train:".length)) as UnitTypeValue;
+      this.sendTrainIntent(selected.id, unitType);
       return;
     }
     if (!(selected instanceof BlobEntity)) return;

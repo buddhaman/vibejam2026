@@ -4,11 +4,18 @@ import { CONFIG } from "./config.js";
 import {
   BuildingType,
   SquadSpread,
+  UnitType,
+  canBuildingProduceUnit,
+  canAfford,
   getBuildingRules,
+  getUnitRules,
   getSquadRadius,
   isBuildingType,
   isSquadSpread,
+  isUnitType,
   snapWorldToTileCenter,
+  subtractCost,
+  type ResourceCost,
 } from "../../shared/game-rules.js";
 import { MessageType, type IntentMessage, type BuildMessage, type SquadSpreadMessage, type TrainMessage } from "../../shared/protocol.js";
 
@@ -78,8 +85,13 @@ export class BattleRoom extends Room<{ state: GameState }> {
 
       // enforce per-player building cap
       let count = 0;
-      this.state.buildings.forEach((b) => { if (b.ownerId === client.sessionId) count++; });
+      this.state.buildings.forEach((b) => {
+        if (b.ownerId === client.sessionId && getBuildingRules(b.buildingType).buildable) count++;
+      });
       if (count >= CONFIG.MAX_BUILDINGS_PER_PLAYER) return;
+      const player = this.state.players.get(client.sessionId);
+      const buildingRules = getBuildingRules(msg.type);
+      if (!player || !buildingRules.buildable || !canAfford(player, buildingRules.cost)) return;
 
       const building = new Building();
       const snapped = snapWorldToTileCenter(msg.worldX, msg.worldZ);
@@ -88,37 +100,30 @@ export class BattleRoom extends Room<{ state: GameState }> {
       building.x = snapped.x;
       building.y = snapped.z;
       building.buildingType = msg.type;
-      building.health = getBuildingRules(msg.type).health;
+      building.health = buildingRules.health;
+
+      spendPlayerResources(player, buildingRules.cost);
 
       this.state.buildings.set(building.id, building);
     });
 
     this.onMessage(MessageType.TRAIN, (client, raw) => {
       const msg = raw as TrainMessage;
-      if (typeof msg?.buildingId !== "string") {
+      if (typeof msg?.buildingId !== "string" || !isUnitType(msg.unitType)) {
         return;
       }
 
       const building = this.state.buildings.get(msg.buildingId);
-      if (!building || building.ownerId !== client.sessionId || building.buildingType !== BuildingType.BARRACKS) {
+      const player = this.state.players.get(client.sessionId);
+      if (!building || !player || building.ownerId !== client.sessionId) {
         return;
       }
-
-      const blob = new Blob();
       const buildingRules = getBuildingRules(building.buildingType);
-      blob.id = makeId("blob");
-      blob.ownerId = client.sessionId;
-      blob.x = clamp(building.x + buildingRules.trainSpawnOffsetX, CONFIG.WORLD_MIN, CONFIG.WORLD_MAX);
-      blob.y = clamp(building.y, CONFIG.WORLD_MIN, CONFIG.WORLD_MAX);
-      blob.targetX = blob.x;
-      blob.targetY = blob.y;
-      blob.vx = 0;
-      blob.vy = 0;
-      blob.unitCount = CONFIG.DEFAULT_UNIT_COUNT;
-      blob.spread = SquadSpread.DEFAULT;
-      blob.radius = getSquadRadius(blob.unitCount, blob.spread);
-      blob.health = CONFIG.DEFAULT_BLOB_HEALTH;
-      this.state.blobs.set(blob.id, blob);
+      const unitRules = getUnitRules(msg.unitType);
+      if (!canBuildingProduceUnit(building.buildingType, msg.unitType) || !canAfford(player, unitRules.cost)) return;
+
+      spendPlayerResources(player, unitRules.cost);
+      building.productionQueue.push(msg.unitType);
     });
   }
 
@@ -126,32 +131,13 @@ export class BattleRoom extends Room<{ state: GameState }> {
     const player = new Player();
     player.sessionId = client.sessionId;
     player.color = hashColor(client.sessionId);
+    player.food = CONFIG.START_FOOD;
+    player.wood = CONFIG.START_WOOD;
+    player.gold = CONFIG.START_GOLD;
     this.state.players.set(client.sessionId, player);
 
-    const cx = (Math.random() - 0.5) * 40;
-    const cy = (Math.random() - 0.5) * 40;
-
-    const offsets = [
-      { dx: -CONFIG.START_BLOB_SPACING * 0.5, dy: 0 },
-      { dx: CONFIG.START_BLOB_SPACING * 0.5, dy: 0 },
-    ];
-
-    for (const o of offsets) {
-      const blob = new Blob();
-      blob.id = makeId("blob");
-      blob.ownerId = client.sessionId;
-      blob.x = cx + o.dx;
-      blob.y = cy + o.dy;
-      blob.targetX = blob.x;
-      blob.targetY = blob.y;
-      blob.vx = 0;
-      blob.vy = 0;
-      blob.unitCount = CONFIG.DEFAULT_UNIT_COUNT;
-      blob.spread = SquadSpread.DEFAULT;
-      blob.radius = getSquadRadius(blob.unitCount, blob.spread);
-      blob.health = CONFIG.DEFAULT_BLOB_HEALTH;
-      this.state.blobs.set(blob.id, blob);
-    }
+    const playerIndex = this.getNextTownCenterIndex();
+    this.spawnTownCenter(client.sessionId, playerIndex);
   }
 
   onLeave(client: Client, _code: number) {
@@ -173,6 +159,10 @@ export class BattleRoom extends Room<{ state: GameState }> {
 
   private tick(dtMs: number) {
     const dt = dtMs / 1000;
+
+    for (const building of this.state.buildings.values()) {
+      this.stepBuildingProduction(building, dtMs);
+    }
 
     for (const blob of this.state.blobs.values()) {
       blob.radius = getSquadRadius(blob.unitCount, blob.spread);
@@ -227,8 +217,86 @@ export class BattleRoom extends Room<{ state: GameState }> {
       }
     }
   }
+
+  private spawnTownCenter(ownerId: string, playerIndex: number) {
+    const angle = playerIndex * 1.63;
+    const radius = 54;
+    const snapped = snapWorldToTileCenter(Math.cos(angle) * radius, Math.sin(angle) * radius);
+
+    const townCenter = new Building();
+    townCenter.id = makeId("bld");
+    townCenter.ownerId = ownerId;
+    townCenter.x = snapped.x;
+    townCenter.y = snapped.z;
+    townCenter.buildingType = BuildingType.TOWN_CENTER;
+    townCenter.health = getBuildingRules(BuildingType.TOWN_CENTER).health;
+    this.state.buildings.set(townCenter.id, townCenter);
+  }
+
+  private getNextTownCenterIndex() {
+    let count = 0;
+    this.state.buildings.forEach((building) => {
+      if (building.buildingType === BuildingType.TOWN_CENTER) count++;
+    });
+    return count;
+  }
+
+  private stepBuildingProduction(building: Building, dtMs: number) {
+    if (building.productionQueue.length === 0) {
+      building.productionProgressMs = 0;
+      return;
+    }
+
+    building.productionProgressMs += dtMs;
+    while (building.productionQueue.length > 0) {
+      const currentType = building.productionQueue[0];
+      if (!isUnitType(currentType)) {
+        building.productionQueue.shift();
+        building.productionProgressMs = 0;
+        continue;
+      }
+
+      const unitRules = getUnitRules(currentType);
+      if (building.productionProgressMs < unitRules.trainTimeMs) break;
+
+      building.productionProgressMs -= unitRules.trainTimeMs;
+      building.productionQueue.shift();
+      this.spawnProducedUnit(building, currentType);
+    }
+
+    if (building.productionQueue.length === 0) {
+      building.productionProgressMs = 0;
+    }
+  }
+
+  private spawnProducedUnit(building: Building, unitType: UnitType) {
+    const buildingRules = getBuildingRules(building.buildingType);
+    const unitRules = getUnitRules(unitType);
+    const blob = new Blob();
+    blob.id = makeId("blob");
+    blob.ownerId = building.ownerId;
+    blob.x = clamp(building.x + buildingRules.trainSpawnOffsetX, CONFIG.WORLD_MIN, CONFIG.WORLD_MAX);
+    blob.y = clamp(building.y, CONFIG.WORLD_MIN, CONFIG.WORLD_MAX);
+    blob.targetX = blob.x;
+    blob.targetY = blob.y;
+    blob.vx = 0;
+    blob.vy = 0;
+    blob.unitCount = unitRules.unitCount;
+    blob.spread = unitType === UnitType.VILLAGER ? SquadSpread.TIGHT : SquadSpread.DEFAULT;
+    blob.radius = getSquadRadius(blob.unitCount, blob.spread);
+    blob.health = unitRules.health;
+    blob.unitType = unitType;
+    this.state.blobs.set(blob.id, blob);
+  }
 }
 
 function clamp(v: number, min: number, max: number) {
   return Math.max(min, Math.min(max, v));
+}
+
+function spendPlayerResources(player: ResourceCost & Player, cost: ResourceCost) {
+  const next = subtractCost(player, cost);
+  player.food = next.food;
+  player.wood = next.wood;
+  player.gold = next.gold;
 }

@@ -4,6 +4,7 @@ import type { Game } from "./game.js";
 import { createHudCanvas, createHudState, drawHUD, hitTestDeselect, hitTestMenu, hitTestSelectionAction } from "./hud.js";
 import type { SelectionInfo } from "./entity.js";
 import { createTerrainMesh } from "./terrain.js";
+import { attachDevNetworkPerf } from "./network-perf.js";
 
 const CAM = {
   polarFromDownDeg: 45,
@@ -25,6 +26,8 @@ const SUN = {
 } as const;
 
 export function startRender(game: Game) {
+  const netPerf = attachDevNetworkPerf(game.room);
+
   const canvas = document.createElement("canvas");
   canvas.style.cssText = "display:block;width:100%;height:100%;";
   document.body.appendChild(canvas);
@@ -67,7 +70,8 @@ export function startRender(game: Game) {
   camera.up.set(0, 1, 0);
 
   let distance: number = CAM.distanceStart;
-  const lookTarget = new THREE.Vector3(0, 0, 0);
+  const myTownCenter = game.getMyTownCenterPosition();
+  const lookTarget = new THREE.Vector3(myTownCenter?.x ?? 0, 0, myTownCenter?.z ?? 0);
   const shadowCenter = new THREE.Vector3();
   const shadowOffset = SUN.direction.clone().multiplyScalar(SUN.shadowDistance);
 
@@ -276,9 +280,12 @@ export function startRender(game: Game) {
 
     const myColor = game.getPlayerColor(game.room.sessionId);
     const mySquadCount = game.getMySquadCount();
+    const myResources = game.getMyResources();
     const selectedInfo: SelectionInfo | null = game.getSelectedEntity()?.getSelectionInfo() ?? null;
 
-    drawHUD(hudCanvas, hud, myColor, mySquadCount, selectedInfo, now / 1000);
+    drawHUD(hudCanvas, hud, myColor, mySquadCount, myResources, selectedInfo, now / 1000);
+
+    netPerf.tick(now);
   }
 
   tick();
