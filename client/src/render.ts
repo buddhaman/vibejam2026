@@ -1,31 +1,19 @@
 import * as THREE from "three";
-import type { Room } from "@colyseus/sdk";
 import type { Game } from "./game.js";
-import { sendMoveIntent } from "./game.js";
-import { createHudCanvas, createHudState, drawHUD, hitTestMenu, hitTestDeselect } from "./hud.js";
-import type { SelectedBlobInfo } from "./hud.js";
-import { MessageType, type BuildMessage } from "../../shared/protocol.js";
-import { BlobEntity } from "./blob-entity.js";
+import { createHudCanvas, createHudState, drawHUD, hitTestDeselect, hitTestMenu, hitTestSelectionAction } from "./hud.js";
+import type { SelectionInfo } from "./entity.js";
 
-/**
- * Camera config — tweak freely.
- * polarFromDownDeg: 0 = top-down, 90 = horizon.
- * azimuthDeg: 0 = camera on +Z side.
- */
 const CAM = {
   polarFromDownDeg: 45,
   azimuthDeg: 0,
-  /** Starting distance — lower = closer to the action. */
   distanceStart: 95,
-  /** Clamp range so zoom never feels extreme. */
   distanceMin: 52,
   distanceMax: 185,
-  /** Multiplier per wheel tick — keep small (~3–4%) so zoom feels gradual. */
   zoomFactor: 1.035,
   fov: 52,
 } as const;
 
-export function startRender(room: Room, game: Game) {
+export function startRender(game: Game) {
   const canvas = document.createElement("canvas");
   canvas.style.cssText = "display:block;width:100%;height:100%;";
   document.body.appendChild(canvas);
@@ -37,8 +25,8 @@ export function startRender(room: Room, game: Game) {
 
   const { scene } = game;
   scene.fog = new THREE.Fog(0x0f1218, 120, 520);
-
   scene.add(new THREE.HemisphereLight(0xcfd8ff, 0x1a1f2e, 0.95));
+
   const dir = new THREE.DirectionalLight(0xffffff, 0.55);
   dir.position.set(40, 80, 20);
   scene.add(dir);
@@ -54,12 +42,7 @@ export function startRender(room: Room, game: Game) {
   grid.position.y = 0.02;
   scene.add(grid);
 
-  const camera = new THREE.PerspectiveCamera(
-    CAM.fov,
-    window.innerWidth / Math.max(window.innerHeight, 1),
-    0.5,
-    2500
-  );
+  const camera = new THREE.PerspectiveCamera(CAM.fov, window.innerWidth / Math.max(window.innerHeight, 1), 0.5, 2500);
   camera.up.set(0, 1, 0);
 
   let distance = CAM.distanceStart;
@@ -86,14 +69,7 @@ export function startRender(room: Room, game: Game) {
   const hud = createHudState();
   const DRAG_THRESHOLD = 5;
 
-  let drag: {
-    startX: number;
-    startY: number;
-    prevX: number;
-    prevY: number;
-    moved: boolean;
-  } | null = null;
-
+  let drag: { startX: number; startY: number; prevX: number; prevY: number; moved: boolean } | null = null;
   let lastGroundTap = { t: 0, x: 0, y: 0, wx: 0, wz: 0 };
   const DOUBLE_MS = 420;
   const DOUBLE_SCREEN_PX = 32;
@@ -103,24 +79,6 @@ export function startRender(room: Room, game: Game) {
     ndcV.set((clientX / window.innerWidth) * 2 - 1, -(clientY / window.innerHeight) * 2 + 1);
     raycaster.setFromCamera(ndcV, camera);
     return raycaster.ray.intersectPlane(groundPlane, hit) ? hit.clone() : null;
-  }
-
-  function pickMyBlob(clientX: number, clientY: number): string | null {
-    const point = groundHit(clientX, clientY);
-    if (!point) return null;
-
-    let bestId: string | null = null;
-    let bestDistance = Infinity;
-    for (const entity of game.entities) {
-      if (!(entity instanceof BlobEntity) || !entity.isMine()) continue;
-      if (!entity.containsWorldPoint(point.x, point.z)) continue;
-      const distanceToBlob = entity.worldDistanceTo(point.x, point.z);
-      if (distanceToBlob < bestDistance) {
-        bestDistance = distanceToBlob;
-        bestId = entity.id;
-      }
-    }
-    return bestId;
   }
 
   function panCamera(fromX: number, fromY: number, toX: number, toY: number) {
@@ -133,24 +91,28 @@ export function startRender(room: Room, game: Game) {
   }
 
   function deselect() {
-    game.selectedBlobId = null;
+    game.clearSelection();
     hud.buildMenu.visible = false;
   }
 
   function handleClick(clientX: number, clientY: number) {
-    if (hitTestDeselect(clientX, clientY, game.selectedBlobId !== null)) {
+    const selectedInfo = game.getSelectedEntity()?.getSelectionInfo() ?? null;
+
+    if (hitTestDeselect(clientX, clientY, game.selectedEntityId !== null)) {
       deselect();
+      return;
+    }
+
+    const selectionAction = hitTestSelectionAction(clientX, clientY, selectedInfo);
+    if (selectionAction !== null) {
+      game.runSelectionAction(selectionAction);
       return;
     }
 
     const menuAction = hitTestMenu(hud, clientX, clientY);
     if (menuAction !== null) {
       if (menuAction !== "dismiss") {
-        room.send(MessageType.BUILD, {
-          type: menuAction,
-          worldX: hud.buildMenu.worldX,
-          worldZ: hud.buildMenu.worldZ,
-        } satisfies BuildMessage);
+        game.sendBuildIntent(menuAction, hud.buildMenu.worldX, hud.buildMenu.worldZ);
       }
       hud.buildMenu.visible = false;
       return;
@@ -160,15 +122,15 @@ export function startRender(room: Room, game: Game) {
       return;
     }
 
-    const picked = pickMyBlob(clientX, clientY);
+    const point = groundHit(clientX, clientY);
+    if (!point) return;
+
+    const picked = game.pickOwnedEntity(point.x, point.z);
     if (picked) {
-      game.selectedBlobId = picked === game.selectedBlobId ? null : picked;
+      game.toggleSelection(picked.id);
       lastGroundTap.t = 0;
       return;
     }
-
-    const point = groundHit(clientX, clientY);
-    if (!point) return;
 
     const now = performance.now();
     const dtMs = now - lastGroundTap.t;
@@ -182,15 +144,15 @@ export function startRender(room: Room, game: Game) {
       dW < DOUBLE_WORLD;
 
     if (isDouble) {
-      game.selectedBlobId = null;
+      game.clearSelection();
       hud.buildMenu = { visible: true, screenX: clientX, screenY: clientY, worldX: point.x, worldZ: point.z };
       lastGroundTap.t = 0;
       return;
     }
 
     lastGroundTap = { t: now, x: clientX, y: clientY, wx: point.x, wz: point.z };
-    if (game.selectedBlobId) {
-      sendMoveIntent(game, point.x, point.z);
+    if (game.getSelectedBlobEntity()) {
+      game.sendMoveIntent(point.x, point.z);
     }
   }
 
@@ -205,7 +167,7 @@ export function startRender(room: Room, game: Game) {
     const dy = ev.clientY - drag.startY;
     if (!drag.moved && Math.hypot(dx, dy) > DRAG_THRESHOLD) {
       drag.moved = true;
-      game.selectedBlobId = null;
+      game.clearSelection();
       hud.buildMenu.visible = false;
     }
     if (drag.moved) panCamera(drag.prevX, drag.prevY, ev.clientX, ev.clientY);
@@ -244,34 +206,16 @@ export function startRender(room: Room, game: Game) {
 
   function tick() {
     requestAnimationFrame(tick);
-
     game.sync();
-    for (const entity of game.entities) {
-      entity.render();
-    }
-
+    for (const entity of game.entities) entity.render();
     renderer.render(scene, camera);
 
-    let myBlobCount = 0;
-    myBlobCount = game.getMyBlobCount();
+    const myColor = game.getPlayerColor(game.room.sessionId);
+    const mySquadCount = game.getMySquadCount();
+    const selectedInfo: SelectionInfo | null = game.getSelectedEntity()?.getSelectionInfo() ?? null;
 
-    const me = room.state.players.get(room.sessionId) as { color?: number } | undefined;
-    const myColor = typeof me?.color === "number" ? me.color : 0x8899aa;
-
-    let selectedInfo: SelectedBlobInfo | null = null;
-    if (game.selectedBlobId) {
-      const selected = game.getSelectedBlobEntity();
-      if (selected) {
-        selectedInfo = {
-          unitCount: selected.getUnitCount(),
-          health: selected.getHealth(),
-          maxHealth: 100,
-          color: selected.getOwnerId() === null ? 0x8899aa : (me?.color ?? 0x8899aa),
-        };
-      }
-    }
-
-    drawHUD(hudCanvas, hud, myColor, myBlobCount, selectedInfo, performance.now() / 1000);
+    drawHUD(hudCanvas, hud, myColor, mySquadCount, selectedInfo, performance.now() / 1000);
   }
+
   tick();
 }

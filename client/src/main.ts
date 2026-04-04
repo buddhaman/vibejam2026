@@ -6,7 +6,7 @@ async function boot() {
   const room = await joinBattle();
   await waitForSyncedGameState(room);
   const game = new Game(room);
-  startRender(room, game);
+  startRender(game);
 }
 
 boot().catch((err) => {

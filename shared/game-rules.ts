@@ -18,7 +18,7 @@ export const GAME_RULES = {
   WORLD_MIN: -120,
   WORLD_MAX: 120,
   BLOB_MOVE_SPEED: 28,
-  DEFAULT_BLOB_RADIUS: 4,
+  BLOB_RADIUS_PER_SQRT_UNIT: 0.6324555320336759,
   DEFAULT_BLOB_HEALTH: 100,
   DEFAULT_UNIT_COUNT: 40,
   START_BLOB_SPACING: 10,
@@ -26,3 +26,7 @@ export const GAME_RULES = {
   TOWER_HEALTH: 300,
   MAX_BUILDINGS_PER_PLAYER: 8,
 } as const;
+
+export function getBlobRadius(unitCount: number): number {
+  return Math.sqrt(Math.max(0, unitCount)) * GAME_RULES.BLOB_RADIUS_PER_SQRT_UNIT;
+}

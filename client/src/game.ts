@@ -1,51 +1,25 @@
 import * as THREE from "three";
 import type { Room } from "@colyseus/sdk";
 import type { Entity } from "./entity.js";
-import { BuildingType, type BuildingType as BuildingTypeValue } from "../../shared/game-rules.js";
-import { MessageType, type IntentMessage } from "../../shared/protocol.js";
+import type { BuildingType as BuildingTypeValue } from "../../shared/game-rules.js";
+import { MessageType, type BuildMessage, type IntentMessage, type TrainMessage } from "../../shared/protocol.js";
 import { BlobEntity } from "./blob-entity.js";
 import { BuildingEntity } from "./building-entity.js";
 
-/** Thin client-side view — not authoritative. */
 export class Game {
   public room: Room;
   public scene: THREE.Scene;
   public entities: Entity[] = [];
-  public selectedBlobId: string | null = null;
-
-  private sphereGeom = new THREE.SphereGeometry(1, 22, 16);
-  private ringGeom = new THREE.RingGeometry(1.05, 1.2, 48);
-  private buildingGeom = {
-    [BuildingType.BARRACKS]: { geom: new THREE.BoxGeometry(5, 2, 5), halfH: 1 },
-    [BuildingType.TOWER]: { geom: new THREE.BoxGeometry(2, 8, 2), halfH: 4 },
-  } as const;
+  public selectedEntityId: string | null = null;
 
   public constructor(room: Room) {
     this.room = room;
     this.scene = new THREE.Scene();
   }
 
-  private playerColor(ownerId: string): number {
+  public getPlayerColor(ownerId: string): number {
     const player = this.room.state.players.get(ownerId) as { color?: number } | undefined;
     return typeof player?.color === "number" ? player.color : 0x8899aa;
-  }
-
-  private getBuildingDef(buildingType: BuildingTypeValue) {
-    return this.buildingGeom[buildingType as BuildingType] ?? this.buildingGeom[BuildingType.BARRACKS];
-  }
-
-  public findBlobEntity(id: string): BlobEntity | null {
-    for (const entity of this.entities) {
-      if (entity instanceof BlobEntity && entity.id === id) return entity;
-    }
-    return null;
-  }
-
-  private findBuildingEntity(id: string): BuildingEntity | null {
-    for (const entity of this.entities) {
-      if (entity instanceof BuildingEntity && entity.id === id) return entity;
-    }
-    return null;
   }
 
   public add(entity: Entity): void {
@@ -57,18 +31,33 @@ export class Game {
     const i = this.entities.indexOf(entity);
     if (i >= 0) this.entities.splice(i, 1);
     this.scene.remove(entity.mesh);
+    if (this.selectedEntityId === entity.id) this.selectedEntityId = null;
+  }
+
+  public findEntity(id: string): Entity | null {
+    for (const entity of this.entities) {
+      if (entity.id === id) return entity;
+    }
+    return null;
+  }
+
+  public findBlobEntity(id: string): BlobEntity | null {
+    const entity = this.findEntity(id);
+    return entity instanceof BlobEntity ? entity : null;
+  }
+
+  private findBuildingEntity(id: string): BuildingEntity | null {
+    const entity = this.findEntity(id);
+    return entity instanceof BuildingEntity ? entity : null;
   }
 
   public sync(): void {
     this.room.state.blobs.forEach((blob, id) => {
       let entity = this.findBlobEntity(id as string);
-      if (!entity) {
-        entity = new BlobEntity(this, id as string, this.sphereGeom, this.ringGeom, this.playerColor.bind(this));
-      }
+      if (!entity) entity = new BlobEntity(this, id as string);
       entity.sync(blob as {
         x: number;
         y: number;
-        radius: number;
         ownerId: string;
         unitCount: number;
         health: number;
@@ -77,15 +66,7 @@ export class Game {
 
     this.room.state.buildings.forEach((building, id) => {
       let entity = this.findBuildingEntity(id as string);
-      if (!entity) {
-          entity = new BuildingEntity(
-            this,
-            id as string,
-            (building as { buildingType: BuildingTypeValue }).buildingType,
-            this.getBuildingDef.bind(this),
-            this.playerColor.bind(this)
-          );
-      }
+      if (!entity) entity = new BuildingEntity(this, id as string);
       entity.sync(building as {
         x: number;
         y: number;
@@ -96,36 +77,70 @@ export class Game {
     });
 
     for (const entity of [...this.entities]) {
-      if (entity instanceof BlobEntity && !this.room.state.blobs.get(entity.id)) {
-        entity.destroy();
-      }
-      if (entity instanceof BuildingEntity && !this.room.state.buildings.get(entity.id)) {
-        entity.destroy();
-      }
+      if (entity.isStale()) entity.destroy();
     }
   }
 
-  public getSelectedBlobEntity(): BlobEntity | null {
-    return this.selectedBlobId ? this.findBlobEntity(this.selectedBlobId) : null;
+  public getSelectedEntity(): Entity | null {
+    return this.selectedEntityId ? this.findEntity(this.selectedEntityId) : null;
   }
 
-  public getMyBlobCount(): number {
+  public getSelectedBlobEntity(): BlobEntity | null {
+    const entity = this.getSelectedEntity();
+    return entity instanceof BlobEntity ? entity : null;
+  }
+
+  public toggleSelection(entityId: string): void {
+    this.selectedEntityId = this.selectedEntityId === entityId ? null : entityId;
+  }
+
+  public clearSelection(): void {
+    this.selectedEntityId = null;
+  }
+
+  public pickOwnedEntity(x: number, z: number): Entity | null {
+    let best: Entity | null = null;
+    let bestDistance = Infinity;
+    for (const entity of this.entities) {
+      if (!entity.isOwnedByMe() || !entity.containsWorldPoint(x, z)) continue;
+      const distance = entity.worldDistanceTo(x, z);
+      if (distance < bestDistance) {
+        bestDistance = distance;
+        best = entity;
+      }
+    }
+    return best;
+  }
+
+  public getMySquadCount(): number {
     let count = 0;
     for (const entity of this.entities) {
       if (entity instanceof BlobEntity && entity.isMine()) count++;
     }
     return count;
   }
-}
 
-export function isMyBlob(game: Game, ownerId: string): boolean {
-  return ownerId === game.room.sessionId;
-}
-
-export function sendMoveIntent(game: Game, targetX: number, targetY: number) {
-  const id = game.selectedBlobId;
-  if (!id) {
-    return;
+  public isMyBlob(ownerId: string): boolean {
+    return ownerId === this.room.sessionId;
   }
-  game.room.send(MessageType.INTENT, { blobId: id, targetX, targetY } satisfies IntentMessage);
+
+  public sendMoveIntent(targetX: number, targetY: number): void {
+    const blob = this.getSelectedBlobEntity();
+    if (!blob) return;
+    this.room.send(MessageType.INTENT, { blobId: blob.id, targetX, targetY } satisfies IntentMessage);
+  }
+
+  public sendBuildIntent(type: BuildMessage["type"], worldX: number, worldZ: number): void {
+    this.room.send(MessageType.BUILD, { type, worldX, worldZ } satisfies BuildMessage);
+  }
+
+  public sendTrainIntent(buildingId: string): void {
+    this.room.send(MessageType.TRAIN, { buildingId } satisfies TrainMessage);
+  }
+
+  public runSelectionAction(actionId: string): void {
+    const selected = this.getSelectedEntity();
+    if (!selected || actionId !== "train") return;
+    this.sendTrainIntent(selected.id);
+  }
 }

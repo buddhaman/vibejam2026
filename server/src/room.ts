@@ -1,8 +1,8 @@
 import { Room, type Client } from "colyseus";
 import { GameState, Player, Blob, Building } from "./state.js";
 import { CONFIG } from "./config.js";
-import { BuildingType, isBuildingType } from "../../shared/game-rules.js";
-import { MessageType, type IntentMessage, type BuildMessage } from "../../shared/protocol.js";
+import { BuildingType, getBlobRadius, isBuildingType } from "../../shared/game-rules.js";
+import { MessageType, type IntentMessage, type BuildMessage, type TrainMessage } from "../../shared/protocol.js";
 
 let nextId = 1;
 function makeId(prefix: string) {
@@ -71,6 +71,30 @@ export class BattleRoom extends Room<{ state: GameState }> {
 
       this.state.buildings.set(building.id, building);
     });
+
+    this.onMessage(MessageType.TRAIN, (client, raw) => {
+      const msg = raw as TrainMessage;
+      if (typeof msg?.buildingId !== "string") {
+        return;
+      }
+
+      const building = this.state.buildings.get(msg.buildingId);
+      if (!building || building.ownerId !== client.sessionId || building.buildingType !== BuildingType.BARRACKS) {
+        return;
+      }
+
+      const blob = new Blob();
+      blob.id = makeId("blob");
+      blob.ownerId = client.sessionId;
+      blob.x = clamp(building.x + 6, CONFIG.WORLD_MIN, CONFIG.WORLD_MAX);
+      blob.y = clamp(building.y, CONFIG.WORLD_MIN, CONFIG.WORLD_MAX);
+      blob.targetX = blob.x;
+      blob.targetY = blob.y;
+      blob.unitCount = CONFIG.DEFAULT_UNIT_COUNT;
+      blob.radius = getBlobRadius(blob.unitCount);
+      blob.health = CONFIG.DEFAULT_BLOB_HEALTH;
+      this.state.blobs.set(blob.id, blob);
+    });
   }
 
   onJoin(client: Client) {
@@ -95,9 +119,9 @@ export class BattleRoom extends Room<{ state: GameState }> {
       blob.y = cy + o.dy;
       blob.targetX = blob.x;
       blob.targetY = blob.y;
-      blob.radius = CONFIG.DEFAULT_BLOB_RADIUS;
-      blob.health = CONFIG.DEFAULT_BLOB_HEALTH;
       blob.unitCount = CONFIG.DEFAULT_UNIT_COUNT;
+      blob.radius = getBlobRadius(blob.unitCount);
+      blob.health = CONFIG.DEFAULT_BLOB_HEALTH;
       this.state.blobs.set(blob.id, blob);
     }
   }
