@@ -50,7 +50,7 @@ export class BuildingEntity extends Entity {
     this.building = building;
   }
 
-  public render(): void {
+  public render(_dt: number): void {
     if (!this.building) return;
     const def = getBuildingDef(this.building.buildingType);
     if (this.mesh.geometry !== def.geom) {
@@ -90,7 +90,7 @@ export class BuildingEntity extends Entity {
       health: this.building.health,
       maxHealth: isBarracks ? 200 : 300,
       color: this.game.getPlayerColor(this.building.ownerId),
-      action: isBarracks ? { id: "train", label: "Train" } : null,
+      actions: isBarracks ? [{ id: "train", label: "Train" }] : [],
     };
   }
 }

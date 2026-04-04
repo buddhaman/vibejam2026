@@ -9,8 +9,20 @@ export const BuildingType = {
 
 export type BuildingType = (typeof BuildingType)[keyof typeof BuildingType];
 
+export const SquadSpread = {
+  TIGHT: 0,
+  DEFAULT: 1,
+  WIDE: 2,
+} as const;
+
+export type SquadSpread = (typeof SquadSpread)[keyof typeof SquadSpread];
+
 export function isBuildingType(value: unknown): value is BuildingType {
   return value === BuildingType.BARRACKS || value === BuildingType.TOWER;
+}
+
+export function isSquadSpread(value: unknown): value is SquadSpread {
+  return value === SquadSpread.TIGHT || value === SquadSpread.DEFAULT || value === SquadSpread.WIDE;
 }
 
 export const GAME_RULES = {
@@ -19,6 +31,10 @@ export const GAME_RULES = {
   WORLD_MAX: 120,
   TILE_SIZE: 12,
   BLOB_MOVE_SPEED: 28,
+  BLOB_ACCELERATION: 26,
+  BLOB_DECELERATION_RADIUS: 14,
+  BLOB_STOP_EPSILON: 0.65,
+  CLIENT_PREDICTION_LEAD: 0.09,
   UNIT_RADIUS: 0.42,
   UNIT_HEIGHT: 0.78,
   UNIT_SPACING: 1.1,
@@ -34,27 +50,48 @@ export const GAME_RULES = {
 } as const;
 
 export function getSquadArea(unitCount: number): number {
+  return getSquadAreaForSpread(unitCount, SquadSpread.DEFAULT);
+}
+
+export function getSquadAreaForSpread(unitCount: number, spread: SquadSpread): number {
   const count = Math.max(0, unitCount);
-  const footprintRadius = GAME_RULES.UNIT_RADIUS * GAME_RULES.UNIT_SPACING;
+  const footprintRadius = GAME_RULES.UNIT_RADIUS * GAME_RULES.UNIT_SPACING * getSquadSpacingMultiplier(spread);
   const footprintArea = Math.PI * footprintRadius * footprintRadius;
   return (count * footprintArea) / GAME_RULES.SQUAD_PACKING_DENSITY;
 }
 
-export function getSquadStretch(moveDistance: number): number {
-  const t = 1 - Math.exp(-Math.max(0, moveDistance) / GAME_RULES.SQUAD_STRETCH_DISTANCE);
-  return 1 + (GAME_RULES.SQUAD_STRETCH_MAX - 1) * t;
+export function getSquadSpacingMultiplier(spread: SquadSpread): number {
+  if (spread === SquadSpread.WIDE) return 1.34;
+  if (spread === SquadSpread.DEFAULT) return 1.12;
+  return 0.9;
 }
 
-export function getSquadAxes(unitCount: number, moveDistance: number) {
-  const area = Math.max(getSquadArea(unitCount), Math.PI * GAME_RULES.UNIT_RADIUS * GAME_RULES.UNIT_RADIUS);
-  const stretch = getSquadStretch(moveDistance);
+export function getSquadBaseStretch(spread: SquadSpread): number {
+  if (spread === SquadSpread.WIDE) return 1.75;
+  if (spread === SquadSpread.DEFAULT) return 1.28;
+  return 1;
+}
+
+export function getSquadTravelStretch(moveDistance: number, speed: number): number {
+  const t = 1 - Math.exp(-Math.max(0, moveDistance) / GAME_RULES.SQUAD_STRETCH_DISTANCE);
+  const speedT = Math.max(0, Math.min(1, speed / GAME_RULES.BLOB_MOVE_SPEED));
+  const blend = Math.max(t, speedT * 0.9);
+  return 1 + (GAME_RULES.SQUAD_STRETCH_MAX - 1) * blend;
+}
+
+export function getSquadAxes(unitCount: number, moveDistance: number, speed: number, spread: SquadSpread) {
+  const area = Math.max(
+    getSquadAreaForSpread(unitCount, spread),
+    Math.PI * GAME_RULES.UNIT_RADIUS * GAME_RULES.UNIT_RADIUS
+  );
+  const stretch = getSquadBaseStretch(spread) * getSquadTravelStretch(moveDistance, speed);
   const minor = Math.sqrt(area / (Math.PI * stretch));
   const major = minor * stretch;
   return { major, minor };
 }
 
-export function getSquadRadius(unitCount: number): number {
-  return Math.sqrt(getSquadArea(unitCount) / Math.PI);
+export function getSquadRadius(unitCount: number, spread: SquadSpread): number {
+  return Math.sqrt(getSquadAreaForSpread(unitCount, spread) / Math.PI);
 }
 
 export function getWorldTileCount(): number {

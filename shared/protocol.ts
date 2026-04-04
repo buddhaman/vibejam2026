@@ -1,9 +1,10 @@
-import type { BuildingType } from "./game-rules.js";
+import type { BuildingType, SquadSpread } from "./game-rules.js";
 
 export const MessageType = {
   INTENT: "intent",
   BUILD: "build",
   TRAIN: "train",
+  SQUAD_SPREAD: "squad_spread",
 } as const;
 
 export type IntentMessage = {
@@ -20,4 +21,9 @@ export type BuildMessage = {
 
 export type TrainMessage = {
   buildingId: string;
+};
+
+export type SquadSpreadMessage = {
+  blobId: string;
+  spread: SquadSpread;
 };

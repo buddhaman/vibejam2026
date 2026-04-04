@@ -233,10 +233,15 @@ export function startRender(game: Game) {
     renderer.setSize(window.innerWidth, window.innerHeight);
   });
 
+  let lastFrameTime = performance.now();
+
   function tick() {
     requestAnimationFrame(tick);
+    const now = performance.now();
+    const dt = (now - lastFrameTime) / 1000;
+    lastFrameTime = now;
     game.sync();
-    for (const entity of game.entities) entity.render();
+    for (const entity of game.entities) entity.render(dt);
     dir.shadow.camera.updateProjectionMatrix();
     renderer.render(scene, camera);
 
@@ -244,7 +249,7 @@ export function startRender(game: Game) {
     const mySquadCount = game.getMySquadCount();
     const selectedInfo: SelectionInfo | null = game.getSelectedEntity()?.getSelectionInfo() ?? null;
 
-    drawHUD(hudCanvas, hud, myColor, mySquadCount, selectedInfo, performance.now() / 1000);
+    drawHUD(hudCanvas, hud, myColor, mySquadCount, selectedInfo, now / 1000);
   }
 
   tick();

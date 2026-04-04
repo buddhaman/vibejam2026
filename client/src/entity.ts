@@ -2,8 +2,9 @@ import * as THREE from "three";
 import type { Game } from "./game.js";
 
 export type SelectionAction = {
-  id: "train";
+  id: string;
   label: string;
+  active?: boolean;
 };
 
 export type SelectionInfo = {
@@ -12,7 +13,7 @@ export type SelectionInfo = {
   health: number;
   maxHealth: number;
   color: number;
-  action: SelectionAction | null;
+  actions: SelectionAction[];
 };
 
 export abstract class Entity {
@@ -31,7 +32,7 @@ export abstract class Entity {
   }
 
   protected abstract createMesh(): THREE.Object3D;
-  public abstract render(): void;
+  public abstract render(dt: number): void;
   public abstract isStale(): boolean;
   public abstract isOwnedByMe(): boolean;
   public abstract containsWorldPoint(x: number, z: number): boolean;

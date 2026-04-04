@@ -1,8 +1,8 @@
 import * as THREE from "three";
 import type { Room } from "@colyseus/sdk";
 import type { Entity } from "./entity.js";
-import type { BuildingType as BuildingTypeValue } from "../../shared/game-rules.js";
-import { MessageType, type BuildMessage, type IntentMessage, type TrainMessage } from "../../shared/protocol.js";
+import { SquadSpread, type BuildingType as BuildingTypeValue, type SquadSpread as SquadSpreadValue } from "../../shared/game-rules.js";
+import { MessageType, type BuildMessage, type IntentMessage, type SquadSpreadMessage, type TrainMessage } from "../../shared/protocol.js";
 import { BlobEntity } from "./blob-entity.js";
 import { BuildingEntity } from "./building-entity.js";
 
@@ -60,9 +60,12 @@ export class Game {
         y: number;
         targetX: number;
         targetY: number;
+        vx: number;
+        vy: number;
         ownerId: string;
         unitCount: number;
         health: number;
+        spread: SquadSpreadValue;
       });
     });
 
@@ -140,9 +143,20 @@ export class Game {
     this.room.send(MessageType.TRAIN, { buildingId } satisfies TrainMessage);
   }
 
+  public sendSquadSpreadIntent(blobId: string, spread: SquadSpreadValue): void {
+    this.room.send(MessageType.SQUAD_SPREAD, { blobId, spread } satisfies SquadSpreadMessage);
+  }
+
   public runSelectionAction(actionId: string): void {
     const selected = this.getSelectedEntity();
-    if (!selected || actionId !== "train") return;
-    this.sendTrainIntent(selected.id);
+    if (!selected) return;
+    if (actionId === "train") {
+      this.sendTrainIntent(selected.id);
+      return;
+    }
+    if (!(selected instanceof BlobEntity)) return;
+    if (actionId === "spread:tight") this.sendSquadSpreadIntent(selected.id, SquadSpread.TIGHT);
+    if (actionId === "spread:default") this.sendSquadSpreadIntent(selected.id, SquadSpread.DEFAULT);
+    if (actionId === "spread:wide") this.sendSquadSpreadIntent(selected.id, SquadSpread.WIDE);
   }
 }

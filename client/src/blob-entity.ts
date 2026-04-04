@@ -1,5 +1,5 @@
 import * as THREE from "three";
-import { GAME_RULES, getSquadAxes } from "../../shared/game-rules.js";
+import { GAME_RULES, SquadSpread, type SquadSpread as SquadSpreadValue, getSquadAxes } from "../../shared/game-rules.js";
 import type { Game } from "./game.js";
 import { Entity, type SelectionInfo } from "./entity.js";
 import { getTerrainHeightAt } from "./terrain.js";
@@ -32,6 +32,10 @@ const OVAL_RING_MAT = new THREE.MeshBasicMaterial({
 });
 const DUMMY = new THREE.Object3D();
 const GOLDEN_ANGLE = Math.PI * (3 - Math.sqrt(5));
+const VISUAL_STEP = 1 / 120;
+const VISUAL_CATCHUP = 12;
+const DIRECTION_SMOOTHING = 7;
+const MIN_DIRECTION_SPEED = 0.2;
 
 export class BlobEntity extends Entity {
   public mesh: THREE.Group;
@@ -43,11 +47,21 @@ export class BlobEntity extends Entity {
     y: number;
     targetX: number;
     targetY: number;
+    vx: number;
+    vy: number;
     ownerId: string;
     unitCount: number;
     health: number;
+    spread: SquadSpreadValue;
   } | null = null;
   private heading = 0;
+  private visualX: number | null = null;
+  private visualY: number | null = null;
+  private visualVx = 0;
+  private visualVy = 0;
+  private visualTime = 0;
+  private forwardX = 0;
+  private forwardY = 1;
 
   public constructor(game: Game, id: string) {
     super(game, id);
@@ -80,33 +94,131 @@ export class BlobEntity extends Entity {
     y: number;
     targetX: number;
     targetY: number;
+    vx: number;
+    vy: number;
     ownerId: string;
     unitCount: number;
     health: number;
+    spread: SquadSpreadValue;
   }): void {
     this.blob = blob;
+    if (this.visualX === null || this.visualY === null) {
+      this.visualX = blob.x;
+      this.visualY = blob.y;
+      this.visualVx = blob.vx;
+      this.visualVy = blob.vy;
+      const speed = Math.hypot(blob.vx, blob.vy);
+      if (speed > MIN_DIRECTION_SPEED) {
+        this.forwardX = blob.vx / speed;
+        this.forwardY = blob.vy / speed;
+      }
+    }
   }
 
-  public render(): void {
-    if (!this.blob) return;
+  private getPredictedCenter() {
+    if (!this.blob || this.visualX === null || this.visualY === null) return { x: 0, y: 0, vx: 0, vy: 0 };
+    return {
+      x: this.visualX + this.visualVx * GAME_RULES.CLIENT_PREDICTION_LEAD,
+      y: this.visualY + this.visualVy * GAME_RULES.CLIENT_PREDICTION_LEAD,
+      vx: this.visualVx,
+      vy: this.visualVy,
+    };
+  }
 
-    const dx = this.blob.targetX - this.blob.x;
-    const dz = this.blob.targetY - this.blob.y;
-    const moveDistance = Math.hypot(dx, dz);
-    if (moveDistance > 0.05) {
-      this.heading = Math.atan2(dx, dz);
+  private stepVisual(dt: number): void {
+    if (!this.blob || this.visualX === null || this.visualY === null) return;
+
+    this.visualX += this.visualVx * dt;
+    this.visualY += this.visualVy * dt;
+
+    const targetX = this.blob.x;
+    const targetY = this.blob.y;
+    const errorX = targetX - this.visualX;
+    const errorY = targetY - this.visualY;
+    const error = Math.hypot(errorX, errorY);
+
+    if (error > 5) {
+      this.visualX = targetX;
+      this.visualY = targetY;
+    } else {
+      const pull = Math.min(1, dt * VISUAL_CATCHUP);
+      this.visualX += errorX * pull;
+      this.visualY += errorY * pull;
     }
 
-    const { major, minor } = getSquadAxes(this.blob.unitCount, moveDistance);
-    const terrainY = getTerrainHeightAt(this.blob.x, this.blob.y, (this.game.room.state as { terrainSeed: number }).terrainSeed);
+    this.visualVx += (this.blob.vx - this.visualVx) * Math.min(1, dt * 14);
+    this.visualVy += (this.blob.vy - this.visualVy) * Math.min(1, dt * 14);
+
+    const desiredDirX = this.visualVx;
+    const desiredDirY = this.visualVy;
+    const desiredSpeed = Math.hypot(desiredDirX, desiredDirY);
+    const fallbackX = this.blob.targetX - this.visualX;
+    const fallbackY = this.blob.targetY - this.visualY;
+    const fallbackDist = Math.hypot(fallbackX, fallbackY);
+
+    let nextForwardX = this.forwardX;
+    let nextForwardY = this.forwardY;
+    if (desiredSpeed > MIN_DIRECTION_SPEED) {
+      nextForwardX = desiredDirX / desiredSpeed;
+      nextForwardY = desiredDirY / desiredSpeed;
+    } else if (fallbackDist > 0.5) {
+      nextForwardX = fallbackX / fallbackDist;
+      nextForwardY = fallbackY / fallbackDist;
+    }
+
+    const turn = Math.min(1, dt * DIRECTION_SMOOTHING);
+    this.forwardX += (nextForwardX - this.forwardX) * turn;
+    this.forwardY += (nextForwardY - this.forwardY) * turn;
+    const forwardLen = Math.hypot(this.forwardX, this.forwardY);
+    if (forwardLen > 0.0001) {
+      this.forwardX /= forwardLen;
+      this.forwardY /= forwardLen;
+    } else {
+      this.forwardX = 0;
+      this.forwardY = 1;
+    }
+  }
+
+  private getLayout() {
+    if (!this.blob) {
+      return { x: 0, y: 0, major: 1, minor: 1, heading: this.heading };
+    }
+
+    const center = this.getPredictedCenter();
+    const tx = this.blob.targetX - center.x;
+    const ty = this.blob.targetY - center.y;
+    const speed = Math.hypot(center.vx, center.vy);
+    const moveDistance = Math.hypot(tx, ty);
+
+    this.heading = Math.atan2(this.forwardX, this.forwardY);
+
+    const { major, minor } = getSquadAxes(this.blob.unitCount, moveDistance, speed, this.blob.spread);
+    return { x: center.x, y: center.y, major, minor, heading: this.heading };
+  }
+
+  public render(dt: number): void {
+    if (!this.blob) return;
+
+    this.visualTime += Math.min(0.05, dt);
+    while (this.visualTime >= VISUAL_STEP) {
+      this.stepVisual(VISUAL_STEP);
+      this.visualTime -= VISUAL_STEP;
+    }
+    if (this.visualTime > 0) {
+      this.stepVisual(this.visualTime);
+      this.visualTime = 0;
+    }
+
+    const layout = this.getLayout();
+    const terrainY = getTerrainHeightAt(layout.x, layout.y, (this.game.room.state as { terrainSeed: number }).terrainSeed);
     const color = this.game.getPlayerColor(this.blob.ownerId);
     const tint = new THREE.Color(color);
 
-    this.mesh.position.set(this.blob.x, terrainY, this.blob.y);
-    this.mesh.rotation.y = this.heading;
+    this.mesh.position.set(layout.x, terrainY, layout.y);
+    this.mesh.rotation.y = layout.heading;
 
-    this.ovalFill.scale.set(major, minor, 1);
-    this.ovalRing.scale.set(major * 1.04, minor * 1.04, 1);
+    this.ovalFill.scale.set(layout.minor, layout.major, 1);
+    this.ovalRing.scale.set(layout.minor * 1.04, layout.major * 1.04, 1);
     this.ovalFill.material.color.copy(tint).offsetHSL(0, 0.06, 0.1);
     this.ovalRing.material.color.copy(tint).offsetHSL(0, 0.03, this.isSelected() ? 0.18 : 0.08);
     this.ovalFill.material.opacity = this.isMine() ? 0.12 : 0.07;
@@ -124,10 +236,10 @@ export class BlobEntity extends Entity {
       const t = (i + 0.5) / this.units.count;
       const radius = Math.sqrt(t);
       const angle = i * GOLDEN_ANGLE;
-      const px = Math.cos(angle) * radius * major * 0.82;
-      const pz = Math.sin(angle) * radius * minor * 0.82;
+      const px = Math.cos(angle) * radius * layout.minor * 0.82;
+      const pz = Math.sin(angle) * radius * layout.major * 0.82;
       DUMMY.position.set(px, unitHeight * 0.5 + 0.02, pz);
-      DUMMY.rotation.y = this.heading;
+      DUMMY.rotation.y = layout.heading;
       DUMMY.updateMatrix();
       this.units.setMatrixAt(i, DUMMY.matrix);
     }
@@ -144,19 +256,18 @@ export class BlobEntity extends Entity {
 
   public containsWorldPoint(x: number, z: number): boolean {
     if (!this.blob) return false;
-    const dx = this.blob.targetX - this.blob.x;
-    const dz = this.blob.targetY - this.blob.y;
-    const { major, minor } = getSquadAxes(this.blob.unitCount, Math.hypot(dx, dz));
+    const layout = this.getLayout();
     const cos = Math.cos(-this.heading);
     const sin = Math.sin(-this.heading);
-    const lx = (x - this.blob.x) * cos - (z - this.blob.y) * sin;
-    const lz = (x - this.blob.x) * sin + (z - this.blob.y) * cos;
-    return (lx * lx) / (major * major) + (lz * lz) / (minor * minor) <= 1.05;
+    const lx = (x - layout.x) * cos - (z - layout.y) * sin;
+    const lz = (x - layout.x) * sin + (z - layout.y) * cos;
+    return (lx * lx) / (layout.minor * layout.minor) + (lz * lz) / (layout.major * layout.major) <= 1.05;
   }
 
   public worldDistanceTo(x: number, z: number): number {
     if (!this.blob) return Infinity;
-    return Math.hypot(x - this.blob.x, z - this.blob.y);
+    const center = this.getPredictedCenter();
+    return Math.hypot(x - center.x, z - center.y);
   }
 
   public getOwnerId(): string | null {
@@ -187,7 +298,13 @@ export class BlobEntity extends Entity {
       health: this.blob.health,
       maxHealth: 100,
       color: this.game.getPlayerColor(this.blob.ownerId),
-      action: null,
+      actions: this.isMine()
+        ? [
+            { id: "spread:tight", label: "Tight", active: this.blob.spread === SquadSpread.TIGHT },
+            { id: "spread:default", label: "Default", active: this.blob.spread === SquadSpread.DEFAULT },
+            { id: "spread:wide", label: "Wide", active: this.blob.spread === SquadSpread.WIDE },
+          ]
+        : [],
     };
   }
 }

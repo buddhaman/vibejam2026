@@ -27,11 +27,12 @@ export type HudState = {
 };
 
 const BAR_H = 50;
-const CARD_W = 220;
-const CARD_H = 98;
+const CARD_W = 326;
+const CARD_H = 112;
 const CARD_PAD = 10;
 const CLOSE_SIZE = 20;
 const ACTION_SIZE = 52;
+const ACTION_GAP = 8;
 
 export function createHudState(): HudState {
   return { buildMenu: { visible: false, screenX: 0, screenY: 0, worldX: 0, worldZ: 0 } };
@@ -59,9 +60,16 @@ function closeBtnRect(W: number, H: number): Rect {
   return { x: card.x + card.w - CLOSE_SIZE - 6, y: card.y + 6, w: CLOSE_SIZE, h: CLOSE_SIZE };
 }
 
-function selectionActionRect(W: number, H: number): Rect {
+function selectionActionRects(W: number, H: number, count: number): Rect[] {
   const card = selectionCardRect(W, H);
-  return { x: card.x + card.w - ACTION_SIZE - 12, y: card.y + 34, w: ACTION_SIZE, h: ACTION_SIZE };
+  const totalW = count * ACTION_SIZE + Math.max(0, count - 1) * ACTION_GAP;
+  const startX = card.x + card.w - totalW - 12;
+  return Array.from({ length: count }, (_, i) => ({
+    x: startX + i * (ACTION_SIZE + ACTION_GAP),
+    y: card.y + 34,
+    w: ACTION_SIZE,
+    h: ACTION_SIZE,
+  }));
 }
 
 function menuLayout(sx: number, sy: number) {
@@ -102,8 +110,12 @@ export function hitTestDeselect(x: number, y: number, selected: boolean): boolea
 }
 
 export function hitTestSelectionAction(x: number, y: number, selected: SelectionInfo | null): string | null {
-  if (!selected?.action) return null;
-  return inRect(x, y, selectionActionRect(window.innerWidth, window.innerHeight)) ? selected.action.id : null;
+  if (!selected || selected.actions.length === 0) return null;
+  const rects = selectionActionRects(window.innerWidth, window.innerHeight, selected.actions.length);
+  for (let i = 0; i < rects.length; i++) {
+    if (inRect(x, y, rects[i])) return selected.actions[i].id;
+  }
+  return null;
 }
 
 export function hitTestMenu(hud: HudState, x: number, y: number): BuildAction | "dismiss" | null {
@@ -191,7 +203,7 @@ function drawBottomBar(
 function drawSelectionCard(ctx: CanvasRenderingContext2D, W: number, H: number, info: SelectionInfo) {
   const card = selectionCardRect(W, H);
   const close = closeBtnRect(W, H);
-  const action = selectionActionRect(W, H);
+  const actionRects = selectionActionRects(W, H, info.actions.length);
 
   ctx.save();
   ctx.shadowColor = "rgba(0,0,0,0.6)";
@@ -240,7 +252,9 @@ function drawSelectionCard(ctx: CanvasRenderingContext2D, W: number, H: number, 
 
   const barX = card.x + 10;
   const barY = card.y + CARD_H - 18;
-  const barW = info.action ? card.w - ACTION_SIZE - 28 : card.w - 20;
+  const actionTotalW =
+    info.actions.length > 0 ? info.actions.length * ACTION_SIZE + (info.actions.length - 1) * ACTION_GAP + 8 : 0;
+  const barW = card.w - 20 - actionTotalW;
   const barH = 6;
   const pct = Math.max(0, Math.min(1, info.health / info.maxHealth));
 
@@ -276,22 +290,30 @@ function drawSelectionCard(ctx: CanvasRenderingContext2D, W: number, H: number, 
   ctx.stroke();
   ctx.restore();
 
-  if (info.action) {
+  for (let i = 0; i < info.actions.length; i++) {
+    const action = info.actions[i];
+    const rect = actionRects[i];
     ctx.save();
-    ctx.fillStyle = "rgba(45,78,138,0.95)";
-    rr(ctx, action.x, action.y, action.w, action.h, 8);
+    ctx.fillStyle = action.active ? "rgba(85,140,80,0.95)" : "rgba(45,78,138,0.95)";
+    rr(ctx, rect.x, rect.y, rect.w, rect.h, 8);
     ctx.fill();
-    ctx.strokeStyle = "rgba(140,190,255,0.6)";
+    ctx.strokeStyle = action.active ? "rgba(190,255,170,0.75)" : "rgba(140,190,255,0.6)";
     ctx.lineWidth = 1.2;
-    rr(ctx, action.x, action.y, action.w, action.h, 8);
+    rr(ctx, rect.x, rect.y, rect.w, rect.h, 8);
     ctx.stroke();
     ctx.fillStyle = "#eef5ff";
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
-    ctx.font = "bold 22px system-ui,sans-serif";
-    ctx.fillText("+", action.x + action.w / 2, action.y + 18);
-    ctx.font = "bold 10px system-ui,sans-serif";
-    ctx.fillText(info.action.label, action.x + action.w / 2, action.y + 38);
+    ctx.font = info.actions.length > 1 ? "bold 10px system-ui,sans-serif" : "bold 22px system-ui,sans-serif";
+    ctx.fillText(
+      info.actions.length > 1 ? action.label : "+",
+      rect.x + rect.w / 2,
+      rect.y + (info.actions.length > 1 ? rect.h / 2 : 18)
+    );
+    if (info.actions.length === 1) {
+      ctx.font = "bold 10px system-ui,sans-serif";
+      ctx.fillText(action.label, rect.x + rect.w / 2, rect.y + 38);
+    }
     ctx.restore();
   }
 }
