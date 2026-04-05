@@ -164,9 +164,16 @@ export class Game {
     return this.selectedEntityId ? this.findEntity(this.selectedEntityId) : null;
   }
 
+  /** Any selected squad (yours or enemy) — for UI. */
   public getSelectedBlobEntity(): BlobEntity | null {
     const entity = this.getSelectedEntity();
     return entity instanceof BlobEntity ? entity : null;
+  }
+
+  /** Selected squad only if you own it — for move orders. */
+  public getSelectedMyBlobEntity(): BlobEntity | null {
+    const b = this.getSelectedBlobEntity();
+    return b?.isMine() ? b : null;
   }
 
   public toggleSelection(entityId: string): void {
@@ -204,6 +211,24 @@ export class Game {
 
     for (const entity of this.entities) {
       if (!entity.isOwnedByMe()) continue;
+      const hits = raycaster.intersectObject(entity.mesh, true);
+      if (hits.length === 0) continue;
+      const distance = hits[0].distance;
+      if (distance < bestDistance) {
+        bestDistance = distance;
+        best = entity;
+      }
+    }
+
+    return best;
+  }
+
+  /** Nearest entity along the ray (any owner) — for selection / inspect. */
+  public pickEntityFromRay(raycaster: THREE.Raycaster): Entity | null {
+    let best: Entity | null = null;
+    let bestDistance = Infinity;
+
+    for (const entity of this.entities) {
       const hits = raycaster.intersectObject(entity.mesh, true);
       if (hits.length === 0) continue;
       const distance = hits[0].distance;
@@ -266,7 +291,7 @@ export class Game {
   }
 
   public sendMoveIntent(targetX: number, targetY: number): void {
-    const blob = this.getSelectedBlobEntity();
+    const blob = this.getSelectedMyBlobEntity();
     if (!blob) return;
     this.room.send(MessageType.INTENT, { blobId: blob.id, targetX, targetY } satisfies IntentMessage);
   }
@@ -288,11 +313,12 @@ export class Game {
     const selected = this.getSelectedEntity();
     if (!selected) return;
     if (actionId.startsWith("train:")) {
+      if (!(selected instanceof BuildingEntity) || !selected.isOwnedByMe()) return;
       const unitType = Number(actionId.slice("train:".length)) as UnitTypeValue;
       this.sendTrainIntent(selected.id, unitType);
       return;
     }
-    if (!(selected instanceof BlobEntity)) return;
+    if (!(selected instanceof BlobEntity) || !selected.isMine()) return;
     if (actionId === "spread:tight") this.sendSquadSpreadIntent(selected.id, SquadSpread.TIGHT);
     if (actionId === "spread:default") this.sendSquadSpreadIntent(selected.id, SquadSpread.DEFAULT);
     if (actionId === "spread:wide") this.sendSquadSpreadIntent(selected.id, SquadSpread.WIDE);

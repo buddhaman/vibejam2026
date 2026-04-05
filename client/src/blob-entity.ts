@@ -56,10 +56,16 @@ function createUnitBodyGeometry() {
 }
 
 const UNIT_GEOM = createUnitBodyGeometry();
+const LEG_GEOM = new THREE.BoxGeometry(1, 1, 1);
 const UNIT_MAT = new THREE.MeshStandardMaterial({
   color: 0xffffff,
   roughness: 0.82,
   metalness: 0.02,
+});
+const LEG_MAT = new THREE.MeshStandardMaterial({
+  color: 0xffffff,
+  roughness: 0.9,
+  metalness: 0.01,
 });
 const OVAL_FILL_GEOM = new THREE.CircleGeometry(1, 48);
 const OVAL_FILL_MAT = new THREE.MeshBasicMaterial({
@@ -85,18 +91,42 @@ const MIN_DIRECTION_SPEED = 0.2;
 const UNIT_SPRING = 20;
 const UNIT_DAMPING = 0.24;
 const UNIT_WALK_SPEED = 4.4;
+const FOOT_IDLE_SPEED = 0.01;
+const FOOT_STRIDE = GAME_RULES.UNIT_RADIUS * 1.9;
+const HIP_WIDTH = GAME_RULES.UNIT_RADIUS * 0.38;
+const HIP_LIFT = GAME_RULES.UNIT_HEIGHT * 0.62;
+const BODY_FLOAT = GAME_RULES.UNIT_HEIGHT * 0.78;
+const LEG_WIDTH = GAME_RULES.UNIT_RADIUS * 0.16;
+const LEG_DEPTH = GAME_RULES.UNIT_RADIUS * 0.12;
+const FOOT_GROUND_LIFT = 0.03;
+const UP_AXIS = new THREE.Vector3(0, 1, 0);
+const TEMP_A = new THREE.Vector3();
+const TEMP_B = new THREE.Vector3();
+const TEMP_MID = new THREE.Vector3();
+const TEMP_DIR = new THREE.Vector3();
+const TEMP_QUAT = new THREE.Quaternion();
 
 type UnitState = {
   x: number;
   z: number;
   vx: number;
   vz: number;
+  lastBodyWorldX: number;
+  lastBodyWorldZ: number;
+  leftFootX: number;
+  leftFootZ: number;
+  rightFootX: number;
+  rightFootZ: number;
+  leftPlanted: boolean;
+  distanceWalked: number;
+  feetReady: boolean;
 };
 
 export class BlobEntity extends Entity {
   public mesh: THREE.Group;
   private ovalRoot!: THREE.Group;
   private units!: THREE.InstancedMesh;
+  private legs!: THREE.InstancedMesh;
   private ovalFill!: THREE.Mesh<THREE.CircleGeometry, THREE.MeshBasicMaterial>;
   private ovalRing!: THREE.Mesh<THREE.RingGeometry, THREE.MeshBasicMaterial>;
   private blob: {
@@ -154,6 +184,10 @@ export class BlobEntity extends Entity {
     this.units.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
     this.units.castShadow = true;
     this.units.receiveShadow = true;
+    this.legs = new THREE.InstancedMesh(LEG_GEOM, LEG_MAT.clone(), 512);
+    this.legs.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+    this.legs.castShadow = true;
+    this.legs.receiveShadow = true;
 
     this.ovalRoot = new THREE.Group();
 
@@ -170,6 +204,7 @@ export class BlobEntity extends Entity {
 
     const group = new THREE.Group();
     group.add(this.ovalRoot);
+    group.add(this.legs);
     group.add(this.units);
     return group;
   }
@@ -203,7 +238,21 @@ export class BlobEntity extends Entity {
 
   private ensureUnitStateCount(count: number): void {
     while (this.unitStates.length < count) {
-      this.unitStates.push({ x: 0, z: 0, vx: 0, vz: 0 });
+      this.unitStates.push({
+        x: 0,
+        z: 0,
+        vx: 0,
+        vz: 0,
+        lastBodyWorldX: 0,
+        lastBodyWorldZ: 0,
+        leftFootX: 0,
+        leftFootZ: 0,
+        rightFootX: 0,
+        rightFootZ: 0,
+        leftPlanted: Math.random() >= 0.5,
+        distanceWalked: Math.random() * FOOT_STRIDE,
+        feetReady: false,
+      });
     }
     if (this.unitStates.length > count) {
       this.unitStates.length = count;
@@ -245,6 +294,82 @@ export class BlobEntity extends Entity {
       state.x += state.vx * dt;
       state.z += state.vz * dt;
     }
+  }
+
+  private setBeamInstance(index: number, from: THREE.Vector3, to: THREE.Vector3, width: number, depth: number) {
+    TEMP_DIR.subVectors(to, from);
+    const length = TEMP_DIR.length();
+    if (length < 1e-4) {
+      DUMMY.position.copy(from);
+      DUMMY.quaternion.identity();
+      DUMMY.scale.set(width, 1e-4, depth);
+    } else {
+      TEMP_DIR.multiplyScalar(1 / length);
+      TEMP_MID.copy(from).add(to).multiplyScalar(0.5);
+      TEMP_QUAT.setFromUnitVectors(UP_AXIS, TEMP_DIR);
+      DUMMY.position.copy(TEMP_MID);
+      DUMMY.quaternion.copy(TEMP_QUAT);
+      DUMMY.scale.set(width, length, depth);
+    }
+    DUMMY.updateMatrix();
+    this.legs.setMatrixAt(index, DUMMY.matrix);
+  }
+
+  private resetFeet(state: UnitState, bodyWorldX: number, bodyWorldZ: number, sideX: number, sideZ: number, hipWidth: number) {
+    state.leftFootX = bodyWorldX + sideX * hipWidth;
+    state.leftFootZ = bodyWorldZ + sideZ * hipWidth;
+    state.rightFootX = bodyWorldX - sideX * hipWidth;
+    state.rightFootZ = bodyWorldZ - sideZ * hipWidth;
+    state.lastBodyWorldX = bodyWorldX;
+    state.lastBodyWorldZ = bodyWorldZ;
+    state.feetReady = true;
+  }
+
+  private updateFeet(
+    state: UnitState,
+    bodyWorldX: number,
+    bodyWorldZ: number,
+    bodyVx: number,
+    bodyVz: number,
+    dt: number,
+    forwardX: number,
+    forwardZ: number,
+    sideX: number,
+    sideZ: number,
+    stride: number,
+    hipWidth: number
+  ) {
+    if (!state.feetReady) {
+      this.resetFeet(state, bodyWorldX, bodyWorldZ, sideX, sideZ, hipWidth);
+    }
+
+    const speed = Math.hypot(bodyVx, bodyVz);
+    if (speed < FOOT_IDLE_SPEED) {
+      state.leftFootX = bodyWorldX + sideX * hipWidth;
+      state.leftFootZ = bodyWorldZ + sideZ * hipWidth;
+      state.rightFootX = bodyWorldX - sideX * hipWidth;
+      state.rightFootZ = bodyWorldZ - sideZ * hipWidth;
+      state.lastBodyWorldX = bodyWorldX;
+      state.lastBodyWorldZ = bodyWorldZ;
+      return;
+    }
+
+    state.distanceWalked += speed * dt;
+    if (state.distanceWalked > stride) {
+      state.distanceWalked = 0;
+      const sideSign = state.leftPlanted ? -1 : 1;
+      if (state.leftPlanted) {
+        state.rightFootX = bodyWorldX + forwardX * stride + sideX * hipWidth * sideSign;
+        state.rightFootZ = bodyWorldZ + forwardZ * stride + sideZ * hipWidth * sideSign;
+      } else {
+        state.leftFootX = bodyWorldX + forwardX * stride + sideX * hipWidth * sideSign;
+        state.leftFootZ = bodyWorldZ + forwardZ * stride + sideZ * hipWidth * sideSign;
+      }
+      state.leftPlanted = !state.leftPlanted;
+    }
+
+    state.lastBodyWorldX = bodyWorldX;
+    state.lastBodyWorldZ = bodyWorldZ;
   }
 
   private getPredictedCenter() {
@@ -358,12 +483,18 @@ export class BlobEntity extends Entity {
     this.ovalRing.material.opacity = this.isSelected() ? 0.65 : this.isMine() ? 0.22 : 0.12;
 
     const unitsMaterial = this.units.material as THREE.MeshStandardMaterial;
+    const legsMaterial = this.legs.material as THREE.MeshStandardMaterial;
     unitsMaterial.color.copy(tint).offsetHSL(0, 0.02, 0.02);
     unitsMaterial.opacity = this.isMine() ? 1 : 0.68;
     unitsMaterial.transparent = !this.isMine();
+    legsMaterial.color.copy(tint).offsetHSL(0.01, 0.01, -0.12);
+    legsMaterial.opacity = unitsMaterial.opacity;
+    legsMaterial.transparent = unitsMaterial.transparent;
 
     this.units.count = Math.min(this.blob.unitCount, this.units.instanceMatrix.count);
-    this.stepUnits(Math.min(0.05, dt), layout);
+    const stepDt = Math.min(0.05, dt);
+    this.stepUnits(stepDt, layout);
+    this.legs.count = this.units.count * 2;
 
     const unitRules = getUnitRules(this.blob.unitType);
     const rightX = Math.cos(layout.heading);
@@ -378,14 +509,56 @@ export class BlobEntity extends Entity {
       const worldX = layout.x + px;
       const worldZ = layout.y + pz;
       const unitTerrainY = getTerrainHeightAt(worldX, worldZ, tiles);
-      const hoverY = unitTerrainY - terrainY + GAME_RULES.UNIT_HEIGHT * 0.78;
+      const hoverY = unitTerrainY - terrainY + BODY_FLOAT;
+      const bodyVx = state.feetReady ? (worldX - state.lastBodyWorldX) / Math.max(stepDt, 1e-4) : this.visualVx;
+      const bodyVz = state.feetReady ? (worldZ - state.lastBodyWorldZ) / Math.max(stepDt, 1e-4) : this.visualVy;
+      let stepForwardX = forwardX;
+      let stepForwardZ = forwardZ;
+      const bodySpeed = Math.hypot(bodyVx, bodyVz);
+      if (bodySpeed > FOOT_IDLE_SPEED) {
+        stepForwardX = bodyVx / bodySpeed;
+        stepForwardZ = bodyVz / bodySpeed;
+      }
+      const sideX = -stepForwardZ;
+      const sideZ = stepForwardX;
+
+      this.updateFeet(
+        state,
+        worldX,
+        worldZ,
+        bodyVx,
+        bodyVz,
+        stepDt,
+        stepForwardX,
+        stepForwardZ,
+        sideX,
+        sideZ,
+        FOOT_STRIDE * unitRules.visualScale,
+        HIP_WIDTH * unitRules.visualScale
+      );
+
       DUMMY.position.set(px, hoverY, pz);
       DUMMY.rotation.y = 0;
       DUMMY.scale.setScalar(unitRules.visualScale);
       DUMMY.updateMatrix();
       this.units.setMatrixAt(i, DUMMY.matrix);
+
+      const hipOffsetX = sideX * HIP_WIDTH * unitRules.visualScale;
+      const hipOffsetZ = sideZ * HIP_WIDTH * unitRules.visualScale;
+      const hipLocalY = unitTerrainY - terrainY + HIP_LIFT * unitRules.visualScale;
+      const leftFootTerrainY = getTerrainHeightAt(state.leftFootX, state.leftFootZ, tiles) - terrainY + FOOT_GROUND_LIFT;
+      const rightFootTerrainY = getTerrainHeightAt(state.rightFootX, state.rightFootZ, tiles) - terrainY + FOOT_GROUND_LIFT;
+
+      TEMP_A.set(px + hipOffsetX, hipLocalY, pz + hipOffsetZ);
+      TEMP_B.set(state.leftFootX - layout.x, leftFootTerrainY, state.leftFootZ - layout.y);
+      this.setBeamInstance(i * 2, TEMP_A, TEMP_B, LEG_WIDTH * unitRules.visualScale, LEG_DEPTH * unitRules.visualScale);
+
+      TEMP_A.set(px - hipOffsetX, hipLocalY, pz - hipOffsetZ);
+      TEMP_B.set(state.rightFootX - layout.x, rightFootTerrainY, state.rightFootZ - layout.y);
+      this.setBeamInstance(i * 2 + 1, TEMP_A, TEMP_B, LEG_WIDTH * unitRules.visualScale, LEG_DEPTH * unitRules.visualScale);
     }
     this.units.instanceMatrix.needsUpdate = true;
+    this.legs.instanceMatrix.needsUpdate = true;
 
     this.updateTargetIndicator(Math.min(0.05, dt), terrainY);
   }
@@ -424,7 +597,7 @@ export class BlobEntity extends Entity {
   }
 
   private updateTargetIndicator(dt: number, blobTerrainY: number): void {
-    if (!this.blob || !this.isSelected()) {
+    if (!this.blob || this.game.selectedEntityId !== this.id || !this.isMine()) {
       this.targetGroup.visible = false;
       this.targetConnector.visible = false;
       return;
@@ -478,7 +651,7 @@ export class BlobEntity extends Entity {
   }
 
   public isSelected(): boolean {
-    return this.isMine() && this.game.selectedEntityId === this.id;
+    return this.blob !== null && this.game.selectedEntityId === this.id;
   }
 
   public containsWorldPoint(x: number, z: number): boolean {
@@ -520,9 +693,14 @@ export class BlobEntity extends Entity {
   public getSelectionInfo(): SelectionInfo | null {
     if (!this.blob) return null;
     const unitRules = getUnitRules(this.blob.unitType);
+    const enemy = !this.isMine();
     return {
       title: unitRules.label,
-      detail: this.blob.unitType === UnitType.VILLAGER ? "Can gather resources" : `${this.blob.unitCount} units`,
+      detail: enemy
+        ? `Enemy · ${this.blob.unitType === UnitType.VILLAGER ? "gatherer" : `${this.blob.unitCount} units`}`
+        : this.blob.unitType === UnitType.VILLAGER
+          ? "Can gather resources"
+          : `${this.blob.unitCount} units`,
       health: this.blob.health,
       maxHealth: unitRules.health,
       color: this.game.getPlayerColor(this.blob.ownerId),

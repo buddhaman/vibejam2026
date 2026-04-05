@@ -206,7 +206,7 @@ export function startRender(game: Game) {
 
     ndcV.set((clientX / window.innerWidth) * 2 - 1, -(clientY / window.innerHeight) * 2 + 1);
     raycaster.setFromCamera(ndcV, camera);
-    const picked = game.pickOwnedEntityFromRay(raycaster);
+    const picked = game.pickEntityFromRay(raycaster);
     if (picked) {
       cancelPendingMove();
       game.toggleSelection(picked.id);
@@ -219,7 +219,7 @@ export function startRender(game: Game) {
 
     const now = performance.now();
 
-    if (game.getSelectedBlobEntity()) {
+    if (game.getSelectedMyBlobEntity()) {
       cancelPendingMove();
       const tx = point.x;
       const tz = point.z;

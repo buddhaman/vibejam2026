@@ -114,41 +114,46 @@ export class BuildingEntity extends Entity {
   public getSelectionInfo(): SelectionInfo | null {
     if (!this.building) return null;
     const rules = getBuildingRules(this.building.buildingType);
+    const mine = this.isOwnedByMe();
     const resources = this.game.getMyResources();
     const currentUnitType = this.building.productionQueue[0] ?? null;
     const queueCount = this.building.productionQueue.length;
     const currentUnitRules = currentUnitType ? getUnitRules(currentUnitType) : null;
+    const baseDetail =
+      this.building.buildingType === BuildingType.TOWN_CENTER
+        ? "Produces villagers"
+        : this.building.buildingType === BuildingType.BARRACKS
+          ? "Produces warbands"
+          : "Defensive structure";
     return {
       title: rules.label,
-      detail:
-        this.building.buildingType === BuildingType.TOWN_CENTER
-          ? "Produces villagers"
-          : this.building.buildingType === BuildingType.BARRACKS
-            ? "Produces warbands"
-            : "Defensive structure",
+      detail: mine ? baseDetail : `Enemy · ${baseDetail.toLowerCase()}`,
       health: this.building.health,
       maxHealth: rules.health,
       color: this.game.getPlayerColor(this.building.ownerId),
-      actions: rules.producibleUnits.map((unitType) => {
-        const unitRules = getUnitRules(unitType);
-        const count = this.building!.productionQueue.filter((queuedType) => queuedType === unitType).length;
-        return {
-          id: `train:${unitType}`,
-          label: unitRules.label,
-          disabled: !canAfford(resources, unitRules.cost),
-          cost: unitRules.cost,
-          timeMs: unitRules.trainTimeMs,
-          queueCount: count,
-        };
-      }),
-      production: currentUnitRules
-        ? {
-            label: currentUnitRules.label,
-            queueCount,
-            remainingMs: Math.max(0, currentUnitRules.trainTimeMs - this.building.productionProgressMs),
-            progress: Math.max(0, Math.min(1, this.building.productionProgressMs / currentUnitRules.trainTimeMs)),
-          }
-        : null,
+      actions: mine
+        ? rules.producibleUnits.map((unitType) => {
+            const unitRules = getUnitRules(unitType);
+            const count = this.building!.productionQueue.filter((queuedType) => queuedType === unitType).length;
+            return {
+              id: `train:${unitType}`,
+              label: unitRules.label,
+              disabled: !canAfford(resources, unitRules.cost),
+              cost: unitRules.cost,
+              timeMs: unitRules.trainTimeMs,
+              queueCount: count,
+            };
+          })
+        : [],
+      production:
+        mine && currentUnitRules
+          ? {
+              label: currentUnitRules.label,
+              queueCount,
+              remainingMs: Math.max(0, currentUnitRules.trainTimeMs - this.building.productionProgressMs),
+              progress: Math.max(0, Math.min(1, this.building.productionProgressMs / currentUnitRules.trainTimeMs)),
+            }
+          : null,
     };
   }
 }
