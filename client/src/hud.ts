@@ -2,6 +2,9 @@
  * 2D canvas HUD — drawn over the Three.js canvas each frame.
  * pointer-events: none so clicks fall through to the 3D layer.
  * All hit-testing is done manually in render.ts.
+ *
+ * Visual theme: Neo-Hellas — Digital Antiquity
+ * Ancient Greek marble aesthetics fused with post-AGI radiance.
  */
 
 import { BuildingType, formatResourceCost, getBuildingRules, type ResourceCost } from "../../shared/game-rules.js";
@@ -15,16 +18,18 @@ const BUILD_ITEMS = [
     label: getBuildingRules(BuildingType.BARRACKS).label,
     icon: "⚔",
     type: BuildingType.BARRACKS,
-    color: "#c03510",
-    glow: "#ff5522",
+    color: "#7A1A1A",
+    colorLight: "#B82626",
+    glow: "#FF4040",
     cost: getBuildingRules(BuildingType.BARRACKS).cost,
   },
   {
     label: getBuildingRules(BuildingType.TOWER).label,
-    icon: "🗼",
+    icon: "🏛",
     type: BuildingType.TOWER,
-    color: "#1050c8",
-    glow: "#3a80ff",
+    color: "#0F2E5A",
+    colorLight: "#1B6CA8",
+    glow: "#3AA8FF",
     cost: getBuildingRules(BuildingType.TOWER).cost,
   },
 ] as const;
@@ -44,30 +49,68 @@ export type HudState = {
   _menuWasVisible: boolean;
   _menuOpenT: number;
   _moveMarkers: Array<{ sx: number; sy: number; born: number }>;
-  _resourceBounce: { food: number; wood: number; gold: number };
-  _prevResources: { food: number; wood: number; gold: number };
+  _resourceBounce: { biomass: number; material: number; compute: number };
+  _prevResources: { biomass: number; material: number; compute: number };
   _warning: { text: string; born: number };
 };
 
-// Layout constants
-const BAR_H      = 54;
-const CARD_W     = 330;
-const CARD_H     = 124;
-const CARD_PAD   = 10;
-const CARD_R     = 14;
-const CLOSE_SIZE = 22;
-const ACTION_SIZE = 58;
-const ACTION_GAP  = 8;
-const RESOURCE_PILL_W = 88;
-const RESOURCE_PILL_H = 28;
+// ─── Layout constants ────────────────────────────────────────────────────────
 
-// Palette — AoM warm dark panels + Snakebird saturated accents
-const PANEL_BG         = "rgba(18, 11, 4, 0.97)";
-const BORDER_GOLD      = "#c8911e";
-const BORDER_GOLD_DIM  = "rgba(255,210,80,0.18)";
-const TEXT_GOLD        = "#ffd060";
-const TEXT_CREAM       = "#ffe8b0";
-const TEXT_MUTED       = "rgba(255,210,130,0.40)";
+const BAR_H        = 62; // two rows: resources + hint line
+const CARD_W       = 340;
+const CARD_H       = 130;
+const CARD_PAD     = 10;
+const CARD_R       = 4;
+const CLOSE_SIZE   = 22;
+const ACTION_SIZE  = 60;
+const ACTION_GAP   = 8;
+const RESOURCE_W   = 96;
+const RESOURCE_H   = 32;
+
+// ─── Neo-Hellas palette ──────────────────────────────────────────────────────
+
+// Backgrounds — lapis lazuli depths
+const LAPIS_DEEP   = "rgba(8, 16, 34, 0.97)";
+const LAPIS_MID    = "rgba(12, 22, 46, 0.98)";
+const MARBLE_BG    = "rgba(242, 237, 215, 0.06)"; // subtle marble wash
+
+// Gold — Olympic flame
+const GOLD_BRIGHT  = "#C9911E";
+const GOLD_DIM     = "rgba(201, 145, 30, 0.20)";
+const GOLD_TEXT    = "#F0C060";
+const GOLD_FAINT   = "rgba(240, 192, 96, 0.38)";
+
+// Marble — Pentelic warmth
+const MARBLE_TEXT  = "#F2EDD7";
+const MARBLE_DIM   = "rgba(242, 237, 215, 0.55)";
+const MARBLE_MUTED = "rgba(242, 237, 215, 0.28)";
+
+// Azure — Aegean sea / Hellenic flag
+const AZURE        = "#1B6CA8";
+const AZURE_GLOW   = "rgba(27, 108, 168, 0.50)";
+
+// Cyan — divine post-AGI radiance (Zeus's electricity, now digital)
+const DIVINE_CYAN  = "#00D4FF";
+const CYAN_GLOW    = "rgba(0, 212, 255, 0.45)";
+const CYAN_DIM     = "rgba(0, 212, 255, 0.18)";
+
+// Crimson — Spartan war standard
+const CRIMSON      = "#B82020";
+const CRIMSON_GLOW = "rgba(184, 32, 32, 0.50)";
+
+// ─── Fonts ───────────────────────────────────────────────────────────────────
+
+const F_CINZEL_SM   = "600 10px 'Cinzel', serif";
+const F_CINZEL_MD   = "600 13px 'Cinzel', serif";
+const F_CINZEL_LG   = "700 16px 'Cinzel', serif";
+const F_CINZEL_XL   = "700 18px 'Cinzel', serif";
+const F_NUM_SM      = "bold 11px system-ui, sans-serif";
+const F_NUM_MD      = "bold 13px system-ui, sans-serif";
+const F_NUM_LG      = "bold 16px system-ui, sans-serif";
+const F_BODY_SM     = "11px system-ui, sans-serif";
+const F_BODY_XS     = "10px system-ui, sans-serif";
+
+// ─── State ───────────────────────────────────────────────────────────────────
 
 export function createHudState(): HudState {
   return {
@@ -77,13 +120,12 @@ export function createHudState(): HudState {
     _menuWasVisible: false,
     _menuOpenT: -999,
     _moveMarkers: [],
-    _resourceBounce: { food: -999, wood: -999, gold: -999 },
-    _prevResources: { food: 0, wood: 0, gold: 0 },
+    _resourceBounce: { biomass: -999, material: -999, compute: -999 },
+    _prevResources: { biomass: 0, material: 0, compute: 0 },
     _warning: { text: "", born: -999 },
   };
 }
 
-/** Call this when a move command is issued to show a ground ripple at screen pos. */
 export function addMoveMarker(hud: HudState, sx: number, sy: number, t: number): void {
   hud._moveMarkers.push({ sx, sy, born: t });
   if (hud._moveMarkers.length > 6) hud._moveMarkers.shift();
@@ -106,10 +148,10 @@ export function createHudCanvas(): HTMLCanvasElement {
   return canvas;
 }
 
-// ─── Layout helpers ─────────────────────────────────────────────────────────
+// ─── Layout helpers ──────────────────────────────────────────────────────────
 
 function selectionCardRect(W: number, H: number): Rect {
-  return { x: CARD_PAD, y: H - BAR_H - CARD_H - 8, w: CARD_W, h: CARD_H };
+  return { x: CARD_PAD, y: H - BAR_H - CARD_H - 10, w: CARD_W, h: CARD_H };
 }
 
 function closeBtnRect(W: number, H: number): Rect {
@@ -123,7 +165,7 @@ function selectionActionRects(W: number, H: number, count: number): Rect[] {
   const startX = card.x + card.w - totalW - 12;
   return Array.from({ length: count }, (_, i) => ({
     x: startX + i * (ACTION_SIZE + ACTION_GAP),
-    y: card.y + 40,
+    y: card.y + 44,
     w: ACTION_SIZE,
     h: ACTION_SIZE,
   }));
@@ -132,17 +174,17 @@ function selectionActionRects(W: number, H: number, count: number): Rect[] {
 function menuLayout(sx: number, sy: number) {
   const W = window.innerWidth;
   const H = window.innerHeight;
-  const ITEM_W   = 108;
-  const ITEM_H   = 88;
-  const PAD      = 14;
+  const ITEM_W   = 112;
+  const ITEM_H   = 92;
+  const PAD      = 16;
   const GAP      = 10;
-  const TITLE_H  = 34;
+  const TITLE_H  = 38;
   const count    = BUILD_ITEMS.length;
   const menuW    = PAD * 2 + count * ITEM_W + (count - 1) * GAP;
   const menuH    = TITLE_H + ITEM_H + PAD;
 
   let mx = sx - menuW / 2;
-  let my = sy - menuH - 18;
+  let my = sy - menuH - 20;
   mx = Math.max(8, Math.min(W - menuW - 8, mx));
   my = Math.max(8, Math.min(H - menuH - 8, my));
 
@@ -158,7 +200,7 @@ function inRect(px: number, py: number, r: Rect) {
   return px >= r.x && px <= r.x + r.w && py >= r.y && py <= r.y + r.h;
 }
 
-// ─── Hit-testing (public) ────────────────────────────────────────────────────
+// ─── Hit-testing (public) ─────────────────────────────────────────────────────
 
 export function hitTestDeselect(x: number, y: number, selected: boolean): boolean {
   return selected && inRect(x, y, closeBtnRect(window.innerWidth, window.innerHeight));
@@ -182,7 +224,7 @@ export function hitTestMenu(hud: HudState, x: number, y: number): BuildAction | 
   return inRect(x, y, panel) ? "dismiss" : null;
 }
 
-// ─── Main draw ───────────────────────────────────────────────────────────────
+// ─── Main draw ────────────────────────────────────────────────────────────────
 
 export function drawHUD(
   canvas: HTMLCanvasElement,
@@ -199,27 +241,22 @@ export function drawHUD(
   const H = canvas.height;
   ctx.clearRect(0, 0, W, H);
 
-  // ── Track animation state ─────────────────────────────────────────────────
-
-  // Card entrance — detect selection change by title+color proxy
+  // Track animation state
   const cardKey = selected ? `${selected.title}:${selected.color}` : "";
   if (cardKey !== hud._cardKey) {
     hud._cardKey = cardKey;
     hud._cardEnterT = cardKey ? t : -999;
   }
 
-  // Build menu entrance
   if (hud.buildMenu.visible && !hud._menuWasVisible) hud._menuOpenT = t;
   hud._menuWasVisible = hud.buildMenu.visible;
 
-  // Resource bounce on increase
-  if (resources.food > hud._prevResources.food) hud._resourceBounce.food = t;
-  if (resources.wood > hud._prevResources.wood) hud._resourceBounce.wood = t;
-  if (resources.gold > hud._prevResources.gold) hud._resourceBounce.gold = t;
-  hud._prevResources = { food: resources.food, wood: resources.wood, gold: resources.gold };
+  if (resources.biomass > hud._prevResources.biomass) hud._resourceBounce.biomass = t;
+  if (resources.material > hud._prevResources.material) hud._resourceBounce.material = t;
+  if (resources.compute > hud._prevResources.compute) hud._resourceBounce.compute = t;
+  hud._prevResources = { biomass: resources.biomass, material: resources.material, compute: resources.compute };
 
-  // ── Draw ─────────────────────────────────────────────────────────────────
-
+  // Draw layers
   drawMoveMarkers(ctx, hud, t);
   drawWarningToast(ctx, W, H, hud, t);
   drawBottomBar(ctx, W, H, myColor, mySquadCount, resources, hud._resourceBounce, selected !== null, t);
@@ -228,90 +265,146 @@ export function drawHUD(
   if (hud.buildMenu.visible) drawBuildMenu(ctx, menuLayout(hud.buildMenu.screenX, hud.buildMenu.screenY), t, hud._menuOpenT);
 }
 
-// ─── Draw helpers ────────────────────────────────────────────────────────────
+// ─── Move markers — divine cyan ripples ──────────────────────────────────────
 
-/** Expanding rings at screen points where move was ordered (`addMoveMarker`). */
 function drawMoveMarkers(ctx: CanvasRenderingContext2D, hud: HudState, t: number): void {
   const life = 0.9;
   hud._moveMarkers = hud._moveMarkers.filter((m) => t - m.born < life);
 
   for (const m of hud._moveMarkers) {
     const u = Math.min(1, (t - m.born) / life);
-    const rOuter = 10 + u * 48;
-    const alpha = (1 - u) * 0.62;
+    const alpha = (1 - u) * 0.72;
+
     ctx.save();
+    // Outer ring — divine cyan
     ctx.beginPath();
-    ctx.arc(m.sx, m.sy, rOuter, 0, Math.PI * 2);
-    ctx.strokeStyle = `rgba(255, 190, 70, ${alpha})`;
-    ctx.lineWidth = 2.25;
+    ctx.arc(m.sx, m.sy, 10 + u * 50, 0, Math.PI * 2);
+    ctx.strokeStyle = `rgba(0, 212, 255, ${alpha})`;
+    ctx.lineWidth = 2;
     ctx.stroke();
+    // Inner ring — white flash
     ctx.beginPath();
-    ctx.arc(m.sx, m.sy, rOuter * 0.48, 0, Math.PI * 2);
-    ctx.strokeStyle = `rgba(255, 235, 180, ${alpha * 0.55})`;
+    ctx.arc(m.sx, m.sy, (10 + u * 50) * 0.4, 0, Math.PI * 2);
+    ctx.strokeStyle = `rgba(255, 255, 255, ${alpha * 0.5})`;
     ctx.lineWidth = 1;
     ctx.stroke();
+    // Cross-hair center dot
+    if (u < 0.15) {
+      const dotAlpha = (1 - u / 0.15) * 0.85;
+      ctx.beginPath();
+      ctx.arc(m.sx, m.sy, 3, 0, Math.PI * 2);
+      ctx.fillStyle = `rgba(0, 212, 255, ${dotAlpha})`;
+      ctx.fill();
+    }
     ctx.restore();
   }
 }
 
+// ─── Warning toast — marble panel ────────────────────────────────────────────
+
 function drawWarningToast(ctx: CanvasRenderingContext2D, W: number, H: number, hud: HudState, t: number): void {
   if (!hud._warning.text) return;
   const age = t - hud._warning.born;
-  if (age > 1.9) return;
+  if (age > 2.2) return;
 
-  const fadeIn = Math.min(1, age / 0.12);
-  const fadeOut = Math.min(1, (1.9 - age) / 0.25);
-  const alpha = Math.max(0, Math.min(fadeIn, fadeOut));
-  const y = H - BAR_H - 84 - Math.max(0, 1 - fadeIn) * 10;
-  const w = 280;
-  const h = 34;
+  const fadeIn  = Math.min(1, age / 0.10);
+  const fadeOut = Math.min(1, (2.2 - age) / 0.30);
+  const alpha   = Math.max(0, Math.min(fadeIn, fadeOut));
+  const ySlide  = Math.max(0, 1 - fadeIn) * 12;
+  const w = 300; const h = 36;
   const x = (W - w) * 0.5;
+  const y = H - BAR_H - 92 - ySlide;
 
   ctx.save();
   ctx.globalAlpha = alpha;
-  ctx.shadowColor = "rgba(0,0,0,0.55)";
-  ctx.shadowBlur = 20;
-  ctx.fillStyle = "rgba(58, 26, 16, 0.94)";
-  rr(ctx, x, y, w, h, 12);
-  ctx.fill();
+  ctx.shadowColor = "rgba(0,0,0,0.6)";
+  ctx.shadowBlur = 22;
+
+  // Marble background
+  const grad = ctx.createLinearGradient(x, y, x, y + h);
+  grad.addColorStop(0, "rgba(242, 237, 215, 0.97)");
+  grad.addColorStop(1, "rgba(220, 214, 192, 0.97)");
+  ctx.fillStyle = grad;
+  rr(ctx, x, y, w, h, 3); ctx.fill();
+
   ctx.shadowBlur = 0;
-  ctx.strokeStyle = "rgba(255, 154, 84, 0.9)";
-  ctx.lineWidth = 1.5;
-  rr(ctx, x, y, w, h, 12);
-  ctx.stroke();
-  ctx.fillStyle = "#ffe4bc";
-  ctx.font = "bold 12px system-ui,sans-serif";
+  ctx.strokeStyle = CRIMSON;
+  ctx.lineWidth = 2;
+  rr(ctx, x, y, w, h, 3); ctx.stroke();
+
+  ctx.fillStyle = "#1A0A0A";
+  ctx.font = F_CINZEL_SM;
   ctx.textAlign = "center";
   ctx.textBaseline = "middle";
-  ctx.fillText(hud._warning.text, x + w / 2, y + h / 2);
+  ctx.letterSpacing = "1px";
+  ctx.fillText(hud._warning.text.toUpperCase(), x + w / 2, y + h / 2);
   ctx.restore();
 }
 
-/** AoM-style dark panel with gold double-border. */
+// ─── Panel helpers ────────────────────────────────────────────────────────────
+
+/** Lapis panel with gold double-rule border — the classical Neo-Hellas frame. */
 function drawPanel(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, r: number) {
   ctx.save();
-  ctx.shadowColor = "rgba(0,0,0,0.80)";
-  ctx.shadowBlur = 24;
-  ctx.shadowOffsetY = 5;
-  ctx.fillStyle = PANEL_BG;
-  rr(ctx, x, y, w, h, r);
-  ctx.fill();
+  ctx.shadowColor = "rgba(0,0,0,0.85)";
+  ctx.shadowBlur = 28;
+  ctx.shadowOffsetY = 6;
+  ctx.fillStyle = LAPIS_MID;
+  rr(ctx, x, y, w, h, r); ctx.fill();
   ctx.restore();
 
-  // Outer gold border
+  // Outer gold rule
   ctx.save();
-  ctx.strokeStyle = BORDER_GOLD;
-  ctx.lineWidth = 2;
-  rr(ctx, x, y, w, h, r);
-  ctx.stroke();
+  ctx.strokeStyle = GOLD_BRIGHT;
+  ctx.lineWidth = 1.5;
+  rr(ctx, x, y, w, h, r); ctx.stroke();
 
-  // Inner subtle highlight (inset 3.5 px)
-  ctx.strokeStyle = BORDER_GOLD_DIM;
+  // Inner dim rule (inset 3px)
+  ctx.strokeStyle = GOLD_DIM;
   ctx.lineWidth = 1;
-  rr(ctx, x + 3.5, y + 3.5, w - 7, h - 7, Math.max(r - 3, 4));
+  rr(ctx, x + 3, y + 3, w - 6, h - 6, Math.max(r - 2, 2)); ctx.stroke();
+  ctx.restore();
+
+  // Marble wash over top-left
+  ctx.save();
+  const marbleGrad = ctx.createLinearGradient(x, y, x + w * 0.4, y + h * 0.3);
+  marbleGrad.addColorStop(0, MARBLE_BG);
+  marbleGrad.addColorStop(1, "rgba(242,237,215,0)");
+  ctx.fillStyle = marbleGrad;
+  rr(ctx, x, y, w, h, r); ctx.fill();
+  ctx.restore();
+}
+
+/** Draws a Greek key fret as a top border stripe. */
+function drawMeanderStripe(ctx: CanvasRenderingContext2D, x: number, y: number, w: number) {
+  const unit = 10; // width per repeating unit
+  const h    = 5;  // height of the fret
+
+  ctx.save();
+  ctx.strokeStyle = GOLD_FAINT;
+  ctx.lineWidth = 1;
+  ctx.lineCap = "square";
+  ctx.beginPath();
+
+  for (let cx = x; cx + unit <= x + w; cx += unit) {
+    const even = Math.floor((cx - x) / unit) % 2 === 0;
+    const topY  = y;
+    const botY  = y + h;
+    const midY  = y + h * 0.5;
+    const halfX = cx + unit * 0.5;
+    // L-hook alternating up / down
+    ctx.moveTo(cx,      even ? botY : topY);
+    ctx.lineTo(cx,      even ? topY : botY);
+    ctx.lineTo(halfX,   even ? topY : botY);
+    ctx.lineTo(halfX,   even ? midY : midY);
+    ctx.lineTo(cx + unit, even ? midY : midY);
+  }
+
   ctx.stroke();
   ctx.restore();
 }
+
+// ─── Bottom bar ───────────────────────────────────────────────────────────────
 
 function drawBottomBar(
   ctx: CanvasRenderingContext2D,
@@ -325,61 +418,141 @@ function drawBottomBar(
   t: number
 ) {
   const top = H - BAR_H;
-  const mid = top + BAR_H / 2;
+  /** Vertically center squad marker + resource row in the upper band (hints sit below). */
+  const rowMid = top + 24;
+  const hintY = top + 50;
 
-  // Background
+  // Background — lapis deep
   ctx.save();
-  ctx.fillStyle = "rgba(16, 9, 3, 0.92)";
+  ctx.fillStyle = LAPIS_DEEP;
   ctx.fillRect(0, top, W, BAR_H);
 
-  // Gold top edge
-  ctx.strokeStyle = "rgba(175, 120, 25, 0.75)";
+  // Gold top rule
+  ctx.strokeStyle = GOLD_BRIGHT;
   ctx.lineWidth = 1.5;
   ctx.beginPath(); ctx.moveTo(0, top); ctx.lineTo(W, top); ctx.stroke();
 
-  // Subtle warm inner line
-  ctx.strokeStyle = "rgba(255,170,50,0.10)";
+  // Second rule — dim
+  ctx.strokeStyle = GOLD_DIM;
   ctx.lineWidth = 1;
-  ctx.beginPath(); ctx.moveTo(0, top + 2); ctx.lineTo(W, top + 2); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(0, top + 3); ctx.lineTo(W, top + 3); ctx.stroke();
   ctx.restore();
 
-  // Player color — gold ring + inner color fill
+  // Meander pattern just below the top rule
+  drawMeanderStripe(ctx, 0, top + 5, W);
+
+  // Player color — angular diamond shape (laurel-wreath feel) + inner color
   const r = (color >> 16) & 0xff;
   const g = (color >> 8)  & 0xff;
   const b =  color        & 0xff;
+  const cx = 28;
+  const dotR = 11;
   ctx.save();
-  ctx.beginPath(); ctx.arc(26, mid, 13, 0, Math.PI * 2);
-  ctx.fillStyle = BORDER_GOLD; ctx.fill();
-  ctx.beginPath(); ctx.arc(26, mid, 9.5, 0, Math.PI * 2);
-  ctx.fillStyle = `rgb(${r},${g},${b})`; ctx.fill();
+  ctx.beginPath();
+  // Diamond outline
+  ctx.moveTo(cx, rowMid - dotR - 2);
+  ctx.lineTo(cx + dotR + 2, rowMid);
+  ctx.lineTo(cx, rowMid + dotR + 2);
+  ctx.lineTo(cx - dotR - 2, rowMid);
+  ctx.closePath();
+  ctx.fillStyle = GOLD_BRIGHT;
+  ctx.fill();
+  ctx.beginPath();
+  ctx.arc(cx, rowMid, dotR * 0.78, 0, Math.PI * 2);
+  ctx.fillStyle = `rgb(${r},${g},${b})`;
+  ctx.fill();
   ctx.restore();
 
-  // Squad count
+  // Squad count with Cinzel
   ctx.save();
-  ctx.font = "bold 14px system-ui,sans-serif";
-  ctx.fillStyle = TEXT_CREAM;
+  ctx.font = F_CINZEL_SM;
+  ctx.fillStyle = MARBLE_TEXT;
   ctx.textBaseline = "middle";
-  ctx.fillText(`${count} squad${count !== 1 ? "s" : ""}`, 48, mid);
+  ctx.letterSpacing = "0.5px";
+  ctx.fillText(`${count} ${count !== 1 ? "Squads" : "Squad"}`, 50, rowMid);
   ctx.restore();
 
-  drawResourcePill(ctx, 156, mid, "#8bcf57", "Food", resources.food, bounce.food, t);
-  drawResourcePill(ctx, 252, mid, "#c8954d", "Wood", resources.wood, bounce.wood, t);
-  drawResourcePill(ctx, 348, mid, "#f0d46f", "Gold", resources.gold, bounce.gold, t);
+  // Resource pills — spaced at 164, 268, 372
+  drawResourcePill(ctx, 164, rowMid, "#3D9E47", DIVINE_CYAN, "Biomass",  resources.biomass,  bounce.biomass,  t, "B");
+  drawResourcePill(ctx, 268, rowMid, "#8A7054", "#D4A84C",   "Material", resources.material, bounce.material, t, "M");
+  drawResourcePill(ctx, 372, rowMid, "#00A8CC", DIVINE_CYAN, "Compute",  resources.compute,  bounce.compute,  t, "C");
 
-  // Hint text (touch-friendly copy)
+  // Hint text — own row under pills so long copy never collides with resource boxes
   ctx.save();
-  ctx.font = "11px system-ui,sans-serif";
-  ctx.fillStyle = TEXT_MUTED;
+  ctx.font = F_BODY_XS;
+  ctx.fillStyle = MARBLE_MUTED;
   ctx.textBaseline = "middle";
-  ctx.textAlign = "right";
-  ctx.fillText(
+  ctx.textAlign = "center";
+  const hint =
     hasSelection
-      ? "tap ground → move  ·  double-tap → build"
-      : "tap unit/building → select  ·  double-tap ground → build  ·  drag → pan  ·  pinch → zoom",
-    W - 14, mid
-  );
+      ? "tap ground → move  ·  double-tap → construct"
+      : "tap warrior → select  ·  double-tap ground → construct  ·  drag → pan  ·  pinch → zoom";
+  ctx.fillText(hint, W * 0.5, hintY);
   ctx.restore();
 }
+
+function drawResourcePill(
+  ctx: CanvasRenderingContext2D,
+  x: number,
+  midY: number,
+  dotColor: string,
+  glowColor: string,
+  label: string,
+  value: number,
+  bounceT: number,
+  t: number,
+  _abbrev: string
+) {
+  const bounceAge = t - bounceT;
+  const yBounce   = bounceAge < 0.45 ? -Math.sin((bounceAge / 0.45) * Math.PI) * 6 : 0;
+  const y = midY - RESOURCE_H * 0.5 + yBounce;
+
+  ctx.save();
+
+  // Glow aura when bouncing
+  if (bounceAge < 0.45) {
+    const gAlpha = Math.sin((bounceAge / 0.45) * Math.PI) * 0.35;
+    ctx.shadowColor = glowColor;
+    ctx.shadowBlur = 14;
+    ctx.globalAlpha = 1 - (1 - gAlpha) * (1 - 1);
+  }
+
+  // Pill background
+  ctx.fillStyle = "rgba(10, 20, 42, 0.90)";
+  rr(ctx, x, y, RESOURCE_W, RESOURCE_H, 2);
+  ctx.fill();
+  ctx.shadowBlur = 0;
+
+  // Left accent stripe
+  ctx.fillStyle = dotColor;
+  rr(ctx, x, y, 3, RESOURCE_H, 2);
+  ctx.fill();
+
+  // Gold outline
+  ctx.strokeStyle = GOLD_DIM;
+  ctx.lineWidth = 1;
+  rr(ctx, x, y, RESOURCE_W, RESOURCE_H, 2); ctx.stroke();
+
+  const labelY = midY + yBounce - 6;
+  const valueY = midY + yBounce + 8;
+
+  // Label — Cinzel tiny caps
+  ctx.fillStyle = MARBLE_MUTED;
+  ctx.font = "600 8.5px 'Cinzel', serif";
+  ctx.textBaseline = "middle";
+  ctx.letterSpacing = "1px";
+  ctx.fillText(label.toUpperCase(), x + 10, labelY);
+
+  // Value — bold system font for readability
+  ctx.fillStyle = MARBLE_TEXT;
+  ctx.font = F_NUM_MD;
+  ctx.letterSpacing = "0px";
+  ctx.fillText(String(value), x + 10, valueY);
+
+  ctx.restore();
+}
+
+// ─── Selection card ────────────────────────────────────────────────────────────
 
 function drawSelectionCard(
   ctx: CanvasRenderingContext2D,
@@ -389,65 +562,77 @@ function drawSelectionCard(
   t: number,
   enterT: number
 ) {
-  const card      = selectionCardRect(W, H);
-  const close     = closeBtnRect(W, H);
+  const card       = selectionCardRect(W, H);
+  const close      = closeBtnRect(W, H);
   const actionRects = selectionActionRects(W, H, info.actions.length);
 
-  // Slide-in entrance animation
+  // Slide-in from bottom
   const cardAge  = Math.max(0, t - enterT);
-  const cardYOff = cardAge < 0.4 ? (1 - easeOutBack(Math.min(1, cardAge / 0.35))) * 38 : 0;
+  const cardYOff = cardAge < 0.4 ? (1 - easeOutBack(Math.min(1, cardAge / 0.35))) * 42 : 0;
 
   ctx.save();
   ctx.translate(0, cardYOff);
 
-  // Panel frame
   drawPanel(ctx, card.x, card.y, card.w, card.h, CARD_R);
 
-  // "◆ SELECTED ◆" header label
+  // "— CHOSEN —" header in Cinzel caps
   ctx.save();
-  ctx.font = "bold 9px system-ui,sans-serif";
-  ctx.fillStyle = "rgba(195,145,28,0.70)";
+  ctx.font = "600 8px 'Cinzel', serif";
+  ctx.fillStyle = GOLD_TEXT;
   ctx.textBaseline = "top";
-  ctx.letterSpacing = "2px";
-  ctx.fillText("◆  SELECTED  ◆", card.x + 12, card.y + 9);
+  ctx.letterSpacing = "3px";
+  ctx.fillText("—  CHOSEN  —", card.x + 12, card.y + 10);
   ctx.restore();
-
-  if (info.production) {
-    drawProductionPanel(ctx, card.x + 12, card.y + 74, card.w - 24, 24, info.production);
-  }
 
   // Gold divider
   ctx.save();
-  ctx.strokeStyle = "rgba(180,130,28,0.32)";
+  ctx.strokeStyle = GOLD_DIM;
   ctx.lineWidth = 1;
   ctx.beginPath();
-  ctx.moveTo(card.x + 10, card.y + 24);
-  ctx.lineTo(card.x + card.w - 10, card.y + 24);
+  ctx.moveTo(card.x + 10, card.y + 26);
+  ctx.lineTo(card.x + card.w - 10, card.y + 26);
   ctx.stroke();
   ctx.restore();
 
-  // Entity color dot — gold ring + player color
-  const dotX = card.x + 18;
-  const dotY = card.y + 48;
+  if (info.production) {
+    drawProductionPanel(ctx, card.x + 12, card.y + 82, card.w - 24, 26, info.production);
+  }
+
+  // Entity color — diamond shape
+  const dotX = card.x + 20;
+  const dotY = card.y + 54;
   const cr = (info.color >> 16) & 0xff;
   const cg = (info.color >> 8)  & 0xff;
   const cb =  info.color        & 0xff;
+  const dR = 10;
   ctx.save();
-  ctx.beginPath(); ctx.arc(dotX, dotY, 10, 0, Math.PI * 2);
-  ctx.fillStyle = BORDER_GOLD; ctx.fill();
-  ctx.beginPath(); ctx.arc(dotX, dotY, 7.5, 0, Math.PI * 2);
-  ctx.fillStyle = `rgb(${cr},${cg},${cb})`; ctx.fill();
+  ctx.beginPath();
+  ctx.moveTo(dotX, dotY - dR - 2);
+  ctx.lineTo(dotX + dR + 2, dotY);
+  ctx.lineTo(dotX, dotY + dR + 2);
+  ctx.lineTo(dotX - dR - 2, dotY);
+  ctx.closePath();
+  ctx.fillStyle = GOLD_BRIGHT;
+  ctx.fill();
+  ctx.beginPath();
+  ctx.arc(dotX, dotY, dR * 0.78, 0, Math.PI * 2);
+  ctx.fillStyle = `rgb(${cr},${cg},${cb})`;
+  ctx.fill();
   ctx.restore();
 
-  // Title + detail
+  // Title — Cinzel
   ctx.save();
   ctx.textBaseline = "middle";
-  ctx.font = "bold 15px system-ui,sans-serif";
-  ctx.fillStyle = TEXT_CREAM;
-  ctx.fillText(info.title, dotX + 17, dotY - 8);
-  ctx.font = "12px system-ui,sans-serif";
-  ctx.fillStyle = "rgba(255,215,130,0.62)";
-  ctx.fillText(info.detail, dotX + 17, dotY + 10);
+  ctx.font = F_CINZEL_LG;
+  ctx.fillStyle = MARBLE_TEXT;
+  ctx.letterSpacing = "0.5px";
+  ctx.fillText(info.title, dotX + 18, dotY - 9);
+
+  // Detail — smaller, muted
+  ctx.font = F_BODY_SM;
+  ctx.fillStyle = MARBLE_DIM;
+  ctx.letterSpacing = "0px";
+  ctx.fillText(info.detail, dotX + 18, dotY + 10);
   ctx.restore();
 
   // Health bar
@@ -455,95 +640,115 @@ function drawSelectionCard(
     ? info.actions.length * ACTION_SIZE + (info.actions.length - 1) * ACTION_GAP + 8
     : 0;
   const barX = card.x + 12;
-  const barY = card.y + CARD_H - 20;
+  const barY = card.y + CARD_H - 18;
   const barW = card.w - 24 - actionTotalW;
   const pct  = Math.max(0, Math.min(1, info.health / info.maxHealth));
 
   ctx.save();
   // Track
-  ctx.fillStyle = "rgba(0,0,0,0.38)";
-  rr(ctx, barX, barY, barW, 8, 4); ctx.fill();
-  ctx.strokeStyle = "rgba(175,130,28,0.40)";
+  ctx.fillStyle = "rgba(0,0,0,0.45)";
+  rr(ctx, barX, barY, barW, 7, 2); ctx.fill();
+  ctx.strokeStyle = GOLD_DIM;
   ctx.lineWidth = 1;
-  rr(ctx, barX, barY, barW, 8, 4); ctx.stroke();
-  // Fill — bright Snakebird colors
+  rr(ctx, barX, barY, barW, 7, 2); ctx.stroke();
+  // Fill
   if (pct > 0) {
-    const hue = pct > 0.5 ? 108 : pct > 0.25 ? 42 : 4;
-    // Danger pulse glow when health is critical
-    if (pct < 0.3) {
-      ctx.shadowColor = `rgba(255,30,10,${0.30 + 0.25 * Math.sin(t * 9)})`;
-      ctx.shadowBlur = 10;
+    let barColor: string;
+    if (pct > 0.5) {
+      barColor = "#2E9E42"; // healthy — forest green
+    } else if (pct > 0.25) {
+      barColor = "#C9911E"; // caution — Olympic gold
+    } else {
+      barColor = CRIMSON; // critical — Spartan red
+      if (pct < 0.3) {
+        ctx.shadowColor = `rgba(184,32,32,${0.3 + 0.25 * Math.sin(t * 9)})`;
+        ctx.shadowBlur = 10;
+      }
     }
-    ctx.fillStyle = `hsl(${hue},88%,50%)`;
-    rr(ctx, barX, barY, barW * pct, 8, 4); ctx.fill();
+    ctx.fillStyle = barColor;
+    rr(ctx, barX, barY, barW * pct, 7, 2); ctx.fill();
     ctx.shadowBlur = 0;
   }
   ctx.restore();
 
-  // Close button — bright red X
+  // Close button — crimson X
   ctx.save();
-  ctx.fillStyle = "rgba(205, 32, 32, 0.88)";
-  rr(ctx, close.x, close.y, close.w, close.h, 6); ctx.fill();
-  ctx.strokeStyle = "rgba(255,100,100,0.75)";
+  ctx.fillStyle = "rgba(140, 18, 18, 0.92)";
+  rr(ctx, close.x, close.y, close.w, close.h, 3); ctx.fill();
+  ctx.strokeStyle = "rgba(255, 80, 80, 0.65)";
   ctx.lineWidth = 1.5;
-  rr(ctx, close.x, close.y, close.w, close.h, 6); ctx.stroke();
-  const cx = close.x + close.w / 2;
-  const cy = close.y + close.h / 2;
-  ctx.strokeStyle = "#ffffff";
+  rr(ctx, close.x, close.y, close.w, close.h, 3); ctx.stroke();
+  const ccx = close.x + close.w / 2;
+  const ccy = close.y + close.h / 2;
+  ctx.strokeStyle = MARBLE_TEXT;
   ctx.lineWidth = 2;
   ctx.lineCap = "round";
   ctx.beginPath();
-  ctx.moveTo(cx - 5, cy - 5); ctx.lineTo(cx + 5, cy + 5);
-  ctx.moveTo(cx + 5, cy - 5); ctx.lineTo(cx - 5, cy + 5);
+  ctx.moveTo(ccx - 5, ccy - 5); ctx.lineTo(ccx + 5, ccy + 5);
+  ctx.moveTo(ccx + 5, ccy - 5); ctx.lineTo(ccx - 5, ccy + 5);
   ctx.stroke();
   ctx.restore();
 
-  // Action buttons — chunky Snakebird colors
+  // Action buttons
   for (let i = 0; i < info.actions.length; i++) {
     const action = info.actions[i];
     const rect   = actionRects[i];
-    const bg     = action.disabled ? "#484848" : action.active ? "#36b818" : "#1a58e0";
-    const border = action.disabled ? "#8e8e8e" : action.active ? "#7cf04a" : "#60a6ff";
-    const glow   = action.disabled ? "rgba(80,80,80,0.20)" : action.active ? "rgba(50,190,20,0.40)" : "rgba(26,80,220,0.40)";
+
+    let bg: string, border: string, glow: string;
+    if (action.disabled) {
+      bg = "#1C1C28"; border = "#3A3A50"; glow = "transparent";
+    } else if (action.active) {
+      bg = "#1A4A1A"; border = "#3ABB44"; glow = "rgba(40,180,50,0.38)";
+    } else {
+      bg = "#0E2250"; border = AZURE; glow = AZURE_GLOW;
+    }
 
     ctx.save();
     ctx.shadowColor = glow; ctx.shadowBlur = 12;
     ctx.fillStyle = bg;
-    rr(ctx, rect.x, rect.y, rect.w, rect.h, 12); ctx.fill();
+    rr(ctx, rect.x, rect.y, rect.w, rect.h, 3); ctx.fill();
     ctx.shadowBlur = 0;
-    ctx.strokeStyle = border; ctx.lineWidth = 2;
-    rr(ctx, rect.x, rect.y, rect.w, rect.h, 12); ctx.stroke();
+    ctx.strokeStyle = border; ctx.lineWidth = 1.5;
+    rr(ctx, rect.x, rect.y, rect.w, rect.h, 3); ctx.stroke();
     ctx.restore();
 
     ctx.save();
-    ctx.fillStyle = "#ffffff";
+    ctx.fillStyle = MARBLE_TEXT;
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
     if (info.actions.length > 1) {
-      ctx.font = "bold 10px system-ui,sans-serif";
-      ctx.fillText(action.label, rect.x + rect.w / 2, rect.y + 16);
-      ctx.font = "9px system-ui,sans-serif";
-      ctx.fillText(action.cost ? formatResourceCost(action.cost) : "", rect.x + rect.w / 2, rect.y + 31);
-      ctx.fillText(action.timeMs ? `${Math.ceil(action.timeMs / 1000)}s` : "", rect.x + rect.w / 2, rect.y + 44);
+      ctx.font = "600 9px 'Cinzel', serif";
+      ctx.letterSpacing = "0.5px";
+      ctx.fillText(action.label, rect.x + rect.w / 2, rect.y + 17);
+      ctx.font = F_BODY_XS;
+      ctx.letterSpacing = "0px";
+      ctx.fillStyle = MARBLE_DIM;
+      ctx.fillText(action.cost ? formatResourceCost(action.cost) : "", rect.x + rect.w / 2, rect.y + 33);
+      ctx.fillText(action.timeMs ? `${Math.ceil(action.timeMs / 1000)}s` : "", rect.x + rect.w / 2, rect.y + 46);
       if ((action.queueCount ?? 0) > 0) {
-        ctx.font = "bold 10px system-ui,sans-serif";
-        ctx.fillText(`x${action.queueCount}`, rect.x + rect.w / 2, rect.y + 55);
+        ctx.font = F_NUM_SM;
+        ctx.fillStyle = GOLD_TEXT;
+        ctx.fillText(`×${action.queueCount}`, rect.x + rect.w / 2, rect.y + 56);
       }
     } else {
-      ctx.font = "bold 26px system-ui,sans-serif";
-      ctx.fillText("+", rect.x + rect.w / 2, rect.y + 15);
-      ctx.font = "bold 10px system-ui,sans-serif";
-      ctx.fillText(action.label, rect.x + rect.w / 2, rect.y + 30);
-      ctx.font = "9px system-ui,sans-serif";
-      ctx.fillText(action.cost ? formatResourceCost(action.cost) : "", rect.x + rect.w / 2, rect.y + 43);
-      ctx.fillText(action.timeMs ? `${Math.ceil(action.timeMs / 1000)}s` : "", rect.x + rect.w / 2, rect.y + 54);
+      ctx.font = "bold 24px system-ui";
+      ctx.fillText("+", rect.x + rect.w / 2, rect.y + 16);
+      ctx.font = "600 9px 'Cinzel', serif";
+      ctx.letterSpacing = "0.5px";
+      ctx.fillText(action.label, rect.x + rect.w / 2, rect.y + 31);
+      ctx.font = F_BODY_XS;
+      ctx.letterSpacing = "0px";
+      ctx.fillStyle = MARBLE_DIM;
+      ctx.fillText(action.cost ? formatResourceCost(action.cost) : "", rect.x + rect.w / 2, rect.y + 44);
+      ctx.fillText(action.timeMs ? `${Math.ceil(action.timeMs / 1000)}s` : "", rect.x + rect.w / 2, rect.y + 55);
     }
     ctx.restore();
   }
 
-  // Close slide-in transform
-  ctx.restore();
+  ctx.restore(); // close slide-in transform
 }
+
+// ─── Build menu ───────────────────────────────────────────────────────────────
 
 function drawBuildMenu(
   ctx: CanvasRenderingContext2D,
@@ -553,7 +758,6 @@ function drawBuildMenu(
 ) {
   const { panel, items, anchor } = layout;
 
-  // Pop-in: scale from anchor point with spring overshoot
   const menuAge   = Math.max(0, t - openT);
   const menuScale = menuAge < 0.4 ? easeOutBack(Math.min(1, menuAge / 0.28)) : 1;
 
@@ -562,11 +766,11 @@ function drawBuildMenu(
   ctx.scale(menuScale, menuScale);
   ctx.translate(-anchor.x, -anchor.y);
 
-  // Amber dashed connector line
+  // Connector line — cyan dashed
   ctx.save();
-  ctx.strokeStyle = "rgba(200,140,28,0.55)";
+  ctx.strokeStyle = CYAN_DIM;
   ctx.lineWidth = 1.5;
-  ctx.setLineDash([4, 6]);
+  ctx.setLineDash([3, 5]);
   ctx.beginPath();
   ctx.moveTo(panel.x + panel.w / 2, panel.y + panel.h);
   ctx.lineTo(anchor.x, anchor.y);
@@ -574,116 +778,89 @@ function drawBuildMenu(
   ctx.setLineDash([]);
   ctx.restore();
 
-  // Panel frame
-  drawPanel(ctx, panel.x, panel.y, panel.w, panel.h, 14);
+  drawPanel(ctx, panel.x, panel.y, panel.w, panel.h, 4);
 
-  // "BUILD" gold title
+  // "CONSTRUCT" title in Cinzel
   ctx.save();
-  ctx.font = "bold 12px system-ui,sans-serif";
-  ctx.fillStyle = TEXT_GOLD;
+  ctx.font = "700 11px 'Cinzel', serif";
+  ctx.fillStyle = GOLD_TEXT;
   ctx.textBaseline = "middle";
   ctx.textAlign = "center";
-  ctx.letterSpacing = "3px";
-  ctx.fillText("BUILD", panel.x + panel.w / 2, panel.y + 17);
+  ctx.letterSpacing = "4px";
+  ctx.fillText("CONSTRUCT", panel.x + panel.w / 2, panel.y + 19);
   ctx.restore();
 
-  // Divider under title
+  // Divider with small laurel dots
   ctx.save();
-  ctx.strokeStyle = "rgba(175,128,28,0.36)";
+  ctx.strokeStyle = GOLD_DIM;
   ctx.lineWidth = 1;
   ctx.beginPath();
-  ctx.moveTo(panel.x + 14, panel.y + 28);
-  ctx.lineTo(panel.x + panel.w - 14, panel.y + 28);
+  ctx.moveTo(panel.x + 14, panel.y + 32);
+  ctx.lineTo(panel.x + panel.w - 14, panel.y + 32);
   ctx.stroke();
+  // Small diamond accents at divider ends
+  drawDiamond(ctx, panel.x + 14, panel.y + 32, 3, GOLD_BRIGHT);
+  drawDiamond(ctx, panel.x + panel.w - 14, panel.y + 32, 3, GOLD_BRIGHT);
   ctx.restore();
 
   for (let i = 0; i < items.length; i++) {
     const item  = items[i];
-    const pulse = 1 + 0.04 * Math.sin(t * 3.2 + i * 1.1);
-    const glowA = 0.45 + 0.28 * Math.sin(t * 2.6 + i * 1.3);
+    const pulse = 1 + 0.035 * Math.sin(t * 2.8 + i * 1.1);
+    const glowA = 0.4 + 0.25 * Math.sin(t * 2.2 + i * 1.3);
 
     ctx.save();
-    // Colored card with glow
+    // Card with gradient — dark base to lighter at top
     ctx.shadowColor = item.glow;
-    ctx.shadowBlur  = 14 * glowA;
-    ctx.fillStyle   = item.color;
-    rr(ctx, item.rect.x, item.rect.y, item.rect.w, item.rect.h, 12); ctx.fill();
+    ctx.shadowBlur  = 12 * glowA;
+
+    const grad = ctx.createLinearGradient(item.rect.x, item.rect.y, item.rect.x, item.rect.y + item.rect.h);
+    grad.addColorStop(0, item.colorLight);
+    grad.addColorStop(1, item.color);
+    ctx.fillStyle = grad;
+    rr(ctx, item.rect.x, item.rect.y, item.rect.w, item.rect.h, 3); ctx.fill();
     ctx.shadowBlur = 0;
 
-    // Snakebird top-highlight sheen
-    const shine = ctx.createLinearGradient(item.rect.x, item.rect.y, item.rect.x, item.rect.y + item.rect.h * 0.55);
-    shine.addColorStop(0, "rgba(255,255,255,0.24)");
+    // Top marble sheen
+    const shine = ctx.createLinearGradient(item.rect.x, item.rect.y, item.rect.x, item.rect.y + item.rect.h * 0.5);
+    shine.addColorStop(0, "rgba(255,255,255,0.18)");
     shine.addColorStop(1, "rgba(255,255,255,0)");
     ctx.fillStyle = shine;
-    rr(ctx, item.rect.x, item.rect.y, item.rect.w, item.rect.h, 12); ctx.fill();
+    rr(ctx, item.rect.x, item.rect.y, item.rect.w, item.rect.h, 3); ctx.fill();
 
-    // White border
-    ctx.strokeStyle = "rgba(255,255,255,0.30)";
+    // Border
+    ctx.strokeStyle = "rgba(255,255,255,0.22)";
     ctx.lineWidth = 1.5;
-    rr(ctx, item.rect.x, item.rect.y, item.rect.w, item.rect.h, 12); ctx.stroke();
+    rr(ctx, item.rect.x, item.rect.y, item.rect.w, item.rect.h, 3); ctx.stroke();
     ctx.restore();
 
-    // Icon (pulsing scale)
+    // Icon — pulsing
     ctx.save();
-    ctx.font = `${28 * pulse}px system-ui`;
+    ctx.font = `${30 * pulse}px system-ui`;
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
-    ctx.fillText(item.icon, item.rect.x + item.rect.w / 2, item.rect.y + item.rect.h * 0.42);
+    ctx.fillText(item.icon, item.rect.x + item.rect.w / 2, item.rect.y + item.rect.h * 0.40);
     ctx.restore();
 
-    // Label
+    // Label in Cinzel
     ctx.save();
-    ctx.fillStyle = "#ffffff";
-    ctx.font = "bold 11px system-ui,sans-serif";
+    ctx.fillStyle = MARBLE_TEXT;
+    ctx.font = "600 10px 'Cinzel', serif";
     ctx.textAlign = "center";
     ctx.textBaseline = "bottom";
-    ctx.shadowColor = "rgba(0,0,0,0.6)"; ctx.shadowBlur = 4;
+    ctx.letterSpacing = "0.5px";
+    ctx.shadowColor = "rgba(0,0,0,0.7)"; ctx.shadowBlur = 5;
     ctx.fillText(item.label, item.rect.x + item.rect.w / 2, item.rect.y + item.rect.h - 18);
-    ctx.font = "10px system-ui,sans-serif";
-    ctx.fillText(formatResourceCost(item.cost), item.rect.x + item.rect.w / 2, item.rect.y + item.rect.h - 5);
+    ctx.font = F_BODY_XS;
+    ctx.letterSpacing = "0px";
+    ctx.fillStyle = MARBLE_DIM;
+    ctx.fillText(formatResourceCost(item.cost), item.rect.x + item.rect.w / 2, item.rect.y + item.rect.h - 4);
     ctx.restore();
   }
 
-  // Close pop-in transform
-  ctx.restore();
+  ctx.restore(); // close pop-in
 }
 
-function drawResourcePill(
-  ctx: CanvasRenderingContext2D,
-  x: number,
-  midY: number,
-  color: string,
-  label: string,
-  value: number,
-  bounceT: number,
-  t: number
-) {
-  const bounceAge = t - bounceT;
-  const yBounce   = bounceAge < 0.45 ? -Math.sin((bounceAge / 0.45) * Math.PI) * 5 : 0;
-  const y = midY - RESOURCE_PILL_H * 0.5 + yBounce;
-  ctx.save();
-  ctx.fillStyle = "rgba(42,26,10,0.95)";
-  rr(ctx, x, y, RESOURCE_PILL_W, RESOURCE_PILL_H, 14);
-  ctx.fill();
-  ctx.strokeStyle = "rgba(255,214,120,0.2)";
-  ctx.lineWidth = 1;
-  rr(ctx, x, y, RESOURCE_PILL_W, RESOURCE_PILL_H, 14);
-  ctx.stroke();
-
-  const cy = midY + yBounce;
-  ctx.fillStyle = color;
-  ctx.beginPath();
-  ctx.arc(x + 16, cy, 6, 0, Math.PI * 2);
-  ctx.fill();
-
-  ctx.fillStyle = TEXT_CREAM;
-  ctx.font = "bold 10px system-ui,sans-serif";
-  ctx.textBaseline = "middle";
-  ctx.fillText(label, x + 28, cy - 6);
-  ctx.font = "bold 12px system-ui,sans-serif";
-  ctx.fillText(String(value), x + 28, cy + 7);
-  ctx.restore();
-}
+// ─── Production panel ─────────────────────────────────────────────────────────
 
 function drawProductionPanel(
   ctx: CanvasRenderingContext2D,
@@ -694,69 +871,109 @@ function drawProductionPanel(
   production: NonNullable<SelectionInfo["production"]>
 ) {
   ctx.save();
-  ctx.fillStyle = "rgba(0,0,0,0.28)";
-  rr(ctx, x, y, w, h, 8);
-  ctx.fill();
-  ctx.strokeStyle = "rgba(255,205,90,0.18)";
+  ctx.fillStyle = "rgba(0,0,0,0.32)";
+  rr(ctx, x, y, w, h, 2); ctx.fill();
+  ctx.strokeStyle = GOLD_DIM;
   ctx.lineWidth = 1;
-  rr(ctx, x, y, w, h, 8);
-  ctx.stroke();
+  rr(ctx, x, y, w, h, 2); ctx.stroke();
 
-  const barX = x + 122;
-  const barY = y + 7;
-  const barW = Math.max(60, w - 206);
+  const barX = x + 128;
+  const barY = y + 8;
+  const barW = Math.max(60, w - 210);
 
-  ctx.fillStyle = TEXT_CREAM;
-  ctx.font = "bold 10px system-ui,sans-serif";
+  ctx.fillStyle = MARBLE_TEXT;
+  ctx.font = "600 9px 'Cinzel', serif";
+  ctx.letterSpacing = "0.5px";
   ctx.textBaseline = "middle";
-  ctx.fillText(`${production.label} x${production.queueCount}`, x + 10, y + h / 2);
+  ctx.fillText(`${production.label.toUpperCase()} ×${production.queueCount}`, x + 10, y + h / 2);
   ctx.textAlign = "right";
+  ctx.letterSpacing = "0px";
+  ctx.font = F_NUM_SM;
   ctx.fillText(`${Math.ceil(production.remainingMs / 1000)}s`, x + w - 10, y + h / 2);
 
-  ctx.fillStyle = "rgba(28,18,6,0.85)";
-  rr(ctx, barX, barY, barW, 10, 5);
-  ctx.fill();
-  ctx.fillStyle = "#e5b949";
-  rr(ctx, barX, barY, barW * production.progress, 10, 5);
-  ctx.fill();
+  ctx.fillStyle = "rgba(22,14,6,0.88)";
+  rr(ctx, barX, barY, barW, 10, 2); ctx.fill();
+
+  // Progress bar — divine cyan
+  ctx.fillStyle = DIVINE_CYAN;
+  ctx.shadowColor = CYAN_GLOW;
+  ctx.shadowBlur = 6;
+  rr(ctx, barX, barY, barW * production.progress, 10, 2); ctx.fill();
+  ctx.shadowBlur = 0;
   ctx.restore();
 }
 
+// ─── Tile card ────────────────────────────────────────────────────────────────
+
 function drawTileCard(ctx: CanvasRenderingContext2D, W: number, H: number, tile: TileView) {
   const card = selectionCardRect(W, H);
-  drawPanel(ctx, card.x, card.y, card.w, 96, CARD_R);
+  drawPanel(ctx, card.x, card.y, card.w, 100, CARD_R);
 
   ctx.save();
-  ctx.fillStyle = "rgba(195,145,28,0.70)";
-  ctx.font = "bold 9px system-ui,sans-serif";
+
+  // Header
+  ctx.fillStyle = GOLD_TEXT;
+  ctx.font = "600 8px 'Cinzel', serif";
   ctx.textBaseline = "top";
-  ctx.fillText("◆  TILE  ◆", card.x + 12, card.y + 9);
+  ctx.letterSpacing = "3px";
+  ctx.fillText("—  TERRAIN  —", card.x + 12, card.y + 10);
 
-  ctx.fillStyle = TEXT_CREAM;
-  ctx.font = "bold 16px system-ui,sans-serif";
-  ctx.fillText(tile.isMountain ? "Mountain Tile" : tile.wood > 0 ? "Forest Tile" : "Grass Tile", card.x + 14, card.y + 34);
+  // Divider
+  ctx.strokeStyle = GOLD_DIM;
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(card.x + 10, card.y + 26); ctx.lineTo(card.x + card.w - 10, card.y + 26);
+  ctx.stroke();
 
-  ctx.fillStyle = "rgba(255,215,130,0.68)";
-  ctx.font = "12px system-ui,sans-serif";
-  ctx.fillText(`Wood: ${tile.wood} / ${tile.maxWood}`, card.x + 14, card.y + 56);
+  // Tile name
+  ctx.fillStyle = MARBLE_TEXT;
+  ctx.font = F_CINZEL_LG;
+  ctx.letterSpacing = "0.5px";
+  ctx.textBaseline = "top";
+  ctx.fillText(
+    tile.isMountain ? "Mountain" : tile.material > 0 ? "Forest" : "Grassland",
+    card.x + 14, card.y + 34
+  );
+
+  // Stats
+  ctx.fillStyle = MARBLE_DIM;
+  ctx.font = F_BODY_SM;
+  ctx.letterSpacing = "0px";
+  if (!tile.isMountain && tile.material > 0) {
+    ctx.fillText(`Material: ${tile.material} / ${tile.maxMaterial}`, card.x + 14, card.y + 60);
+  }
   ctx.fillText(
     tile.isMountain
-      ? `Blocked terrain  •  Height: ${tile.height.toFixed(2)}`
-      : `Gold: ${tile.gold}  •  Height: ${tile.height.toFixed(2)}`,
+      ? `Impassable terrain  ·  Elevation: ${tile.height.toFixed(2)}`
+      : `Elevation: ${tile.height.toFixed(2)}  ·  Compute: ${tile.compute}`,
     card.x + 14,
-    card.y + 74
+    card.y + 78
   );
   ctx.restore();
 }
 
-/** Easing with slight overshoot (0 → 1). */
+// ─── Utilities ────────────────────────────────────────────────────────────────
+
+function drawDiamond(ctx: CanvasRenderingContext2D, x: number, y: number, size: number, color: string) {
+  ctx.save();
+  ctx.fillStyle = color;
+  ctx.beginPath();
+  ctx.moveTo(x, y - size);
+  ctx.lineTo(x + size, y);
+  ctx.lineTo(x, y + size);
+  ctx.lineTo(x - size, y);
+  ctx.closePath();
+  ctx.fill();
+  ctx.restore();
+}
+
 function easeOutBack(t: number): number {
   const c1 = 1.70158;
   const c3 = c1 + 1;
   return 1 + c3 * (t - 1) ** 3 + c1 * (t - 1) ** 2;
 }
 
-function rr(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, r = 8) {
+function rr(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, r = 4) {
   ctx.beginPath();
   ctx.roundRect(x, y, w, h, r);
 }

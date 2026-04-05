@@ -81,17 +81,17 @@ export class ForestRenderer {
   }
 
   public sync(tiles: TileView[]) {
-    const signature = tiles.map((tile) => `${tile.key}:${tile.wood}`).join("|");
+    const signature = tiles.map((tile) => `${tile.key}:${tile.material}`).join("|");
     if (signature === this.lastSignature) return;
     this.lastSignature = signature;
 
     const transformsByVariant: InstancedTransform[][] = [[], [], []];
     for (const tile of tiles) {
-      if (tile.tileType !== TileType.FOREST || tile.maxWood <= 0 || tile.wood <= 0) continue;
+      if (tile.tileType !== TileType.FOREST || tile.maxMaterial <= 0 || tile.material <= 0) continue;
       const center = getTileCenter(tile.tx, tile.tz);
-      const fill = Math.max(0.15, tile.wood / tile.maxWood);
+      const fill = Math.max(0.15, tile.material / tile.maxMaterial);
       const treeCount = Math.max(1, Math.round(2 + fill * 8));
-      const tileSeed = tile.tx * 9283.11 + tile.tz * 6899.37 + tile.maxWood * 0.17;
+      const tileSeed = tile.tx * 9283.11 + tile.tz * 6899.37 + tile.maxMaterial * 0.17;
 
       for (let i = 0; i < treeCount; i++) {
         const a = treeJitter(tileSeed, i * 4 + 1);

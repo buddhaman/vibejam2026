@@ -18,8 +18,8 @@ import { createTerrainMesh, type TileView } from "./terrain.js";
 import { attachDevNetworkPerf } from "./network-perf.js";
 
 const CAM = {
-  polarFromDownDeg: 45,
-  azimuthDeg: 0,
+  polarFromDownDeg: 55,
+  azimuthDeg: 45,
   distanceStart: 95,
   distanceMin: 52,
   distanceMax: 185,
@@ -52,11 +52,11 @@ export function startRender(game: Game) {
   const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
   renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
   renderer.setSize(window.innerWidth, window.innerHeight);
-  renderer.setClearColor(0xb8e4ff, 1);
+  renderer.setClearColor(0x8eb37b, 1);
   renderer.shadowMap.enabled = true;
   renderer.shadowMap.type = THREE.VSMShadowMap;
   renderer.toneMapping = THREE.ACESFilmicToneMapping;
-  renderer.toneMappingExposure = 0.92;
+  renderer.toneMappingExposure = 0.84;
 
   const { scene } = game;
 
@@ -66,9 +66,9 @@ export function startRender(game: Game) {
   scene.environmentIntensity = SCENE_ENVIRONMENT_INTENSITY;
   pmrem.dispose();
 
-  scene.fog = new THREE.Fog(0xb8e4ff, 180, 620);
-  scene.add(new THREE.AmbientLight(0xfff6d8, 0.34));
-  scene.add(new THREE.HemisphereLight(0xeaf8ff, 0x9bc67a, 1.02));
+  scene.fog = new THREE.Fog(0x9eb17a, 210, 520);
+  scene.add(new THREE.AmbientLight(0xfff2cf, 0.26));
+  scene.add(new THREE.HemisphereLight(0xdde7ba, 0x61743d, 0.9));
 
   const dir = new THREE.DirectionalLight(0xfff3d6, SUN.intensity);
   dir.castShadow = true;

@@ -18,9 +18,9 @@ export const UnitType = {
 export type UnitType = (typeof UnitType)[keyof typeof UnitType];
 
 export type ResourceCost = {
-  food: number;
-  wood: number;
-  gold: number;
+  biomass: number;
+  material: number;
+  compute: number;
 };
 
 export const TileType = {
@@ -73,9 +73,9 @@ export const GAME_RULES = {
   DEFAULT_BLOB_HEALTH: 100,
   DEFAULT_UNIT_COUNT: 40,
   START_BLOB_SPACING: 10,
-  START_FOOD: 500,
-  START_WOOD: 300,
-  START_GOLD: 200,
+  START_BIOMASS: 500,
+  START_MATERIAL: 300,
+  START_COMPUTE: 200,
   BARRACKS_HEALTH: 200,
   TOWER_HEALTH: 300,
   TOWN_CENTER_HEALTH: 950,
@@ -92,10 +92,10 @@ const TILE_CENTER_MAX = GAME_RULES.WORLD_MAX - TILE_HALF;
 
 export const BUILDING_RULES = {
   [BuildingType.BARRACKS]: {
-    label: "Barracks",
+    label: "Stratégion",
     health: GAME_RULES.BARRACKS_HEALTH,
     buildable: true,
-    cost: { food: 0, wood: 175, gold: 0 },
+    cost: { biomass: 0, material: 175, compute: 0 },
     footprintWidth: GAME_RULES.TILE_SIZE,
     footprintDepth: GAME_RULES.TILE_SIZE,
     selectionWidth: GAME_RULES.TILE_SIZE,
@@ -105,10 +105,10 @@ export const BUILDING_RULES = {
     producibleUnits: [UnitType.WARBAND],
   },
   [BuildingType.TOWER]: {
-    label: "Tower",
+    label: "Pyrgos",
     health: GAME_RULES.TOWER_HEALTH,
     buildable: true,
-    cost: { food: 0, wood: 125, gold: 50 },
+    cost: { biomass: 0, material: 125, compute: 50 },
     footprintWidth: GAME_RULES.TILE_SIZE * 0.78,
     footprintDepth: GAME_RULES.TILE_SIZE * 0.78,
     selectionWidth: GAME_RULES.TILE_SIZE * 0.86,
@@ -118,10 +118,10 @@ export const BUILDING_RULES = {
     producibleUnits: [],
   },
   [BuildingType.TOWN_CENTER]: {
-    label: "Town Center",
+    label: "Agora",
     health: GAME_RULES.TOWN_CENTER_HEALTH,
     buildable: false,
-    cost: { food: 0, wood: 0, gold: 0 },
+    cost: { biomass: 0, material: 0, compute: 0 },
     footprintWidth: GAME_RULES.TILE_SIZE * 1.36,
     footprintDepth: GAME_RULES.TILE_SIZE * 1.36,
     selectionWidth: GAME_RULES.TILE_SIZE * 1.4,
@@ -134,18 +134,18 @@ export const BUILDING_RULES = {
 
 export const UNIT_RULES = {
   [UnitType.VILLAGER]: {
-    label: "Villager",
-    detail: "Gatherer",
-    cost: { food: 50, wood: 0, gold: 0 },
+    label: "Helot",
+    detail: "Resource Gatherer",
+    cost: { biomass: 50, material: 0, compute: 0 },
     trainTimeMs: 9000,
     health: 55,
     unitCount: 1,
     visualScale: 0.82,
   },
   [UnitType.WARBAND]: {
-    label: "Warband",
-    detail: "Heavy infantry squad",
-    cost: { food: 80, wood: 0, gold: 35 },
+    label: "Phalanx",
+    detail: "Elite hoplites",
+    cost: { biomass: 80, material: 0, compute: 35 },
     trainTimeMs: 12000,
     health: GAME_RULES.DEFAULT_BLOB_HEALTH,
     unitCount: 12,
@@ -167,21 +167,21 @@ export function canBuildingProduceUnit(buildingType: BuildingType, unitType: Uni
 
 export function formatResourceCost(cost: ResourceCost): string {
   const parts: string[] = [];
-  if (cost.food > 0) parts.push(`${cost.food}F`);
-  if (cost.wood > 0) parts.push(`${cost.wood}W`);
-  if (cost.gold > 0) parts.push(`${cost.gold}G`);
+  if (cost.biomass > 0) parts.push(`${cost.biomass}B`);
+  if (cost.material > 0) parts.push(`${cost.material}M`);
+  if (cost.compute > 0) parts.push(`${cost.compute}C`);
   return parts.length > 0 ? parts.join("  ") : "Free";
 }
 
 export function canAfford(resources: ResourceCost, cost: ResourceCost): boolean {
-  return resources.food >= cost.food && resources.wood >= cost.wood && resources.gold >= cost.gold;
+  return resources.biomass >= cost.biomass && resources.material >= cost.material && resources.compute >= cost.compute;
 }
 
 export function subtractCost(resources: ResourceCost, cost: ResourceCost): ResourceCost {
   return {
-    food: resources.food - cost.food,
-    wood: resources.wood - cost.wood,
-    gold: resources.gold - cost.gold,
+    biomass: resources.biomass - cost.biomass,
+    material: resources.material - cost.material,
+    compute: resources.compute - cost.compute,
   };
 }
 
@@ -258,6 +258,27 @@ export function getTileCenter(tx: number, tz: number) {
   };
 }
 
+export function forEachTileKeyUnderFootprint(
+  centerX: number,
+  centerZ: number,
+  footprintW: number,
+  footprintD: number,
+  visit: (key: string) => void
+) {
+  const minX = centerX - footprintW * 0.5;
+  const maxX = centerX + footprintW * 0.5;
+  const minZ = centerZ - footprintD * 0.5;
+  const maxZ = centerZ + footprintD * 0.5;
+  const a = getTileCoordsFromWorld(minX + 0.001, minZ + 0.001);
+  const b = getTileCoordsFromWorld(maxX - 0.001, maxZ - 0.001);
+
+  for (let tz = a.tz; tz <= b.tz; tz++) {
+    for (let tx = a.tx; tx <= b.tx; tx++) {
+      visit(getTileKey(tx, tz));
+    }
+  }
+}
+
 export function getTileHeight(tx: number, tz: number, seed: number): number {
   const noise = fbm2D(tx * 0.22 + 11.1, tz * 0.22 - 5.4, seed, 3);
   return 0.55 + noise * 0.55;
@@ -273,9 +294,9 @@ export type GeneratedTile = {
   h01: number;
   height: number;
   tileType: TileType;
-  wood: number;
-  maxWood: number;
-  gold: number;
+  material: number;
+  maxMaterial: number;
+  compute: number;
   isMountain: boolean;
   canBuild: boolean;
   canWalk: boolean;
@@ -297,7 +318,7 @@ export function generateTile(tx: number, tz: number, seed: number): GeneratedTil
   const forestField = fbm2D(tx * 0.12 + 40.2, tz * 0.12 - 13.4, seed + 1700, 4);
   const clusterField = fbm2D(tx * 0.36 - 8.1, tz * 0.36 + 19.6, seed + 8100, 3);
   const hasForest = !isMountain && forestField > 0.6 && clusterField > 0.52;
-  const maxWood = hasForest
+  const maxMaterial = hasForest
     ? Math.round(
         GAME_RULES.FOREST_WOOD_MAX * (0.45 + (forestField - 0.6) * 1.1 + (clusterField - 0.52) * 0.8)
       )
@@ -313,9 +334,9 @@ export function generateTile(tx: number, tz: number, seed: number): GeneratedTil
     h01,
     height,
     tileType: hasForest ? TileType.FOREST : TileType.GRASS,
-    wood: Math.max(0, maxWood),
-    maxWood: Math.max(0, maxWood),
-    gold: 0,
+    material: Math.max(0, maxMaterial),
+    maxMaterial: Math.max(0, maxMaterial),
+    compute: 0,
     isMountain,
     canBuild: !isMountain,
     canWalk: !isMountain,

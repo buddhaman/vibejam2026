@@ -47,9 +47,9 @@ export type TileData = {
   h01: number;
   height: number;
   tileType: TileType;
-  wood: number;
-  maxWood: number;
-  gold: number;
+  material: number;
+  maxMaterial: number;
+  compute: number;
   isMountain: boolean;
   canBuild: boolean;
   canWalk: boolean;
@@ -62,9 +62,11 @@ export type TileChunkMessage = {
   tiles: TileData[];
 };
 
-/** Server → Client: a single tile whose mutable state changed (wood / gold). */
+/** Server → Client: partial tile patch (only fields present are applied). */
 export type TileUpdateMessage = {
   key: string;
-  wood: number;
-  gold: number;
+  material?: number;
+  compute?: number;
+  canWalk?: boolean;
+  canBuild?: boolean;
 };

@@ -14,6 +14,7 @@ import {
   getUnitRules,
   getSquadRadius,
   getWorldTileCount,
+  forEachTileKeyUnderFootprint,
   isBuildingType,
   isSquadSpread,
   isUnitType,
@@ -49,6 +50,8 @@ export class BattleRoom extends Room<{ state: GameState }> {
   /** Plain tile data — NOT in schema, streamed on demand. */
   private tileData = new Map<string, TileData>();
   private tileChunks: TileData[][] = [];
+  /** How many building footprints cover each tile (any owner). */
+  private buildingTileOcc = new Map<string, number>();
 
   onCreate() {
     this.state.terrainSeed = Math.floor(Math.random() * 0xffffffff);
@@ -116,8 +119,14 @@ export class BattleRoom extends Room<{ state: GameState }> {
       const player = this.state.players.get(client.sessionId);
       const buildingRules = getBuildingRules(msg.type);
       const snapped = snapWorldToTileCenter(msg.worldX, msg.worldZ);
-      const targetTile = this.getTileAtWorld(snapped.x, snapped.z);
-      if (!player || !buildingRules.buildable || !canAfford(player, buildingRules.cost) || !targetTile?.canBuild) return;
+      if (
+        !player ||
+        !buildingRules.buildable ||
+        !canAfford(player, buildingRules.cost) ||
+        !this.footprintIsBuildable(snapped.x, snapped.z, buildingRules.footprintWidth, buildingRules.footprintDepth)
+      ) {
+        return;
+      }
 
       const building = new Building();
       building.id = makeId("bld");
@@ -130,6 +139,7 @@ export class BattleRoom extends Room<{ state: GameState }> {
       spendPlayerResources(player, buildingRules.cost);
 
       this.state.buildings.set(building.id, building);
+      this.addBuildingFootprint(building);
     });
 
     this.onMessage(MessageType.TRAIN, (client, raw) => {
@@ -158,9 +168,9 @@ export class BattleRoom extends Room<{ state: GameState }> {
     const taken: number[] = [];
     this.state.players.forEach((p) => taken.push(p.color));
     player.color = assignPlayerPaletteColor(taken);
-    player.food = CONFIG.START_FOOD;
-    player.wood = CONFIG.START_WOOD;
-    player.gold = CONFIG.START_GOLD;
+    player.biomass = CONFIG.START_BIOMASS;
+    player.material = CONFIG.START_MATERIAL;
+    player.compute = CONFIG.START_COMPUTE;
     this.state.players.set(client.sessionId, player);
 
     const playerIndex = this.getNextTownCenterIndex();
@@ -182,7 +192,11 @@ export class BattleRoom extends Room<{ state: GameState }> {
     this.state.buildings.forEach((b, id) => {
       if (b.ownerId === sid) buildingIds.push(id as string);
     });
-    for (const id of buildingIds) this.state.buildings.delete(id);
+    for (const id of buildingIds) {
+      const b = this.state.buildings.get(id);
+      if (b) this.removeBuildingFootprint(b);
+      this.state.buildings.delete(id);
+    }
   }
 
   private tick(dtMs: number) {
@@ -247,10 +261,13 @@ export class BattleRoom extends Room<{ state: GameState }> {
   }
 
   private spawnTownCenter(ownerId: string, playerIndex: number): Building {
+    const tcRules = getBuildingRules(BuildingType.TOWN_CENTER);
     const angle = playerIndex * 1.63;
     const radius = 54;
     const snapped = this.findNearestBuildableTileCenter(
-      snapWorldToTileCenter(Math.cos(angle) * radius, Math.sin(angle) * radius)
+      snapWorldToTileCenter(Math.cos(angle) * radius, Math.sin(angle) * radius),
+      tcRules.footprintWidth,
+      tcRules.footprintDepth
     );
 
     const townCenter = new Building();
@@ -261,6 +278,7 @@ export class BattleRoom extends Room<{ state: GameState }> {
     townCenter.buildingType = BuildingType.TOWN_CENTER;
     townCenter.health = getBuildingRules(BuildingType.TOWN_CENTER).health;
     this.state.buildings.set(townCenter.id, townCenter);
+    this.addBuildingFootprint(townCenter);
     return townCenter;
   }
 
@@ -277,27 +295,84 @@ export class BattleRoom extends Room<{ state: GameState }> {
     return this.tileData.get(getTileKey(tx, tz)) ?? null;
   }
 
-  private findNearestBuildableTileCenter(center: { x: number; z: number }) {
+  private findNearestBuildableTileCenter(
+    center: { x: number; z: number },
+    footprintW: number,
+    footprintD: number
+  ): { x: number; z: number } {
     const start = getTileCoordsFromWorld(center.x, center.z);
-    const direct = this.tileData.get(getTileKey(start.tx, start.tz));
-    if (direct?.canBuild) return center;
+    const nTiles = getWorldTileCount();
+    const tryTile = (tx: number, tz: number) => {
+      if (tx < 0 || tz < 0 || tx >= nTiles || tz >= nTiles) return null;
+      const cx = tx * CONFIG.TILE_SIZE + CONFIG.WORLD_MIN + CONFIG.TILE_SIZE * 0.5;
+      const cz = tz * CONFIG.TILE_SIZE + CONFIG.WORLD_MIN + CONFIG.TILE_SIZE * 0.5;
+      return this.footprintIsBuildable(cx, cz, footprintW, footprintD) ? { x: cx, z: cz } : null;
+    };
+
+    const direct = tryTile(start.tx, start.tz);
+    if (direct) return direct;
 
     for (let radius = 1; radius <= 6; radius++) {
       for (let dz = -radius; dz <= radius; dz++) {
         for (let dx = -radius; dx <= radius; dx++) {
           const tx = start.tx + dx;
           const tz = start.tz + dz;
-          const tile = this.tileData.get(getTileKey(tx, tz));
-          if (!tile?.canBuild) continue;
-          return {
-            x: tile.tx * CONFIG.TILE_SIZE + CONFIG.WORLD_MIN + CONFIG.TILE_SIZE * 0.5,
-            z: tile.tz * CONFIG.TILE_SIZE + CONFIG.WORLD_MIN + CONFIG.TILE_SIZE * 0.5,
-          };
+          const hit = tryTile(tx, tz);
+          if (hit) return hit;
         }
       }
     }
 
     return center;
+  }
+
+  /** True if every tile under the footprint is open terrain for building (no mountains, no structure). */
+  private footprintIsBuildable(centerX: number, centerZ: number, footprintW: number, footprintD: number): boolean {
+    let ok = true;
+    forEachTileKeyUnderFootprint(centerX, centerZ, footprintW, footprintD, (key) => {
+      const t = this.tileData.get(key);
+      if (!t?.canBuild) ok = false;
+    });
+    return ok;
+  }
+
+  private addBuildingFootprint(building: Building): void {
+    const r = getBuildingRules(building.buildingType);
+    const touched = new Set<string>();
+    forEachTileKeyUnderFootprint(building.x, building.y, r.footprintWidth, r.footprintDepth, (key) => {
+      this.buildingTileOcc.set(key, (this.buildingTileOcc.get(key) ?? 0) + 1);
+      touched.add(key);
+    });
+    for (const key of touched) this.syncTileNavForKey(key);
+  }
+
+  private removeBuildingFootprint(building: Building): void {
+    const r = getBuildingRules(building.buildingType);
+    const touched = new Set<string>();
+    forEachTileKeyUnderFootprint(building.x, building.y, r.footprintWidth, r.footprintDepth, (key) => {
+      const n = (this.buildingTileOcc.get(key) ?? 0) - 1;
+      if (n <= 0) this.buildingTileOcc.delete(key);
+      else this.buildingTileOcc.set(key, n);
+      touched.add(key);
+    });
+    for (const key of touched) this.syncTileNavForKey(key);
+  }
+
+  private syncTileNavForKey(key: string): void {
+    const tile = this.tileData.get(key);
+    if (!tile) return;
+    const terrainOk = !tile.isMountain;
+    const occ = this.buildingTileOcc.get(key) ?? 0;
+    const nextWalk = terrainOk && occ === 0;
+    const nextBuild = terrainOk && occ === 0;
+    if (tile.canWalk === nextWalk && tile.canBuild === nextBuild) return;
+    tile.canWalk = nextWalk;
+    tile.canBuild = nextBuild;
+    this.broadcast(MessageType.TILE_UPDATE, {
+      key,
+      canWalk: nextWalk,
+      canBuild: nextBuild,
+    } satisfies TileUpdateMessage);
   }
 
   private initTiles() {
@@ -325,8 +400,8 @@ export class BattleRoom extends Room<{ state: GameState }> {
     if (!tile) return;
     this.broadcast(MessageType.TILE_UPDATE, {
       key,
-      wood: tile.wood,
-      gold: tile.gold,
+      material: tile.material,
+      compute: tile.compute,
     } satisfies TileUpdateMessage);
   }
 
@@ -385,7 +460,7 @@ function clamp(v: number, min: number, max: number) {
 
 function spendPlayerResources(player: ResourceCost & Player, cost: ResourceCost) {
   const next = subtractCost(player, cost);
-  player.food = next.food;
-  player.wood = next.wood;
-  player.gold = next.gold;
+  player.biomass = next.biomass;
+  player.material = next.material;
+  player.compute = next.compute;
 }

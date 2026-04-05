@@ -6,9 +6,9 @@ export class Player extends Schema {
   @type("string") sessionId: string = "";
   /** Packed RGB for client tint */
   @type("uint32") color: number = 0xffffff;
-  @type("uint16") food: number = 0;
-  @type("uint16") wood: number = 0;
-  @type("uint16") gold: number = 0;
+  @type("uint16") biomass: number = 0;
+  @type("uint16") material: number = 0;
+  @type("uint16") compute: number = 0;
 }
 
 export class Blob extends Schema {

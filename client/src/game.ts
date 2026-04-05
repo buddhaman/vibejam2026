@@ -77,7 +77,11 @@ export class Game {
 
   private _onTileUpdate(msg: TileUpdateMessage): void {
     const tile = this._tiles.get(msg.key);
-    if (tile) { tile.wood = msg.wood; tile.gold = msg.gold; }
+    if (!tile) return;
+    if (typeof msg.material === "number") tile.material = msg.material;
+    if (typeof msg.compute === "number") tile.compute = msg.compute;
+    if (typeof msg.canWalk === "boolean") tile.canWalk = msg.canWalk;
+    if (typeof msg.canBuild === "boolean") tile.canBuild = msg.canBuild;
   }
 
   public getPlayerColor(ownerId: string): number {
@@ -218,12 +222,12 @@ export class Game {
 
   public getMyResources(): ResourceCost {
     const player = this.room.state.players.get(this.room.sessionId) as
-      | { food?: number; wood?: number; gold?: number }
+      | { biomass?: number; material?: number; compute?: number }
       | undefined;
     return {
-      food: player?.food ?? 0,
-      wood: player?.wood ?? 0,
-      gold: player?.gold ?? 0,
+      biomass: player?.biomass ?? 0,
+      material: player?.material ?? 0,
+      compute: player?.compute ?? 0,
     };
   }
 

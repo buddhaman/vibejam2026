@@ -11,9 +11,9 @@ export type TileView = {
   h01: number;
   height: number;
   tileType: number;
-  wood: number;
-  maxWood: number;
-  gold: number;
+  material: number;
+  maxMaterial: number;
+  compute: number;
   isMountain: boolean;
   canBuild: boolean;
   canWalk: boolean;
@@ -48,13 +48,14 @@ function getGroundVertexColor(vx: number, vz: number, height: number) {
   const dry = valueNoise2D(vx * 0.17 + 30.7, vz * 0.17 - 14.2, 4103);
   const lush = valueNoise2D(vx * 0.09 - 8.4, vz * 0.09 + 18.6, 9201);
   const forestBoost = valueNoise2D(vx * 0.13 + 4.8, vz * 0.13 - 21.4, 1777);
-  const baseHue = 0.19 + lush * 0.11 - dry * 0.08 + forestBoost * 0.02;
-  const baseSat = 0.32 + lush * 0.24 - dry * 0.12;
-  const baseLight = 0.46 + dry * 0.11 + lush * 0.02 + Math.min(0.04, height * 0.0025);
+  const patch = valueNoise2D(vx * 0.28 - 41.3, vz * 0.28 + 7.9, 6121);
+  const baseHue = 0.16 + lush * 0.13 - dry * 0.11 + forestBoost * 0.035 - patch * 0.02;
+  const baseSat = 0.46 + lush * 0.28 - dry * 0.14 + patch * 0.06;
+  const baseLight = 0.29 + dry * 0.19 + lush * 0.05 + patch * 0.05 + Math.min(0.04, height * 0.0025);
 
   const rockHue = 0.08 + dry * 0.015;
   const rockSat = 0.05 + dry * 0.04;
-  const rockLight = 0.24 + Math.min(0.24, height * 0.012);
+  const rockLight = 0.2 + Math.min(0.22, height * 0.011);
 
   const mountainBlend = smoothstep(
     Math.max(0, Math.min(1, (height - GAME_RULES.MOUNTAIN_THRESHOLD * 0.58) / (GAME_RULES.MOUNTAIN_THRESHOLD * 0.62)))
@@ -115,8 +116,8 @@ export function createTerrainMesh(tiles: Iterable<TileView>): THREE.Mesh {
     const c11 = getGroundVertexColor(tile.tx + 1, tile.tz + 1, tile.h11);
     const c01 = getGroundVertexColor(tile.tx, tile.tz + 1, tile.h01);
     const dirt = tile.isMountain
-      ? new THREE.Color().setHSL(0.08, 0.08, 0.11 + Math.min(0.18, tile.height * 0.009))
-      : new THREE.Color().setHSL(0.085 + tile.height * 0.002, 0.34, 0.25 + tile.height * 0.008);
+      ? new THREE.Color().setHSL(0.08, 0.08, 0.09 + Math.min(0.15, tile.height * 0.008))
+      : new THREE.Color().setHSL(0.08 + tile.height * 0.0015, 0.42, 0.19 + tile.height * 0.007);
     const dirtDark = dirt.clone().multiplyScalar(0.82);
 
     const t00 = new THREE.Vector3(center.x - half, tile.h00, center.z - half);
