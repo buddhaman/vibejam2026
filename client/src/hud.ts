@@ -486,7 +486,7 @@ function drawBottomBar(
   const hint =
     hasSelection
       ? "tap ground → move  ·  double-tap → construct"
-      : "tap warrior → select  ·  double-tap ground → construct  ·  drag → pan  ·  pinch → zoom";
+      : "tap warrior → select  ·  double-tap ground → construct  ·  drag → pan  ·  arrows → orbit  ·  pinch → zoom";
   ctx.fillText(hint, W * 0.5, hintY);
   ctx.restore();
 }

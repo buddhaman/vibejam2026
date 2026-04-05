@@ -2,6 +2,7 @@ import * as THREE from "three";
 import { RoomEnvironment } from "three/examples/jsm/environments/RoomEnvironment.js";
 import { GAME_RULES, snapWorldToTileCenter } from "../../shared/game-rules.js";
 import type { Game } from "./game.js";
+import { BeamDrawer } from "./beam-drawer.js";
 import {
   addMoveMarker,
   createHudCanvas,
@@ -21,11 +22,16 @@ import { attachDevNetworkPerf } from "./network-perf.js";
 const CAM = {
   polarFromDownDeg: 55,
   azimuthDeg: 45,
-  distanceStart: 95,
-  distanceMin: 52,
-  distanceMax: 185,
+  distanceStart: 165,
+  distanceMin: 26,
+  distanceMax: 420,
   zoomFactor: 1.035,
   fov: 52,
+  /** Orbit / tilt with arrow keys (deg/s). */
+  arrowYawDegPerSec: 78,
+  arrowPitchDegPerSec: 52,
+  polarPitchMinDeg: 38,
+  polarPitchMaxDeg: 72,
 } as const;
 
 const SUN = {
@@ -67,7 +73,7 @@ export function startRender(game: Game) {
   scene.environmentIntensity = SCENE_ENVIRONMENT_INTENSITY;
   pmrem.dispose();
 
-  scene.fog = new THREE.Fog(0xb8e4ff, 180, 620);
+  scene.fog = new THREE.Fog(0xb8e4ff, 380, 1280);
   scene.add(new THREE.AmbientLight(0xfff6d8, 0.34));
   scene.add(new THREE.HemisphereLight(0xeaf8ff, 0x9bc67a, 1.02));
 
@@ -93,19 +99,25 @@ export function startRender(game: Game) {
   scene.add(forest.root);
   const datacenters = new DatacenterRenderer();
   scene.add(datacenters.root);
+  const beamDrawer = new BeamDrawer(4096);
+  scene.add(beamDrawer.root);
+  game.setBeamDrawer(beamDrawer);
 
-  const camera = new THREE.PerspectiveCamera(CAM.fov, window.innerWidth / Math.max(window.innerHeight, 1), 0.5, 2500);
+  const camera = new THREE.PerspectiveCamera(CAM.fov, window.innerWidth / Math.max(window.innerHeight, 1), 0.5, 5200);
   camera.up.set(0, 1, 0);
 
   let distance: number = CAM.distanceStart;
+  let polarFromDownDeg = CAM.polarFromDownDeg;
+  let azimuthDeg = CAM.azimuthDeg;
   const myTownCenter = game.getMyTownCenterPosition();
   const lookTarget = new THREE.Vector3(myTownCenter?.x ?? 0, 0, myTownCenter?.z ?? 0);
   const shadowCenter = new THREE.Vector3();
   const shadowOffset = SUN.direction.clone().multiplyScalar(SUN.shadowDistance);
+  const arrowKeysHeld = new Set<string>();
 
   function placeCamera() {
-    const theta = THREE.MathUtils.degToRad(CAM.polarFromDownDeg);
-    const phi = THREE.MathUtils.degToRad(CAM.azimuthDeg);
+    const theta = THREE.MathUtils.degToRad(polarFromDownDeg);
+    const phi = THREE.MathUtils.degToRad(azimuthDeg);
     camera.position.set(
       lookTarget.x + distance * Math.sin(theta) * Math.sin(phi),
       lookTarget.y + distance * Math.cos(theta),
@@ -121,10 +133,53 @@ export function startRender(game: Game) {
   }
   placeCamera();
 
+  function onCameraKeyDown(e: KeyboardEvent) {
+    if (
+      e.key === "ArrowLeft" ||
+      e.key === "ArrowRight" ||
+      e.key === "ArrowUp" ||
+      e.key === "ArrowDown"
+    ) {
+      arrowKeysHeld.add(e.key);
+      e.preventDefault();
+    }
+  }
+
+  function onCameraKeyUp(e: KeyboardEvent) {
+    arrowKeysHeld.delete(e.key);
+  }
+
+  function applyCameraArrowKeys(dt: number) {
+    if (arrowKeysHeld.size === 0) return;
+    if (arrowKeysHeld.has("ArrowLeft")) azimuthDeg -= CAM.arrowYawDegPerSec * dt;
+    if (arrowKeysHeld.has("ArrowRight")) azimuthDeg += CAM.arrowYawDegPerSec * dt;
+    if (arrowKeysHeld.has("ArrowUp")) {
+      polarFromDownDeg = THREE.MathUtils.clamp(
+        polarFromDownDeg - CAM.arrowPitchDegPerSec * dt,
+        CAM.polarPitchMinDeg,
+        CAM.polarPitchMaxDeg
+      );
+    }
+    if (arrowKeysHeld.has("ArrowDown")) {
+      polarFromDownDeg = THREE.MathUtils.clamp(
+        polarFromDownDeg + CAM.arrowPitchDegPerSec * dt,
+        CAM.polarPitchMinDeg,
+        CAM.polarPitchMaxDeg
+      );
+    }
+    placeCamera();
+  }
+
+  window.addEventListener("keydown", onCameraKeyDown);
+  window.addEventListener("keyup", onCameraKeyUp);
+
   const raycaster = new THREE.Raycaster();
   const ndcV = new THREE.Vector2();
   const groundPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
   const hit = new THREE.Vector3();
+  const terrainHits: THREE.Intersection<THREE.Object3D>[] = [];
+  const hitNormal = new THREE.Vector3();
+  const hitNormalMatrix = new THREE.Matrix3();
 
   const hudCanvas = createHudCanvas();
   const hud = createHudState();
@@ -151,6 +206,16 @@ export function startRender(game: Game) {
   function groundHit(clientX: number, clientY: number): THREE.Vector3 | null {
     ndcV.set((clientX / window.innerWidth) * 2 - 1, -(clientY / window.innerHeight) * 2 + 1);
     raycaster.setFromCamera(ndcV, camera);
+    terrainHits.length = 0;
+    raycaster.intersectObject(terrain, false, terrainHits);
+    hitNormalMatrix.getNormalMatrix(terrain.matrixWorld);
+    for (const terrainHit of terrainHits) {
+      if (!terrainHit.face) continue;
+      hitNormal.copy(terrainHit.face.normal).applyMatrix3(hitNormalMatrix).normalize();
+      if (hitNormal.y > 0.35) {
+        return terrainHit.point.clone();
+      }
+    }
     return raycaster.ray.intersectPlane(groundPlane, hit) ? hit.clone() : null;
   }
 
@@ -167,6 +232,12 @@ export function startRender(game: Game) {
     cancelPendingMove();
     game.clearSelection();
     hud.buildMenu.visible = false;
+  }
+
+  function getMoveBlockedMessage(tile: TileView | null): string {
+    if (!tile) return "Units can't walk there";
+    if (tile.isMountain) return "Units can't walk on mountains";
+    return "Units can't walk through blocked tiles";
   }
 
   function handleClick(clientX: number, clientY: number) {
@@ -214,7 +285,7 @@ export function startRender(game: Game) {
       return;
     }
 
-    const point = raycaster.ray.intersectPlane(groundPlane, hit) ? hit.clone() : null;
+    const point = groundHit(clientX, clientY);
     if (!point) return;
 
     const now = performance.now();
@@ -229,7 +300,7 @@ export function startRender(game: Game) {
         pendingMoveTimer = null;
         const tile = game.getTileAtWorld(tx, tz);
         if (!tile?.canWalk) {
-          showWarning(hud, "Units can't walk on mountains", performance.now() / 1000);
+          showWarning(hud, getMoveBlockedMessage(tile), performance.now() / 1000);
           return;
         }
         game.sendMoveIntent(tx, tz);
@@ -326,10 +397,13 @@ export function startRender(game: Game) {
     const now = performance.now();
     const dt = (now - lastFrameTime) / 1000;
     lastFrameTime = now;
+    applyCameraArrowKeys(dt);
     game.sync();
+    game.clearBeamDraws();
     forest.sync(game.getTilesOrdered());
     datacenters.sync(game.getTilesOrdered());
     for (const entity of game.entities) entity.render(dt);
+    game.flushBeamDraws();
     dir.shadow.camera.updateProjectionMatrix();
     renderer.render(scene, camera);
 

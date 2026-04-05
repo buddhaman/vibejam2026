@@ -25,6 +25,7 @@ import {
 } from "../../shared/protocol.js";
 import { BlobEntity } from "./blob-entity.js";
 import { BuildingEntity } from "./building-entity.js";
+import type { BeamDrawer } from "./beam-drawer.js";
 import { type TileView } from "./terrain.js";
 
 export class Game {
@@ -33,6 +34,7 @@ export class Game {
   public entities: Entity[] = [];
   public selectedEntityId: string | null = null;
   public selectedTileKey: string | null = null;
+  private beamDrawer: BeamDrawer | null = null;
 
   private _tiles = new Map<string, TileView>();
   private _tilesOrdered: TileView[] = [];
@@ -288,6 +290,22 @@ export class Game {
 
   public isMyBlob(ownerId: string): boolean {
     return ownerId === this.room.sessionId;
+  }
+
+  public setBeamDrawer(beamDrawer: BeamDrawer): void {
+    this.beamDrawer = beamDrawer;
+  }
+
+  public clearBeamDraws(): void {
+    this.beamDrawer?.beginFrame();
+  }
+
+  public drawBeam(from: THREE.Vector3, to: THREE.Vector3, width: number, depth: number, color: THREE.Color): void {
+    this.beamDrawer?.drawBeam(from, to, width, depth, color);
+  }
+
+  public flushBeamDraws(): void {
+    this.beamDrawer?.finishFrame();
   }
 
   public sendMoveIntent(targetX: number, targetY: number): void {

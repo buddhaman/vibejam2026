@@ -56,8 +56,9 @@ export function isSquadSpread(value: unknown): value is SquadSpread {
 
 export const GAME_RULES = {
   TICK_HZ: 20,
-  WORLD_MIN: -120,
-  WORLD_MAX: 120,
+  /** World span is 4× the original 20×20 tile map (now 40×40); bounds drive server clamp + tile grid. */
+  WORLD_MIN: -240,
+  WORLD_MAX: 240,
   TILE_SIZE: 12,
   BLOB_MOVE_SPEED: 11,
   BLOB_ACCELERATION: 10,
@@ -85,7 +86,7 @@ export const GAME_RULES = {
   DATACENTER_COMPUTE_MAX: 300,
   /** At least this many data-center tiles per world (non-mountain permitting). */
   DATACENTER_MIN_SITES_PER_WORLD: 2,
-  /** Cap for rare extra sites beyond the minimum (mean ≈ 2 on a 400-tile map). */
+  /** Cap for rare extra sites beyond the minimum (mean ≈ 2 on a full-sized map). */
   DATACENTER_MAX_SITES_PER_WORLD: 3,
   /** Target Chebyshev tile gap between sites; lowered only if the map cannot fit the count. */
   DATACENTER_MIN_CHEBYSHEV_TILES: 8,

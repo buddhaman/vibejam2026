@@ -266,7 +266,7 @@ export class BattleRoom extends Room<{ state: GameState }> {
   private spawnTownCenter(ownerId: string, playerIndex: number): Building {
     const tcRules = getBuildingRules(BuildingType.TOWN_CENTER);
     const angle = playerIndex * 1.63;
-    const radius = 54;
+    const radius = (CONFIG.WORLD_MAX - CONFIG.WORLD_MIN) * 0.225;
     const snapped = this.findNearestBuildableTileCenter(
       snapWorldToTileCenter(Math.cos(angle) * radius, Math.sin(angle) * radius),
       tcRules.footprintWidth,
