@@ -81,9 +81,21 @@ export const GAME_RULES = {
   TOWN_CENTER_HEALTH: 950,
   MAX_BUILDINGS_PER_PLAYER: 8,
   FOREST_WOOD_MAX: 320,
-  TERRAIN_HEIGHT_THRESHOLD: 0.645,
-  TERRAIN_HEIGHT_SCALE: 115,
-  MOUNTAIN_THRESHOLD: 9.5,
+  /** Per-site compute vein size; placement is global + spaced (see `assignDatacenterSites`). */
+  DATACENTER_COMPUTE_MAX: 300,
+  /** At least this many data-center tiles per world (non-mountain permitting). */
+  DATACENTER_MIN_SITES_PER_WORLD: 2,
+  /** Cap for rare extra sites beyond the minimum (mean ≈ 2 on a 400-tile map). */
+  DATACENTER_MAX_SITES_PER_WORLD: 3,
+  /** Target Chebyshev tile gap between sites; lowered only if the map cannot fit the count. */
+  DATACENTER_MIN_CHEBYSHEV_TILES: 8,
+  /** Per second while a villager squad is idle on a resource tile. */
+  VILLAGER_GATHER_MATERIAL_PER_SEC: 34,
+  VILLAGER_GATHER_COMPUTE_PER_SEC: 28,
+  TERRAIN_HEIGHT_THRESHOLD: 0.62,
+  TERRAIN_HEIGHT_SCALE: 140,
+  MOUNTAIN_THRESHOLD: 7.2,
+  BUILDABLE_TILE_HEIGHT_MAX: 0.35,
 } as const;
 
 const TILE_HALF = GAME_RULES.TILE_SIZE * 0.5;
@@ -297,6 +309,7 @@ export type GeneratedTile = {
   material: number;
   maxMaterial: number;
   compute: number;
+  maxCompute: number;
   isMountain: boolean;
   canBuild: boolean;
   canWalk: boolean;
@@ -305,16 +318,23 @@ export type GeneratedTile = {
 export function getTerrainVertexHeight(vx: number, vz: number, seed: number): number {
   const noise = fbm2D(vx * 0.085 + 11.1, vz * 0.085 - 5.4, seed, 3);
   if (noise < GAME_RULES.TERRAIN_HEIGHT_THRESHOLD) return 0;
-  return (noise - GAME_RULES.TERRAIN_HEIGHT_THRESHOLD) * GAME_RULES.TERRAIN_HEIGHT_SCALE;
+  const t = (noise - GAME_RULES.TERRAIN_HEIGHT_THRESHOLD) / (1 - GAME_RULES.TERRAIN_HEIGHT_THRESHOLD);
+  return Math.pow(Math.max(0, t), 2.35) * GAME_RULES.TERRAIN_HEIGHT_SCALE;
 }
 
 export function generateTile(tx: number, tz: number, seed: number): GeneratedTile {
-  const h00 = getTerrainVertexHeight(tx, tz, seed);
-  const h10 = getTerrainVertexHeight(tx + 1, tz, seed);
-  const h11 = getTerrainVertexHeight(tx + 1, tz + 1, seed);
-  const h01 = getTerrainVertexHeight(tx, tz + 1, seed);
-  const height = (h00 + h10 + h11 + h01) * 0.25;
-  const isMountain = height > GAME_RULES.MOUNTAIN_THRESHOLD;
+  const rawH00 = getTerrainVertexHeight(tx, tz, seed);
+  const rawH10 = getTerrainVertexHeight(tx + 1, tz, seed);
+  const rawH11 = getTerrainVertexHeight(tx + 1, tz + 1, seed);
+  const rawH01 = getTerrainVertexHeight(tx, tz + 1, seed);
+  const rawHeight = (rawH00 + rawH10 + rawH11 + rawH01) * 0.25;
+  const isMountain = rawHeight > GAME_RULES.MOUNTAIN_THRESHOLD;
+  const isBuildFlat = rawHeight <= GAME_RULES.BUILDABLE_TILE_HEIGHT_MAX;
+  const h00 = rawH00;
+  const h10 = rawH10;
+  const h11 = rawH11;
+  const h01 = rawH01;
+  const height = rawHeight;
   const forestField = fbm2D(tx * 0.12 + 40.2, tz * 0.12 - 13.4, seed + 1700, 4);
   const clusterField = fbm2D(tx * 0.36 - 8.1, tz * 0.36 + 19.6, seed + 8100, 3);
   const hasForest = !isMountain && forestField > 0.6 && clusterField > 0.52;
@@ -337,10 +357,88 @@ export function generateTile(tx: number, tz: number, seed: number): GeneratedTil
     material: Math.max(0, maxMaterial),
     maxMaterial: Math.max(0, maxMaterial),
     compute: 0,
+    maxCompute: 0,
     isMountain,
-    canBuild: !isMountain,
+    canBuild: !isMountain && isBuildFlat,
     canWalk: !isMountain,
   };
+}
+
+function seededFraction(seed: number, salt: number): number {
+  const x = Math.sin(seed * 12.9898 + salt * 78.233 + salt * salt * 0.001) * 43758.5453123;
+  return x - Math.floor(x);
+}
+
+function shuffleTilesInPlace(tiles: GeneratedTile[], seed: number): void {
+  for (let i = tiles.length - 1; i > 0; i--) {
+    const j = Math.floor(seededFraction(seed + i * 167, i) * (i + 1));
+    const t = tiles[i]!;
+    tiles[i] = tiles[j]!;
+    tiles[j] = t;
+  }
+}
+
+function tileChebyshev(a: GeneratedTile, b: GeneratedTile): number {
+  return Math.max(Math.abs(a.tx - b.tx), Math.abs(a.tz - b.tz));
+}
+
+function datacenterSiteTarget(seed: number, eligibleCount: number): number {
+  const cap = Math.min(GAME_RULES.DATACENTER_MAX_SITES_PER_WORLD, eligibleCount);
+  if (cap < GAME_RULES.DATACENTER_MIN_SITES_PER_WORLD) return cap;
+  const u = seededFraction(seed, 501);
+  if (u < 0.1 && cap >= 3) return 3;
+  return 2;
+}
+
+/**
+ * After all tiles exist: pick a small, well-separated set of non-mountain tiles for compute sites.
+ * No noise blobs — sparse, seed-stable, at least {@link GAME_RULES.DATACENTER_MIN_SITES_PER_WORLD} sites.
+ */
+function greedySpacedSites(eligible: GeneratedTile[], wantCount: number, sep: number): GeneratedTile[] {
+  const picked: GeneratedTile[] = [];
+  for (const t of eligible) {
+    if (picked.length >= wantCount) break;
+    if (picked.every((c) => tileChebyshev(c, t) >= sep)) picked.push(t);
+  }
+  return picked;
+}
+
+export function assignDatacenterSites(tiles: Map<string, GeneratedTile>, seed: number): void {
+  const eligible: GeneratedTile[] = [];
+  tiles.forEach((t) => {
+    if (!t.isMountain) eligible.push(t);
+  });
+
+  const target = datacenterSiteTarget(seed, eligible.length);
+  if (target <= 0 || eligible.length === 0) return;
+
+  shuffleTilesInPlace(eligible, seed ^ 0x6f4c_29f3);
+
+  const maxSep = GAME_RULES.DATACENTER_MIN_CHEBYSHEV_TILES;
+  let chosen: GeneratedTile[] = [];
+
+  for (let sep = maxSep; sep >= 1; sep--) {
+    chosen = greedySpacedSites(eligible, target, sep);
+    if (chosen.length >= target) break;
+  }
+
+  if (chosen.length < GAME_RULES.DATACENTER_MIN_SITES_PER_WORLD) {
+    for (let sep = maxSep; sep >= 1; sep--) {
+      chosen = greedySpacedSites(eligible, GAME_RULES.DATACENTER_MIN_SITES_PER_WORLD, sep);
+      if (chosen.length >= GAME_RULES.DATACENTER_MIN_SITES_PER_WORLD) break;
+    }
+  }
+
+  if (chosen.length < GAME_RULES.DATACENTER_MIN_SITES_PER_WORLD) {
+    chosen = eligible.slice(0, GAME_RULES.DATACENTER_MIN_SITES_PER_WORLD);
+  }
+
+  for (const t of chosen) {
+    const fr = seededFraction(seed + t.tx * 3_571 + t.tz * 8_923, 1);
+    const amount = Math.round(GAME_RULES.DATACENTER_COMPUTE_MAX * (0.52 + fr * 0.42));
+    t.compute = Math.max(1, amount);
+    t.maxCompute = t.compute;
+  }
 }
 
 export function getSquadArea(unitCount: number): number {

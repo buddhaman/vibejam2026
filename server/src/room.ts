@@ -7,6 +7,7 @@ import {
   UnitType,
   canBuildingProduceUnit,
   canAfford,
+  assignDatacenterSites,
   generateTile,
   getTileCoordsFromWorld,
   getTileKey,
@@ -14,6 +15,7 @@ import {
   getUnitRules,
   getSquadRadius,
   getWorldTileCount,
+  GAME_RULES,
   forEachTileKeyUnderFootprint,
   isBuildingType,
   isSquadSpread,
@@ -218,6 +220,7 @@ export class BattleRoom extends Room<{ state: GameState }> {
         blob.y = blob.targetY;
         blob.vx = 0;
         blob.vy = 0;
+        this.tryVillagerGather(blob, dt);
         continue;
       }
 
@@ -361,10 +364,11 @@ export class BattleRoom extends Room<{ state: GameState }> {
   private syncTileNavForKey(key: string): void {
     const tile = this.tileData.get(key);
     if (!tile) return;
-    const terrainOk = !tile.isMountain;
+    const terrainWalkOk = !tile.isMountain;
+    const terrainBuildOk = !tile.isMountain && tile.height <= GAME_RULES.BUILDABLE_TILE_HEIGHT_MAX;
     const occ = this.buildingTileOcc.get(key) ?? 0;
-    const nextWalk = terrainOk && occ === 0;
-    const nextBuild = terrainOk && occ === 0;
+    const nextWalk = terrainWalkOk && occ === 0;
+    const nextBuild = terrainBuildOk && occ === 0;
     if (tile.canWalk === nextWalk && tile.canBuild === nextBuild) return;
     tile.canWalk = nextWalk;
     tile.canBuild = nextBuild;
@@ -377,12 +381,26 @@ export class BattleRoom extends Room<{ state: GameState }> {
 
   private initTiles() {
     const count = getWorldTileCount();
+    let datacenterTiles = 0;
+    const datacenterSampleKeys: string[] = [];
     for (let tz = 0; tz < count; tz++) {
       for (let tx = 0; tx < count; tx++) {
         const t = generateTile(tx, tz, this.state.terrainSeed);
         this.tileData.set(t.key, t);
       }
     }
+    assignDatacenterSites(this.tileData, this.state.terrainSeed);
+    this.tileData.forEach((t) => {
+      if (t.maxCompute > 0) {
+        datacenterTiles++;
+        if (datacenterSampleKeys.length < 6) datacenterSampleKeys.push(t.key);
+      }
+    });
+    console.log(
+      `[room] Terrain ready: terrainSeed=${this.state.terrainSeed} datacenterTiles=${datacenterTiles} sampleKeys=${datacenterSampleKeys.join(
+        ","
+      ) || "(none)"}`
+    );
     // Pre-slice into fixed-size chunks for fast streaming
     const all = Array.from(this.tileData.values());
     this.tileChunks = [];
@@ -403,6 +421,35 @@ export class BattleRoom extends Room<{ state: GameState }> {
       material: tile.material,
       compute: tile.compute,
     } satisfies TileUpdateMessage);
+  }
+
+  /** Villagers idle on a tile harvest material (forest) or compute (data center). */
+  private tryVillagerGather(blob: Blob, dt: number): void {
+    if (blob.unitType !== UnitType.VILLAGER) return;
+    const player = this.state.players.get(blob.ownerId);
+    if (!player) return;
+    const tile = this.getTileAtWorld(blob.x, blob.y);
+    if (!tile || tile.isMountain) return;
+
+    let gathered = false;
+    if (tile.material > 0) {
+      const n = Math.min(
+        tile.material,
+        Math.max(1, Math.round(CONFIG.VILLAGER_GATHER_MATERIAL_PER_SEC * dt))
+      );
+      tile.material -= n;
+      player.material += n;
+      gathered = true;
+    } else if (tile.compute > 0) {
+      const n = Math.min(
+        tile.compute,
+        Math.max(1, Math.round(CONFIG.VILLAGER_GATHER_COMPUTE_PER_SEC * dt))
+      );
+      tile.compute -= n;
+      player.compute += n;
+      gathered = true;
+    }
+    if (gathered) this.broadcastTileUpdate(tile.key);
   }
 
   private stepBuildingProduction(building: Building, dtMs: number) {

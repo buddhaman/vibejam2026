@@ -14,6 +14,7 @@ export type TileView = {
   material: number;
   maxMaterial: number;
   compute: number;
+  maxCompute: number;
   isMountain: boolean;
   canBuild: boolean;
   canWalk: boolean;
@@ -49,9 +50,9 @@ function getGroundVertexColor(vx: number, vz: number, height: number) {
   const lush = valueNoise2D(vx * 0.09 - 8.4, vz * 0.09 + 18.6, 9201);
   const forestBoost = valueNoise2D(vx * 0.13 + 4.8, vz * 0.13 - 21.4, 1777);
   const patch = valueNoise2D(vx * 0.28 - 41.3, vz * 0.28 + 7.9, 6121);
-  const baseHue = 0.16 + lush * 0.13 - dry * 0.11 + forestBoost * 0.035 - patch * 0.02;
-  const baseSat = 0.46 + lush * 0.28 - dry * 0.14 + patch * 0.06;
-  const baseLight = 0.29 + dry * 0.19 + lush * 0.05 + patch * 0.05 + Math.min(0.04, height * 0.0025);
+  const baseHue = 0.12 + lush * 0.18 - dry * 0.16 + forestBoost * 0.045 - patch * 0.03;
+  const baseSat = 0.7 + lush * 0.2 - dry * 0.12 + patch * 0.08;
+  const baseLight = 0.2 + dry * 0.24 + lush * 0.03 + patch * 0.06 + Math.min(0.03, height * 0.002);
 
   const rockHue = 0.08 + dry * 0.015;
   const rockSat = 0.05 + dry * 0.04;
@@ -98,10 +99,43 @@ function pushQuad(
   pushTri(positions, colors, a, c, d, ca, cc, cd);
 }
 
+function interpolateTriangleHeight(
+  px: number,
+  pz: number,
+  a: { x: number; z: number; y: number },
+  b: { x: number; z: number; y: number },
+  c: { x: number; z: number; y: number }
+): number {
+  const denom = (b.z - c.z) * (a.x - c.x) + (c.x - b.x) * (a.z - c.z);
+  if (Math.abs(denom) < 1e-6) {
+    return (a.y + b.y + c.y) / 3;
+  }
+
+  const wa = ((b.z - c.z) * (px - c.x) + (c.x - b.x) * (pz - c.z)) / denom;
+  const wb = ((c.z - a.z) * (px - c.x) + (a.x - c.x) * (pz - c.z)) / denom;
+  const wc = 1 - wa - wb;
+  return a.y * wa + b.y * wb + c.y * wc;
+}
+
 export function getTerrainHeightAt(x: number, z: number, tiles: Map<string, TileView> | null): number {
   if (!tiles) return 0.55;
   const { tx, tz } = getTileCoordsFromWorld(x, z);
-  return tiles.get(getTileKey(tx, tz))?.height ?? 0.55;
+  const tile = tiles.get(getTileKey(tx, tz));
+  if (!tile) return 0.55;
+
+  const center = getTileCenter(tile.tx, tile.tz);
+  const half = GAME_RULES.TILE_SIZE * 0.5;
+  const t00 = { x: center.x - half, z: center.z - half, y: tile.h00 };
+  const t10 = { x: center.x + half, z: center.z - half, y: tile.h10 };
+  const t11 = { x: center.x + half, z: center.z + half, y: tile.h11 };
+  const t01 = { x: center.x - half, z: center.z + half, y: tile.h01 };
+
+  const localX = (x - (center.x - half)) / GAME_RULES.TILE_SIZE;
+  const localZ = (z - (center.z - half)) / GAME_RULES.TILE_SIZE;
+  if (localZ >= localX) {
+    return interpolateTriangleHeight(x, z, t00, t01, t11);
+  }
+  return interpolateTriangleHeight(x, z, t00, t11, t10);
 }
 
 export function createTerrainMesh(tiles: Iterable<TileView>): THREE.Mesh {
@@ -117,7 +151,7 @@ export function createTerrainMesh(tiles: Iterable<TileView>): THREE.Mesh {
     const c01 = getGroundVertexColor(tile.tx, tile.tz + 1, tile.h01);
     const dirt = tile.isMountain
       ? new THREE.Color().setHSL(0.08, 0.08, 0.09 + Math.min(0.15, tile.height * 0.008))
-      : new THREE.Color().setHSL(0.08 + tile.height * 0.0015, 0.42, 0.19 + tile.height * 0.007);
+      : new THREE.Color().setHSL(0.07, 0.58, 0.16);
     const dirtDark = dirt.clone().multiplyScalar(0.82);
 
     const t00 = new THREE.Vector3(center.x - half, tile.h00, center.z - half);

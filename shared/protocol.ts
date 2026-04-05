@@ -50,6 +50,7 @@ export type TileData = {
   material: number;
   maxMaterial: number;
   compute: number;
+  maxCompute: number;
   isMountain: boolean;
   canBuild: boolean;
   canWalk: boolean;

@@ -13,6 +13,7 @@ import {
   showWarning,
 } from "./hud.js";
 import type { SelectionInfo } from "./entity.js";
+import { DatacenterRenderer } from "./datacenters.js";
 import { ForestRenderer } from "./forest.js";
 import { createTerrainMesh, type TileView } from "./terrain.js";
 import { attachDevNetworkPerf } from "./network-perf.js";
@@ -52,11 +53,11 @@ export function startRender(game: Game) {
   const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
   renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
   renderer.setSize(window.innerWidth, window.innerHeight);
-  renderer.setClearColor(0x8eb37b, 1);
+  renderer.setClearColor(0xb8e4ff, 1);
   renderer.shadowMap.enabled = true;
   renderer.shadowMap.type = THREE.VSMShadowMap;
   renderer.toneMapping = THREE.ACESFilmicToneMapping;
-  renderer.toneMappingExposure = 0.84;
+  renderer.toneMappingExposure = 0.92;
 
   const { scene } = game;
 
@@ -66,9 +67,9 @@ export function startRender(game: Game) {
   scene.environmentIntensity = SCENE_ENVIRONMENT_INTENSITY;
   pmrem.dispose();
 
-  scene.fog = new THREE.Fog(0x9eb17a, 210, 520);
-  scene.add(new THREE.AmbientLight(0xfff2cf, 0.26));
-  scene.add(new THREE.HemisphereLight(0xdde7ba, 0x61743d, 0.9));
+  scene.fog = new THREE.Fog(0xb8e4ff, 180, 620);
+  scene.add(new THREE.AmbientLight(0xfff6d8, 0.34));
+  scene.add(new THREE.HemisphereLight(0xeaf8ff, 0x9bc67a, 1.02));
 
   const dir = new THREE.DirectionalLight(0xfff3d6, SUN.intensity);
   dir.castShadow = true;
@@ -90,6 +91,8 @@ export function startRender(game: Game) {
   scene.add(terrain);
   const forest = new ForestRenderer();
   scene.add(forest.root);
+  const datacenters = new DatacenterRenderer();
+  scene.add(datacenters.root);
 
   const camera = new THREE.PerspectiveCamera(CAM.fov, window.innerWidth / Math.max(window.innerHeight, 1), 0.5, 2500);
   camera.up.set(0, 1, 0);
@@ -325,6 +328,7 @@ export function startRender(game: Game) {
     lastFrameTime = now;
     game.sync();
     forest.sync(game.getTilesOrdered());
+    datacenters.sync(game.getTilesOrdered());
     for (const entity of game.entities) entity.render(dt);
     dir.shadow.camera.updateProjectionMatrix();
     renderer.render(scene, camera);

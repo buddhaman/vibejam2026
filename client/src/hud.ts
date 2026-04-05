@@ -931,7 +931,13 @@ function drawTileCard(ctx: CanvasRenderingContext2D, W: number, H: number, tile:
   ctx.letterSpacing = "0.5px";
   ctx.textBaseline = "top";
   ctx.fillText(
-    tile.isMountain ? "Mountain" : tile.material > 0 ? "Forest" : "Grassland",
+    tile.isMountain
+      ? "Mountain"
+      : tile.material > 0
+        ? "Forest"
+        : tile.maxCompute > 0
+          ? "Data center"
+          : "Grassland",
     card.x + 14, card.y + 34
   );
 
@@ -939,15 +945,21 @@ function drawTileCard(ctx: CanvasRenderingContext2D, W: number, H: number, tile:
   ctx.fillStyle = MARBLE_DIM;
   ctx.font = F_BODY_SM;
   ctx.letterSpacing = "0px";
+  let statY = card.y + 60;
   if (!tile.isMountain && tile.material > 0) {
-    ctx.fillText(`Material: ${tile.material} / ${tile.maxMaterial}`, card.x + 14, card.y + 60);
+    ctx.fillText(`Material: ${tile.material} / ${tile.maxMaterial}`, card.x + 14, statY);
+    statY += 18;
+  }
+  if (!tile.isMountain && tile.maxCompute > 0) {
+    ctx.fillText(`Compute: ${tile.compute} / ${tile.maxCompute}`, card.x + 14, statY);
+    statY += 18;
   }
   ctx.fillText(
     tile.isMountain
       ? `Impassable terrain  ·  Elevation: ${tile.height.toFixed(2)}`
-      : `Elevation: ${tile.height.toFixed(2)}  ·  Compute: ${tile.compute}`,
+      : `Elevation: ${tile.height.toFixed(2)}`,
     card.x + 14,
-    card.y + 78
+    statY
   );
   ctx.restore();
 }

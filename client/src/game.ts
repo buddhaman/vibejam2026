@@ -57,7 +57,11 @@ export class Game {
   }
 
   private _onTileChunk(msg: TileChunkMessage): void {
-    for (const t of msg.tiles) this._tiles.set(t.key, t as TileView);
+    for (const raw of msg.tiles) {
+      const t = raw as TileView;
+      if (typeof t.maxCompute !== "number") t.maxCompute = 0;
+      this._tiles.set(t.key, t);
+    }
     const next = msg.chunk + 1;
     if (next < msg.total) {
       this.room.send(MessageType.TILES_REQUEST, { chunk: next } satisfies TilesRequestMessage);

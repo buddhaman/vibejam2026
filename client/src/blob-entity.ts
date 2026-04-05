@@ -12,12 +12,50 @@ import type { Game } from "./game.js";
 import { Entity, type SelectionInfo } from "./entity.js";
 import { getTerrainHeightAt } from "./terrain.js";
 
-const UNIT_GEOM = new THREE.CylinderGeometry(
-  GAME_RULES.UNIT_RADIUS,
-  GAME_RULES.UNIT_RADIUS * 0.92,
-  GAME_RULES.UNIT_HEIGHT,
-  10
-);
+function mergeBufferGeometries(geometries: THREE.BufferGeometry[]): THREE.BufferGeometry {
+  const merged = new THREE.BufferGeometry();
+  const positions: number[] = [];
+  const normals: number[] = [];
+  const uvs: number[] = [];
+
+  for (const geometry of geometries) {
+    const nonIndexed = geometry.index ? geometry.toNonIndexed() : geometry.clone();
+    const position = nonIndexed.getAttribute("position");
+    const normal = nonIndexed.getAttribute("normal");
+    const uv = nonIndexed.getAttribute("uv");
+
+    for (let i = 0; i < position.count; i++) {
+      positions.push(position.getX(i), position.getY(i), position.getZ(i));
+      normals.push(normal.getX(i), normal.getY(i), normal.getZ(i));
+      if (uv) {
+        uvs.push(uv.getX(i), uv.getY(i));
+      } else {
+        uvs.push(0, 0);
+      }
+    }
+  }
+
+  merged.setAttribute("position", new THREE.Float32BufferAttribute(positions, 3));
+  merged.setAttribute("normal", new THREE.Float32BufferAttribute(normals, 3));
+  merged.setAttribute("uv", new THREE.Float32BufferAttribute(uvs, 2));
+  return merged;
+}
+
+function createUnitBodyGeometry() {
+  const torsoHeight = GAME_RULES.UNIT_HEIGHT * 0.72;
+  const torsoWidth = GAME_RULES.UNIT_RADIUS * 1.12;
+  const torsoDepth = GAME_RULES.UNIT_RADIUS * 0.72;
+  const headRadius = GAME_RULES.UNIT_RADIUS * 0.34;
+  const torso = new THREE.BoxGeometry(torsoWidth, torsoHeight, torsoDepth);
+  torso.translate(0, torsoHeight * 0.5, 0);
+
+  const head = new THREE.SphereGeometry(headRadius, 12, 10);
+  head.translate(0, torsoHeight + headRadius * 1.6, 0);
+
+  return mergeBufferGeometries([torso, head]);
+}
+
+const UNIT_GEOM = createUnitBodyGeometry();
 const UNIT_MAT = new THREE.MeshStandardMaterial({
   color: 0xffffff,
   roughness: 0.82,
@@ -327,17 +365,21 @@ export class BlobEntity extends Entity {
     this.units.count = Math.min(this.blob.unitCount, this.units.instanceMatrix.count);
     this.stepUnits(Math.min(0.05, dt), layout);
 
-    const unitHeight = GAME_RULES.UNIT_HEIGHT;
     const unitRules = getUnitRules(this.blob.unitType);
     const rightX = Math.cos(layout.heading);
     const rightZ = -Math.sin(layout.heading);
     const forwardX = Math.sin(layout.heading);
     const forwardZ = Math.cos(layout.heading);
+    const tiles = this.game.getTiles();
     for (let i = 0; i < this.units.count; i++) {
       const state = this.unitStates[i];
       const px = rightX * state.x + forwardX * state.z;
       const pz = rightZ * state.x + forwardZ * state.z;
-      DUMMY.position.set(px, unitHeight * 0.5 + 0.02, pz);
+      const worldX = layout.x + px;
+      const worldZ = layout.y + pz;
+      const unitTerrainY = getTerrainHeightAt(worldX, worldZ, tiles);
+      const hoverY = unitTerrainY - terrainY + GAME_RULES.UNIT_HEIGHT * 0.78;
+      DUMMY.position.set(px, hoverY, pz);
       DUMMY.rotation.y = 0;
       DUMMY.scale.setScalar(unitRules.visualScale);
       DUMMY.updateMatrix();
