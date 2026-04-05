@@ -84,9 +84,31 @@ export class BlobEntity extends Entity {
   private forwardY = 1;
   private unitStates: UnitState[] = [];
 
+  // Target destination indicator
+  private targetGroup!: THREE.Group;
+  private targetPinRing!: THREE.Mesh<THREE.RingGeometry, THREE.MeshBasicMaterial>;
+  private targetPingMesh!: THREE.Mesh<THREE.RingGeometry, THREE.MeshBasicMaterial>;
+  private targetDisc!: THREE.Mesh<THREE.CircleGeometry, THREE.MeshBasicMaterial>;
+  private targetConnector!: THREE.Line<THREE.BufferGeometry, THREE.LineBasicMaterial>;
+  private pingPhase = Math.random(); // stagger so multiple blobs don't pulse in sync
+  private targetAnimT = 0;
+
   public constructor(game: Game, id: string) {
     super(game, id);
     this.init();
+  }
+
+  protected override init(): void {
+    super.init();
+    this.buildTargetIndicator();
+    this.game.scene.add(this.targetGroup);
+    this.game.scene.add(this.targetConnector);
+  }
+
+  public override destroy(): void {
+    this.game.scene.remove(this.targetGroup);
+    this.game.scene.remove(this.targetConnector);
+    super.destroy();
   }
 
   protected createMesh(): THREE.Group {
@@ -282,7 +304,7 @@ export class BlobEntity extends Entity {
     }
 
     const layout = this.getLayout();
-    const terrainY = getTerrainHeightAt(layout.x, layout.y, (this.game.room.state as { terrainSeed: number }).terrainSeed);
+    const terrainY = getTerrainHeightAt(layout.x, layout.y, this.game.getTiles());
     const color = this.game.getPlayerColor(this.blob.ownerId);
     const tint = new THREE.Color(color);
 
@@ -322,6 +344,91 @@ export class BlobEntity extends Entity {
       this.units.setMatrixAt(i, DUMMY.matrix);
     }
     this.units.instanceMatrix.needsUpdate = true;
+
+    this.updateTargetIndicator(Math.min(0.05, dt), terrainY);
+  }
+
+  private buildTargetIndicator(): void {
+    const mat = (opacity: number) =>
+      new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity, side: THREE.DoubleSide, depthWrite: false });
+
+    // Stationary target ring
+    this.targetPinRing = new THREE.Mesh(new THREE.RingGeometry(0.62, 0.82, 48), mat(0.78));
+    this.targetPinRing.rotation.x = -Math.PI / 2;
+    this.targetPinRing.position.y = 0.05;
+
+    // Expanding ping ring (animated in updateTargetIndicator)
+    this.targetPingMesh = new THREE.Mesh(new THREE.RingGeometry(0.55, 0.80, 48), mat(0));
+    this.targetPingMesh.rotation.x = -Math.PI / 2;
+    this.targetPingMesh.position.y = 0.06;
+
+    // Small center disc
+    this.targetDisc = new THREE.Mesh(new THREE.CircleGeometry(0.18, 24), mat(0.90));
+    this.targetDisc.rotation.x = -Math.PI / 2;
+    this.targetDisc.position.y = 0.07;
+
+    this.targetGroup = new THREE.Group();
+    this.targetGroup.add(this.targetPinRing, this.targetPingMesh, this.targetDisc);
+    this.targetGroup.visible = false;
+
+    // Dashed connector: two-point line updated each frame in-place
+    const connGeom = new THREE.BufferGeometry();
+    connGeom.setAttribute("position", new THREE.Float32BufferAttribute([0, 0, 0, 0, 0, 0], 3));
+    this.targetConnector = new THREE.Line(
+      connGeom,
+      new THREE.LineBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.20, depthWrite: false })
+    );
+    this.targetConnector.visible = false;
+  }
+
+  private updateTargetIndicator(dt: number, blobTerrainY: number): void {
+    if (!this.blob || !this.isSelected()) {
+      this.targetGroup.visible = false;
+      this.targetConnector.visible = false;
+      return;
+    }
+
+    const dx = this.blob.targetX - this.blob.x;
+    const dy = this.blob.targetY - this.blob.y;
+    if (Math.hypot(dx, dy) < 1.5) {
+      this.targetGroup.visible = false;
+      this.targetConnector.visible = false;
+      return;
+    }
+
+    this.targetAnimT += dt;
+    const tgtTerrainY = getTerrainHeightAt(this.blob.targetX, this.blob.targetY, this.game.getTiles());
+    const tint = new THREE.Color(this.game.getPlayerColor(this.blob.ownerId));
+    const bright = tint.clone().offsetHSL(0, 0.0, 0.16);
+
+    // Position group at target
+    this.targetGroup.visible = true;
+    this.targetGroup.position.set(this.blob.targetX, tgtTerrainY, this.blob.targetY);
+
+    // Slowly rotate pin ring for liveliness
+    this.targetPinRing.rotation.z = this.targetAnimT * 0.45;
+    this.targetPinRing.material.color.copy(bright);
+    const pinPulse = 1 + 0.06 * Math.sin(this.targetAnimT * 2.8);
+    this.targetPinRing.scale.setScalar(pinPulse);
+
+    // Cycling ping expansion: 0 → 1 over 1.8 s
+    this.pingPhase = (this.pingPhase + dt / 1.8) % 1;
+    const pingScale = 0.35 + this.pingPhase * 1.75;
+    const pingAlpha = (1 - this.pingPhase) * 0.68;
+    this.targetPingMesh.scale.setScalar(pingScale);
+    this.targetPingMesh.material.opacity = pingAlpha;
+    this.targetPingMesh.material.color.copy(bright);
+
+    this.targetDisc.material.color.copy(bright);
+
+    // Connector line: blob center → target
+    const center = this.getPredictedCenter();
+    const posAttr = this.targetConnector.geometry.attributes.position as THREE.BufferAttribute;
+    posAttr.setXYZ(0, center.x,            blobTerrainY + 0.12, center.y);
+    posAttr.setXYZ(1, this.blob.targetX,   tgtTerrainY  + 0.12, this.blob.targetY);
+    posAttr.needsUpdate = true;
+    this.targetConnector.material.color.copy(bright);
+    this.targetConnector.visible = true;
   }
 
   public isMine(): boolean {

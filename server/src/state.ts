@@ -39,7 +39,7 @@ export class Building extends Schema {
   @type("number") productionProgressMs: number = 0;
 }
 
-/** Authoritative world — gameplay truth only. */
+/** Authoritative world — gameplay truth only. Tiles are streamed separately. */
 export class GameState extends Schema {
   @type("uint32") terrainSeed: number = 0;
   @type({ map: Player }) players = new MapSchema<Player>();

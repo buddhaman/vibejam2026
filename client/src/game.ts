@@ -4,25 +4,80 @@ import type { Entity } from "./entity.js";
 import {
   BuildingType,
   SquadSpread,
+  getTileCoordsFromWorld,
+  getTileKey,
+  getWorldTileCount,
   type ResourceCost,
   snapWorldToTileCenter,
   type BuildingType as BuildingTypeValue,
   type SquadSpread as SquadSpreadValue,
   type UnitType as UnitTypeValue,
 } from "../../shared/game-rules.js";
-import { MessageType, type BuildMessage, type IntentMessage, type SquadSpreadMessage, type TrainMessage } from "../../shared/protocol.js";
+import {
+  MessageType,
+  type BuildMessage,
+  type IntentMessage,
+  type SquadSpreadMessage,
+  type TrainMessage,
+  type TileChunkMessage,
+  type TileUpdateMessage,
+  type TilesRequestMessage,
+} from "../../shared/protocol.js";
 import { BlobEntity } from "./blob-entity.js";
 import { BuildingEntity } from "./building-entity.js";
+import { type TileView } from "./terrain.js";
 
 export class Game {
   public room: Room;
   public scene: THREE.Scene;
   public entities: Entity[] = [];
   public selectedEntityId: string | null = null;
+  public selectedTileKey: string | null = null;
+
+  private _tiles = new Map<string, TileView>();
+  private _tilesOrdered: TileView[] = [];
+  private _streamResolve: (() => void) | null = null;
 
   public constructor(room: Room) {
     this.room = room;
     this.scene = new THREE.Scene();
+    this.room.onMessage(MessageType.TILE_CHUNK, (msg: TileChunkMessage) => this._onTileChunk(msg));
+    this.room.onMessage(MessageType.TILE_UPDATE, (msg: TileUpdateMessage) => this._onTileUpdate(msg));
+  }
+
+  /**
+   * Request all tile chunks from the server.
+   * Resolves when every chunk has been received and the tile map is complete.
+   */
+  public streamTiles(): Promise<void> {
+    return new Promise((resolve) => {
+      this._streamResolve = resolve;
+      this.room.send(MessageType.TILES_REQUEST, { chunk: 0 } satisfies TilesRequestMessage);
+    });
+  }
+
+  private _onTileChunk(msg: TileChunkMessage): void {
+    for (const t of msg.tiles) this._tiles.set(t.key, t as TileView);
+    const next = msg.chunk + 1;
+    if (next < msg.total) {
+      this.room.send(MessageType.TILES_REQUEST, { chunk: next } satisfies TilesRequestMessage);
+    } else {
+      // All chunks in — build the ordered array (shared refs, so mutations are reflected)
+      const count = getWorldTileCount();
+      this._tilesOrdered = [];
+      for (let tz = 0; tz < count; tz++)
+        for (let tx = 0; tx < count; tx++) {
+          const tile = this._tiles.get(getTileKey(tx, tz));
+          if (tile) this._tilesOrdered.push(tile);
+        }
+      this._streamResolve?.();
+      this._streamResolve = null;
+    }
+  }
+
+  private _onTileUpdate(msg: TileUpdateMessage): void {
+    const tile = this._tiles.get(msg.key);
+    if (tile) { tile.wood = msg.wood; tile.gold = msg.gold; }
   }
 
   public getPlayerColor(ownerId: string): number {
@@ -108,10 +163,17 @@ export class Game {
 
   public toggleSelection(entityId: string): void {
     this.selectedEntityId = this.selectedEntityId === entityId ? null : entityId;
+    this.selectedTileKey = null;
   }
 
   public clearSelection(): void {
     this.selectedEntityId = null;
+    this.selectedTileKey = null;
+  }
+
+  public selectTile(key: string | null): void {
+    this.selectedEntityId = null;
+    this.selectedTileKey = key;
   }
 
   public pickOwnedEntity(x: number, z: number): Entity | null {
@@ -163,6 +225,22 @@ export class Game {
       wood: player?.wood ?? 0,
       gold: player?.gold ?? 0,
     };
+  }
+
+  /** Live map of all tiles — mutated in-place by TILE_UPDATE messages. */
+  public getTiles(): Map<string, TileView> { return this._tiles; }
+
+  /** Ordered (tz, tx) array for terrain/forest rendering — object refs are live. */
+  public getTilesOrdered(): TileView[] { return this._tilesOrdered; }
+
+  public getTileAtWorld(x: number, z: number): TileView | null {
+    const { tx, tz } = getTileCoordsFromWorld(x, z);
+    return this._tiles.get(getTileKey(tx, tz)) ?? null;
+  }
+
+  public getSelectedTile(): TileView | null {
+    if (!this.selectedTileKey) return null;
+    return this._tiles.get(this.selectedTileKey) ?? null;
   }
 
   public getMyTownCenterPosition(): { x: number; z: number } | null {

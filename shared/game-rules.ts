@@ -23,6 +23,13 @@ export type ResourceCost = {
   gold: number;
 };
 
+export const TileType = {
+  GRASS: 1,
+  FOREST: 2,
+} as const;
+
+export type TileType = (typeof TileType)[keyof typeof TileType];
+
 export const SquadSpread = {
   TIGHT: 0,
   DEFAULT: 1,
@@ -37,6 +44,10 @@ export function isBuildingType(value: unknown): value is BuildingType {
 
 export function isUnitType(value: unknown): value is UnitType {
   return value === UnitType.VILLAGER || value === UnitType.WARBAND;
+}
+
+export function isTileType(value: unknown): value is TileType {
+  return value === TileType.GRASS || value === TileType.FOREST;
 }
 
 export function isSquadSpread(value: unknown): value is SquadSpread {
@@ -69,6 +80,10 @@ export const GAME_RULES = {
   TOWER_HEALTH: 300,
   TOWN_CENTER_HEALTH: 950,
   MAX_BUILDINGS_PER_PLAYER: 8,
+  FOREST_WOOD_MAX: 320,
+  TERRAIN_HEIGHT_THRESHOLD: 0.645,
+  TERRAIN_HEIGHT_SCALE: 115,
+  MOUNTAIN_THRESHOLD: 9.5,
 } as const;
 
 const TILE_HALF = GAME_RULES.TILE_SIZE * 0.5;
@@ -180,6 +195,130 @@ export function snapWorldToTileCenter(x: number, z: number) {
   return {
     x: snapCoordinateToTileCenter(x),
     z: snapCoordinateToTileCenter(z),
+  };
+}
+
+function hash(n: number) {
+  const x = Math.sin(n * 127.1) * 43758.5453123;
+  return x - Math.floor(x);
+}
+
+function smoothstep(t: number) {
+  return t * t * (3 - 2 * t);
+}
+
+function valueNoise2D(x: number, z: number, seed: number) {
+  const ix = Math.floor(x);
+  const iz = Math.floor(z);
+  const fx = smoothstep(x - ix);
+  const fz = smoothstep(z - iz);
+
+  const n00 = hash(ix * 9283.11 + iz * 6899.37 + seed * 0.0001 + 0.381);
+  const n10 = hash((ix + 1) * 9283.11 + iz * 6899.37 + seed * 0.0001 + 0.381);
+  const n01 = hash(ix * 9283.11 + (iz + 1) * 6899.37 + seed * 0.0001 + 0.381);
+  const n11 = hash((ix + 1) * 9283.11 + (iz + 1) * 6899.37 + seed * 0.0001 + 0.381);
+
+  const nx0 = n00 + (n10 - n00) * fx;
+  const nx1 = n01 + (n11 - n01) * fx;
+  return nx0 + (nx1 - nx0) * fz;
+}
+
+function fbm2D(x: number, z: number, seed: number, octaves: number) {
+  let amplitude = 0.5;
+  let frequency = 1;
+  let value = 0;
+  let totalAmplitude = 0;
+
+  for (let i = 0; i < octaves; i++) {
+    value += valueNoise2D(x * frequency, z * frequency, seed + i * 97) * amplitude;
+    totalAmplitude += amplitude;
+    amplitude *= 0.5;
+    frequency *= 2;
+  }
+
+  return totalAmplitude > 0 ? value / totalAmplitude : 0;
+}
+
+export function getTileKey(tx: number, tz: number): string {
+  return `${tx},${tz}`;
+}
+
+export function getTileCoordsFromWorld(x: number, z: number) {
+  const tiles = getWorldTileCount();
+  const tx = Math.max(0, Math.min(tiles - 1, Math.floor((x - GAME_RULES.WORLD_MIN) / GAME_RULES.TILE_SIZE)));
+  const tz = Math.max(0, Math.min(tiles - 1, Math.floor((z - GAME_RULES.WORLD_MIN) / GAME_RULES.TILE_SIZE)));
+  return { tx, tz };
+}
+
+export function getTileCenter(tx: number, tz: number) {
+  const min = GAME_RULES.WORLD_MIN + TILE_HALF;
+  return {
+    x: min + tx * GAME_RULES.TILE_SIZE,
+    z: min + tz * GAME_RULES.TILE_SIZE,
+  };
+}
+
+export function getTileHeight(tx: number, tz: number, seed: number): number {
+  const noise = fbm2D(tx * 0.22 + 11.1, tz * 0.22 - 5.4, seed, 3);
+  return 0.55 + noise * 0.55;
+}
+
+export type GeneratedTile = {
+  key: string;
+  tx: number;
+  tz: number;
+  h00: number;
+  h10: number;
+  h11: number;
+  h01: number;
+  height: number;
+  tileType: TileType;
+  wood: number;
+  maxWood: number;
+  gold: number;
+  isMountain: boolean;
+  canBuild: boolean;
+  canWalk: boolean;
+};
+
+export function getTerrainVertexHeight(vx: number, vz: number, seed: number): number {
+  const noise = fbm2D(vx * 0.085 + 11.1, vz * 0.085 - 5.4, seed, 3);
+  if (noise < GAME_RULES.TERRAIN_HEIGHT_THRESHOLD) return 0;
+  return (noise - GAME_RULES.TERRAIN_HEIGHT_THRESHOLD) * GAME_RULES.TERRAIN_HEIGHT_SCALE;
+}
+
+export function generateTile(tx: number, tz: number, seed: number): GeneratedTile {
+  const h00 = getTerrainVertexHeight(tx, tz, seed);
+  const h10 = getTerrainVertexHeight(tx + 1, tz, seed);
+  const h11 = getTerrainVertexHeight(tx + 1, tz + 1, seed);
+  const h01 = getTerrainVertexHeight(tx, tz + 1, seed);
+  const height = (h00 + h10 + h11 + h01) * 0.25;
+  const isMountain = height > GAME_RULES.MOUNTAIN_THRESHOLD;
+  const forestField = fbm2D(tx * 0.12 + 40.2, tz * 0.12 - 13.4, seed + 1700, 4);
+  const clusterField = fbm2D(tx * 0.36 - 8.1, tz * 0.36 + 19.6, seed + 8100, 3);
+  const hasForest = !isMountain && forestField > 0.6 && clusterField > 0.52;
+  const maxWood = hasForest
+    ? Math.round(
+        GAME_RULES.FOREST_WOOD_MAX * (0.45 + (forestField - 0.6) * 1.1 + (clusterField - 0.52) * 0.8)
+      )
+    : 0;
+
+  return {
+    key: getTileKey(tx, tz),
+    tx,
+    tz,
+    h00,
+    h10,
+    h11,
+    h01,
+    height,
+    tileType: hasForest ? TileType.FOREST : TileType.GRASS,
+    wood: Math.max(0, maxWood),
+    maxWood: Math.max(0, maxWood),
+    gold: 0,
+    isMountain,
+    canBuild: !isMountain,
+    canWalk: !isMountain,
   };
 }
 

@@ -7,9 +7,13 @@ import {
   UnitType,
   canBuildingProduceUnit,
   canAfford,
+  generateTile,
+  getTileCoordsFromWorld,
+  getTileKey,
   getBuildingRules,
   getUnitRules,
   getSquadRadius,
+  getWorldTileCount,
   isBuildingType,
   isSquadSpread,
   isUnitType,
@@ -17,35 +21,53 @@ import {
   subtractCost,
   type ResourceCost,
 } from "../../shared/game-rules.js";
-import { MessageType, type IntentMessage, type BuildMessage, type SquadSpreadMessage, type TrainMessage } from "../../shared/protocol.js";
+import {
+  MessageType,
+  type IntentMessage,
+  type BuildMessage,
+  type SquadSpreadMessage,
+  type TrainMessage,
+  type TileData,
+  type TileChunkMessage,
+  type TilesRequestMessage,
+  type TileUpdateMessage,
+} from "../../shared/protocol.js";
+import { assignPlayerPaletteColor } from "../../shared/player-colors.js";
 
 let nextId = 1;
 function makeId(prefix: string) {
   return `${prefix}_${nextId++}`;
 }
 
-function hashColor(sessionId: string): number {
-  let h = 2166136261;
-  for (let i = 0; i < sessionId.length; i++) {
-    h ^= sessionId.charCodeAt(i);
-    h = Math.imul(h, 16777619);
-  }
-  const r = 80 + (h & 0x7f);
-  const g = 80 + ((h >> 8) & 0x7f);
-  const b = 80 + ((h >> 16) & 0x7f);
-  return (r << 16) | (g << 8) | b;
-}
+const CHUNK_SIZE = 50; // tiles per chunk — keeps each message well under 5 KB
 
 /** @see https://docs.colyseus.io/state/ — state is assigned on the class in 0.17+ */
 export class BattleRoom extends Room<{ state: GameState }> {
   maxClients = 64;
   state = new GameState();
 
+  /** Plain tile data — NOT in schema, streamed on demand. */
+  private tileData = new Map<string, TileData>();
+  private tileChunks: TileData[][] = [];
+
   onCreate() {
     this.state.terrainSeed = Math.floor(Math.random() * 0xffffffff);
+    this.initTiles();
 
     const intervalMs = 1000 / CONFIG.TICK_HZ;
     this.setSimulationInterval((dt) => this.tick(dt), intervalMs);
+
+    this.onMessage(MessageType.TILES_REQUEST, (client, raw) => {
+      const msg = raw as TilesRequestMessage;
+      if (typeof msg?.chunk !== "number") return;
+      const idx = msg.chunk | 0;
+      if (idx < 0 || idx >= this.tileChunks.length) return;
+      client.send(MessageType.TILE_CHUNK, {
+        chunk: idx,
+        total: this.tileChunks.length,
+        tiles: this.tileChunks[idx],
+      } satisfies TileChunkMessage);
+    });
 
     this.onMessage(MessageType.INTENT, (client, raw) => {
       const msg = raw as IntentMessage;
@@ -58,6 +80,8 @@ export class BattleRoom extends Room<{ state: GameState }> {
       }
       const blob = this.state.blobs.get(msg.blobId);
       if (!blob || blob.ownerId !== client.sessionId) return;
+      const targetTile = this.getTileAtWorld(msg.targetX, msg.targetY);
+      if (!targetTile?.canWalk) return;
       blob.targetX = clamp(msg.targetX, CONFIG.WORLD_MIN, CONFIG.WORLD_MAX);
       blob.targetY = clamp(msg.targetY, CONFIG.WORLD_MIN, CONFIG.WORLD_MAX);
     });
@@ -91,10 +115,11 @@ export class BattleRoom extends Room<{ state: GameState }> {
       if (count >= CONFIG.MAX_BUILDINGS_PER_PLAYER) return;
       const player = this.state.players.get(client.sessionId);
       const buildingRules = getBuildingRules(msg.type);
-      if (!player || !buildingRules.buildable || !canAfford(player, buildingRules.cost)) return;
+      const snapped = snapWorldToTileCenter(msg.worldX, msg.worldZ);
+      const targetTile = this.getTileAtWorld(snapped.x, snapped.z);
+      if (!player || !buildingRules.buildable || !canAfford(player, buildingRules.cost) || !targetTile?.canBuild) return;
 
       const building = new Building();
-      const snapped = snapWorldToTileCenter(msg.worldX, msg.worldZ);
       building.id = makeId("bld");
       building.ownerId = client.sessionId;
       building.x = snapped.x;
@@ -130,14 +155,17 @@ export class BattleRoom extends Room<{ state: GameState }> {
   onJoin(client: Client) {
     const player = new Player();
     player.sessionId = client.sessionId;
-    player.color = hashColor(client.sessionId);
+    const taken: number[] = [];
+    this.state.players.forEach((p) => taken.push(p.color));
+    player.color = assignPlayerPaletteColor(taken);
     player.food = CONFIG.START_FOOD;
     player.wood = CONFIG.START_WOOD;
     player.gold = CONFIG.START_GOLD;
     this.state.players.set(client.sessionId, player);
 
     const playerIndex = this.getNextTownCenterIndex();
-    this.spawnTownCenter(client.sessionId, playerIndex);
+    const townCenter = this.spawnTownCenter(client.sessionId, playerIndex);
+    this.spawnProducedUnit(townCenter, UnitType.WARBAND);
   }
 
   onLeave(client: Client, _code: number) {
@@ -218,10 +246,12 @@ export class BattleRoom extends Room<{ state: GameState }> {
     }
   }
 
-  private spawnTownCenter(ownerId: string, playerIndex: number) {
+  private spawnTownCenter(ownerId: string, playerIndex: number): Building {
     const angle = playerIndex * 1.63;
     const radius = 54;
-    const snapped = snapWorldToTileCenter(Math.cos(angle) * radius, Math.sin(angle) * radius);
+    const snapped = this.findNearestBuildableTileCenter(
+      snapWorldToTileCenter(Math.cos(angle) * radius, Math.sin(angle) * radius)
+    );
 
     const townCenter = new Building();
     townCenter.id = makeId("bld");
@@ -231,6 +261,7 @@ export class BattleRoom extends Room<{ state: GameState }> {
     townCenter.buildingType = BuildingType.TOWN_CENTER;
     townCenter.health = getBuildingRules(BuildingType.TOWN_CENTER).health;
     this.state.buildings.set(townCenter.id, townCenter);
+    return townCenter;
   }
 
   private getNextTownCenterIndex() {
@@ -239,6 +270,64 @@ export class BattleRoom extends Room<{ state: GameState }> {
       if (building.buildingType === BuildingType.TOWN_CENTER) count++;
     });
     return count;
+  }
+
+  private getTileAtWorld(x: number, z: number): TileData | null {
+    const { tx, tz } = getTileCoordsFromWorld(x, z);
+    return this.tileData.get(getTileKey(tx, tz)) ?? null;
+  }
+
+  private findNearestBuildableTileCenter(center: { x: number; z: number }) {
+    const start = getTileCoordsFromWorld(center.x, center.z);
+    const direct = this.tileData.get(getTileKey(start.tx, start.tz));
+    if (direct?.canBuild) return center;
+
+    for (let radius = 1; radius <= 6; radius++) {
+      for (let dz = -radius; dz <= radius; dz++) {
+        for (let dx = -radius; dx <= radius; dx++) {
+          const tx = start.tx + dx;
+          const tz = start.tz + dz;
+          const tile = this.tileData.get(getTileKey(tx, tz));
+          if (!tile?.canBuild) continue;
+          return {
+            x: tile.tx * CONFIG.TILE_SIZE + CONFIG.WORLD_MIN + CONFIG.TILE_SIZE * 0.5,
+            z: tile.tz * CONFIG.TILE_SIZE + CONFIG.WORLD_MIN + CONFIG.TILE_SIZE * 0.5,
+          };
+        }
+      }
+    }
+
+    return center;
+  }
+
+  private initTiles() {
+    const count = getWorldTileCount();
+    for (let tz = 0; tz < count; tz++) {
+      for (let tx = 0; tx < count; tx++) {
+        const t = generateTile(tx, tz, this.state.terrainSeed);
+        this.tileData.set(t.key, t);
+      }
+    }
+    // Pre-slice into fixed-size chunks for fast streaming
+    const all = Array.from(this.tileData.values());
+    this.tileChunks = [];
+    for (let i = 0; i < all.length; i += CHUNK_SIZE) {
+      this.tileChunks.push(all.slice(i, i + CHUNK_SIZE));
+    }
+  }
+
+  /**
+   * Broadcast a tile mutation (wood / gold change) to all connected clients.
+   * Call this whenever a tile's mutable fields change server-side.
+   */
+  private broadcastTileUpdate(key: string): void {
+    const tile = this.tileData.get(key);
+    if (!tile) return;
+    this.broadcast(MessageType.TILE_UPDATE, {
+      key,
+      wood: tile.wood,
+      gold: tile.gold,
+    } satisfies TileUpdateMessage);
   }
 
   private stepBuildingProduction(building: Building, dtMs: number) {

@@ -1,9 +1,20 @@
 import * as THREE from "three";
+import { RoomEnvironment } from "three/examples/jsm/environments/RoomEnvironment.js";
 import { GAME_RULES, snapWorldToTileCenter } from "../../shared/game-rules.js";
 import type { Game } from "./game.js";
-import { createHudCanvas, createHudState, drawHUD, hitTestDeselect, hitTestMenu, hitTestSelectionAction } from "./hud.js";
+import {
+  addMoveMarker,
+  createHudCanvas,
+  createHudState,
+  drawHUD,
+  hitTestDeselect,
+  hitTestMenu,
+  hitTestSelectionAction,
+  showWarning,
+} from "./hud.js";
 import type { SelectionInfo } from "./entity.js";
-import { createTerrainMesh } from "./terrain.js";
+import { ForestRenderer } from "./forest.js";
+import { createTerrainMesh, type TileView } from "./terrain.js";
 import { attachDevNetworkPerf } from "./network-perf.js";
 
 const CAM = {
@@ -18,12 +29,18 @@ const CAM = {
 
 const SUN = {
   direction: new THREE.Vector3(-0.55, 1, -0.35).normalize(),
-  intensity: 0.8,
+  intensity: 0.72,
   shadowRadius: 44,
   shadowDepth: 160,
   shadowDistance: 90,
   mapSize: 2048,
 } as const;
+
+/**
+ * `scene.environment` adds both reflections and diffuse IBL; RoomEnvironment is quite hot at 1.
+ * Keep low enough to avoid blown highlights while metals still pick up reflections.
+ */
+const SCENE_ENVIRONMENT_INTENSITY = 0.38;
 
 export function startRender(game: Game) {
   const netPerf = attachDevNetworkPerf(game.room);
@@ -39,12 +56,19 @@ export function startRender(game: Game) {
   renderer.shadowMap.enabled = true;
   renderer.shadowMap.type = THREE.VSMShadowMap;
   renderer.toneMapping = THREE.ACESFilmicToneMapping;
-  renderer.toneMappingExposure = 1.08;
+  renderer.toneMappingExposure = 0.92;
 
   const { scene } = game;
+
+  /* IBL for MeshStandardMaterial / glTF metal — without this, reflections are black. */
+  const pmrem = new THREE.PMREMGenerator(renderer);
+  scene.environment = pmrem.fromScene(new RoomEnvironment(), 0).texture;
+  scene.environmentIntensity = SCENE_ENVIRONMENT_INTENSITY;
+  pmrem.dispose();
+
   scene.fog = new THREE.Fog(0xb8e4ff, 180, 620);
-  scene.add(new THREE.AmbientLight(0xfff6d8, 0.5));
-  scene.add(new THREE.HemisphereLight(0xeaf8ff, 0x9bc67a, 1.35));
+  scene.add(new THREE.AmbientLight(0xfff6d8, 0.34));
+  scene.add(new THREE.HemisphereLight(0xeaf8ff, 0x9bc67a, 1.02));
 
   const dir = new THREE.DirectionalLight(0xfff3d6, SUN.intensity);
   dir.castShadow = true;
@@ -62,9 +86,10 @@ export function startRender(game: Game) {
   scene.add(dir);
   scene.add(dir.target);
 
-  const terrainSeed = (game.room.state as { terrainSeed: number }).terrainSeed;
-  const terrain = createTerrainMesh(terrainSeed);
+  const terrain = createTerrainMesh(game.getTilesOrdered());
   scene.add(terrain);
+  const forest = new ForestRenderer();
+  scene.add(forest.root);
 
   const camera = new THREE.PerspectiveCamera(CAM.fov, window.innerWidth / Math.max(window.innerHeight, 1), 0.5, 2500);
   camera.up.set(0, 1, 0);
@@ -160,7 +185,12 @@ export function startRender(game: Game) {
     if (menuAction !== null) {
       cancelPendingMove();
       if (menuAction !== "dismiss") {
-        game.sendBuildIntent(menuAction, hud.buildMenu.worldX, hud.buildMenu.worldZ);
+        const tile = game.getTileAtWorld(hud.buildMenu.worldX, hud.buildMenu.worldZ);
+        if (!tile?.canBuild) {
+          showWarning(hud, "Can't build on mountains", performance.now() / 1000);
+        } else {
+          game.sendBuildIntent(menuAction, hud.buildMenu.worldX, hud.buildMenu.worldZ);
+        }
       }
       hud.buildMenu.visible = false;
       return;
@@ -185,6 +215,27 @@ export function startRender(game: Game) {
     if (!point) return;
 
     const now = performance.now();
+
+    if (game.getSelectedBlobEntity()) {
+      cancelPendingMove();
+      const tx = point.x;
+      const tz = point.z;
+      const sx = clientX;
+      const sy = clientY;
+      pendingMoveTimer = setTimeout(() => {
+        pendingMoveTimer = null;
+        const tile = game.getTileAtWorld(tx, tz);
+        if (!tile?.canWalk) {
+          showWarning(hud, "Units can't walk on mountains", performance.now() / 1000);
+          return;
+        }
+        game.sendMoveIntent(tx, tz);
+        addMoveMarker(hud, sx, sy, performance.now() / 1000);
+      }, MOVE_DELAY_MS);
+      lastGroundTap = { t: now, x: clientX, y: clientY, wx: point.x, wz: point.z };
+      return;
+    }
+
     const dtMs = now - lastGroundTap.t;
     const dScr = Math.hypot(clientX - lastGroundTap.x, clientY - lastGroundTap.y);
     const dW = Math.hypot(point.x - lastGroundTap.wx, point.z - lastGroundTap.wz);
@@ -199,6 +250,12 @@ export function startRender(game: Game) {
       cancelPendingMove();
       game.clearSelection();
       const snapped = snapWorldToTileCenter(point.x, point.z);
+      const tile = game.getTileAtWorld(snapped.x, snapped.z);
+      if (!tile?.canBuild) {
+        showWarning(hud, "Can't build on mountains", now / 1000);
+        lastGroundTap.t = 0;
+        return;
+      }
       hud.buildMenu = { visible: true, screenX: clientX, screenY: clientY, worldX: snapped.x, worldZ: snapped.z };
       lastGroundTap.t = 0;
       return;
@@ -206,15 +263,8 @@ export function startRender(game: Game) {
 
     lastGroundTap = { t: now, x: clientX, y: clientY, wx: point.x, wz: point.z };
 
-    if (game.getSelectedBlobEntity()) {
-      cancelPendingMove();
-      const tx = point.x;
-      const tz = point.z;
-      pendingMoveTimer = setTimeout(() => {
-        pendingMoveTimer = null;
-        game.sendMoveIntent(tx, tz);
-      }, MOVE_DELAY_MS);
-    }
+    const tile = game.getTileAtWorld(point.x, point.z);
+    game.selectTile(tile?.key ?? null);
   }
 
   canvas.addEventListener("pointerdown", (ev) => {
@@ -274,6 +324,7 @@ export function startRender(game: Game) {
     const dt = (now - lastFrameTime) / 1000;
     lastFrameTime = now;
     game.sync();
+    forest.sync(game.getTilesOrdered());
     for (const entity of game.entities) entity.render(dt);
     dir.shadow.camera.updateProjectionMatrix();
     renderer.render(scene, camera);
@@ -282,8 +333,9 @@ export function startRender(game: Game) {
     const mySquadCount = game.getMySquadCount();
     const myResources = game.getMyResources();
     const selectedInfo: SelectionInfo | null = game.getSelectedEntity()?.getSelectionInfo() ?? null;
+    const selectedTile: TileView | null = game.getSelectedTile();
 
-    drawHUD(hudCanvas, hud, myColor, mySquadCount, myResources, selectedInfo, now / 1000);
+    drawHUD(hudCanvas, hud, myColor, mySquadCount, myResources, selectedInfo, selectedTile, now / 1000);
 
     netPerf.tick(now);
   }

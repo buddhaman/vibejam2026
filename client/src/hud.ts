@@ -6,6 +6,7 @@
 
 import { BuildingType, formatResourceCost, getBuildingRules, type ResourceCost } from "../../shared/game-rules.js";
 import type { SelectionInfo } from "./entity.js";
+import type { TileView } from "./terrain.js";
 
 type Rect = { x: number; y: number; w: number; h: number };
 
@@ -38,6 +39,14 @@ export type HudState = {
     worldX: number;
     worldZ: number;
   };
+  _cardKey: string;
+  _cardEnterT: number;
+  _menuWasVisible: boolean;
+  _menuOpenT: number;
+  _moveMarkers: Array<{ sx: number; sy: number; born: number }>;
+  _resourceBounce: { food: number; wood: number; gold: number };
+  _prevResources: { food: number; wood: number; gold: number };
+  _warning: { text: string; born: number };
 };
 
 // Layout constants
@@ -61,7 +70,27 @@ const TEXT_CREAM       = "#ffe8b0";
 const TEXT_MUTED       = "rgba(255,210,130,0.40)";
 
 export function createHudState(): HudState {
-  return { buildMenu: { visible: false, screenX: 0, screenY: 0, worldX: 0, worldZ: 0 } };
+  return {
+    buildMenu: { visible: false, screenX: 0, screenY: 0, worldX: 0, worldZ: 0 },
+    _cardKey: "",
+    _cardEnterT: -999,
+    _menuWasVisible: false,
+    _menuOpenT: -999,
+    _moveMarkers: [],
+    _resourceBounce: { food: -999, wood: -999, gold: -999 },
+    _prevResources: { food: 0, wood: 0, gold: 0 },
+    _warning: { text: "", born: -999 },
+  };
+}
+
+/** Call this when a move command is issued to show a ground ripple at screen pos. */
+export function addMoveMarker(hud: HudState, sx: number, sy: number, t: number): void {
+  hud._moveMarkers.push({ sx, sy, born: t });
+  if (hud._moveMarkers.length > 6) hud._moveMarkers.shift();
+}
+
+export function showWarning(hud: HudState, text: string, t: number): void {
+  hud._warning = { text, born: t };
 }
 
 export function createHudCanvas(): HTMLCanvasElement {
@@ -162,6 +191,7 @@ export function drawHUD(
   mySquadCount: number,
   resources: ResourceCost,
   selected: SelectionInfo | null,
+  selectedTile: TileView | null,
   t: number
 ) {
   const ctx = canvas.getContext("2d")!;
@@ -169,12 +199,93 @@ export function drawHUD(
   const H = canvas.height;
   ctx.clearRect(0, 0, W, H);
 
-  drawBottomBar(ctx, W, H, myColor, mySquadCount, resources, selected !== null);
-  if (selected) drawSelectionCard(ctx, W, H, selected);
-  if (hud.buildMenu.visible) drawBuildMenu(ctx, menuLayout(hud.buildMenu.screenX, hud.buildMenu.screenY), t);
+  // ── Track animation state ─────────────────────────────────────────────────
+
+  // Card entrance — detect selection change by title+color proxy
+  const cardKey = selected ? `${selected.title}:${selected.color}` : "";
+  if (cardKey !== hud._cardKey) {
+    hud._cardKey = cardKey;
+    hud._cardEnterT = cardKey ? t : -999;
+  }
+
+  // Build menu entrance
+  if (hud.buildMenu.visible && !hud._menuWasVisible) hud._menuOpenT = t;
+  hud._menuWasVisible = hud.buildMenu.visible;
+
+  // Resource bounce on increase
+  if (resources.food > hud._prevResources.food) hud._resourceBounce.food = t;
+  if (resources.wood > hud._prevResources.wood) hud._resourceBounce.wood = t;
+  if (resources.gold > hud._prevResources.gold) hud._resourceBounce.gold = t;
+  hud._prevResources = { food: resources.food, wood: resources.wood, gold: resources.gold };
+
+  // ── Draw ─────────────────────────────────────────────────────────────────
+
+  drawMoveMarkers(ctx, hud, t);
+  drawWarningToast(ctx, W, H, hud, t);
+  drawBottomBar(ctx, W, H, myColor, mySquadCount, resources, hud._resourceBounce, selected !== null, t);
+  if (selected) drawSelectionCard(ctx, W, H, selected, t, hud._cardEnterT);
+  if (!selected && selectedTile) drawTileCard(ctx, W, H, selectedTile);
+  if (hud.buildMenu.visible) drawBuildMenu(ctx, menuLayout(hud.buildMenu.screenX, hud.buildMenu.screenY), t, hud._menuOpenT);
 }
 
 // ─── Draw helpers ────────────────────────────────────────────────────────────
+
+/** Expanding rings at screen points where move was ordered (`addMoveMarker`). */
+function drawMoveMarkers(ctx: CanvasRenderingContext2D, hud: HudState, t: number): void {
+  const life = 0.9;
+  hud._moveMarkers = hud._moveMarkers.filter((m) => t - m.born < life);
+
+  for (const m of hud._moveMarkers) {
+    const u = Math.min(1, (t - m.born) / life);
+    const rOuter = 10 + u * 48;
+    const alpha = (1 - u) * 0.62;
+    ctx.save();
+    ctx.beginPath();
+    ctx.arc(m.sx, m.sy, rOuter, 0, Math.PI * 2);
+    ctx.strokeStyle = `rgba(255, 190, 70, ${alpha})`;
+    ctx.lineWidth = 2.25;
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.arc(m.sx, m.sy, rOuter * 0.48, 0, Math.PI * 2);
+    ctx.strokeStyle = `rgba(255, 235, 180, ${alpha * 0.55})`;
+    ctx.lineWidth = 1;
+    ctx.stroke();
+    ctx.restore();
+  }
+}
+
+function drawWarningToast(ctx: CanvasRenderingContext2D, W: number, H: number, hud: HudState, t: number): void {
+  if (!hud._warning.text) return;
+  const age = t - hud._warning.born;
+  if (age > 1.9) return;
+
+  const fadeIn = Math.min(1, age / 0.12);
+  const fadeOut = Math.min(1, (1.9 - age) / 0.25);
+  const alpha = Math.max(0, Math.min(fadeIn, fadeOut));
+  const y = H - BAR_H - 84 - Math.max(0, 1 - fadeIn) * 10;
+  const w = 280;
+  const h = 34;
+  const x = (W - w) * 0.5;
+
+  ctx.save();
+  ctx.globalAlpha = alpha;
+  ctx.shadowColor = "rgba(0,0,0,0.55)";
+  ctx.shadowBlur = 20;
+  ctx.fillStyle = "rgba(58, 26, 16, 0.94)";
+  rr(ctx, x, y, w, h, 12);
+  ctx.fill();
+  ctx.shadowBlur = 0;
+  ctx.strokeStyle = "rgba(255, 154, 84, 0.9)";
+  ctx.lineWidth = 1.5;
+  rr(ctx, x, y, w, h, 12);
+  ctx.stroke();
+  ctx.fillStyle = "#ffe4bc";
+  ctx.font = "bold 12px system-ui,sans-serif";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.fillText(hud._warning.text, x + w / 2, y + h / 2);
+  ctx.restore();
+}
 
 /** AoM-style dark panel with gold double-border. */
 function drawPanel(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, r: number) {
@@ -209,7 +320,9 @@ function drawBottomBar(
   color: number,
   count: number,
   resources: ResourceCost,
-  hasSelection: boolean
+  bounce: HudState["_resourceBounce"],
+  hasSelection: boolean,
+  t: number
 ) {
   const top = H - BAR_H;
   const mid = top + BAR_H / 2;
@@ -249,9 +362,9 @@ function drawBottomBar(
   ctx.fillText(`${count} squad${count !== 1 ? "s" : ""}`, 48, mid);
   ctx.restore();
 
-  drawResourcePill(ctx, 156, mid, "#8bcf57", "Food", resources.food);
-  drawResourcePill(ctx, 252, mid, "#c8954d", "Wood", resources.wood);
-  drawResourcePill(ctx, 348, mid, "#f0d46f", "Gold", resources.gold);
+  drawResourcePill(ctx, 156, mid, "#8bcf57", "Food", resources.food, bounce.food, t);
+  drawResourcePill(ctx, 252, mid, "#c8954d", "Wood", resources.wood, bounce.wood, t);
+  drawResourcePill(ctx, 348, mid, "#f0d46f", "Gold", resources.gold, bounce.gold, t);
 
   // Hint text (touch-friendly copy)
   ctx.save();
@@ -268,10 +381,24 @@ function drawBottomBar(
   ctx.restore();
 }
 
-function drawSelectionCard(ctx: CanvasRenderingContext2D, W: number, H: number, info: SelectionInfo) {
+function drawSelectionCard(
+  ctx: CanvasRenderingContext2D,
+  W: number,
+  H: number,
+  info: SelectionInfo,
+  t: number,
+  enterT: number
+) {
   const card      = selectionCardRect(W, H);
   const close     = closeBtnRect(W, H);
   const actionRects = selectionActionRects(W, H, info.actions.length);
+
+  // Slide-in entrance animation
+  const cardAge  = Math.max(0, t - enterT);
+  const cardYOff = cardAge < 0.4 ? (1 - easeOutBack(Math.min(1, cardAge / 0.35))) * 38 : 0;
+
+  ctx.save();
+  ctx.translate(0, cardYOff);
 
   // Panel frame
   drawPanel(ctx, card.x, card.y, card.w, card.h, CARD_R);
@@ -342,8 +469,14 @@ function drawSelectionCard(ctx: CanvasRenderingContext2D, W: number, H: number, 
   // Fill — bright Snakebird colors
   if (pct > 0) {
     const hue = pct > 0.5 ? 108 : pct > 0.25 ? 42 : 4;
+    // Danger pulse glow when health is critical
+    if (pct < 0.3) {
+      ctx.shadowColor = `rgba(255,30,10,${0.30 + 0.25 * Math.sin(t * 9)})`;
+      ctx.shadowBlur = 10;
+    }
     ctx.fillStyle = `hsl(${hue},88%,50%)`;
     rr(ctx, barX, barY, barW * pct, 8, 4); ctx.fill();
+    ctx.shadowBlur = 0;
   }
   ctx.restore();
 
@@ -407,10 +540,27 @@ function drawSelectionCard(ctx: CanvasRenderingContext2D, W: number, H: number, 
     }
     ctx.restore();
   }
+
+  // Close slide-in transform
+  ctx.restore();
 }
 
-function drawBuildMenu(ctx: CanvasRenderingContext2D, layout: ReturnType<typeof menuLayout>, t: number) {
+function drawBuildMenu(
+  ctx: CanvasRenderingContext2D,
+  layout: ReturnType<typeof menuLayout>,
+  t: number,
+  openT: number
+) {
   const { panel, items, anchor } = layout;
+
+  // Pop-in: scale from anchor point with spring overshoot
+  const menuAge   = Math.max(0, t - openT);
+  const menuScale = menuAge < 0.4 ? easeOutBack(Math.min(1, menuAge / 0.28)) : 1;
+
+  ctx.save();
+  ctx.translate(anchor.x, anchor.y);
+  ctx.scale(menuScale, menuScale);
+  ctx.translate(-anchor.x, -anchor.y);
 
   // Amber dashed connector line
   ctx.save();
@@ -493,6 +643,9 @@ function drawBuildMenu(ctx: CanvasRenderingContext2D, layout: ReturnType<typeof 
     ctx.fillText(formatResourceCost(item.cost), item.rect.x + item.rect.w / 2, item.rect.y + item.rect.h - 5);
     ctx.restore();
   }
+
+  // Close pop-in transform
+  ctx.restore();
 }
 
 function drawResourcePill(
@@ -501,9 +654,13 @@ function drawResourcePill(
   midY: number,
   color: string,
   label: string,
-  value: number
+  value: number,
+  bounceT: number,
+  t: number
 ) {
-  const y = midY - RESOURCE_PILL_H * 0.5;
+  const bounceAge = t - bounceT;
+  const yBounce   = bounceAge < 0.45 ? -Math.sin((bounceAge / 0.45) * Math.PI) * 5 : 0;
+  const y = midY - RESOURCE_PILL_H * 0.5 + yBounce;
   ctx.save();
   ctx.fillStyle = "rgba(42,26,10,0.95)";
   rr(ctx, x, y, RESOURCE_PILL_W, RESOURCE_PILL_H, 14);
@@ -513,17 +670,18 @@ function drawResourcePill(
   rr(ctx, x, y, RESOURCE_PILL_W, RESOURCE_PILL_H, 14);
   ctx.stroke();
 
+  const cy = midY + yBounce;
   ctx.fillStyle = color;
   ctx.beginPath();
-  ctx.arc(x + 16, midY, 6, 0, Math.PI * 2);
+  ctx.arc(x + 16, cy, 6, 0, Math.PI * 2);
   ctx.fill();
 
   ctx.fillStyle = TEXT_CREAM;
   ctx.font = "bold 10px system-ui,sans-serif";
   ctx.textBaseline = "middle";
-  ctx.fillText(label, x + 28, midY - 6);
+  ctx.fillText(label, x + 28, cy - 6);
   ctx.font = "bold 12px system-ui,sans-serif";
-  ctx.fillText(String(value), x + 28, midY + 7);
+  ctx.fillText(String(value), x + 28, cy + 7);
   ctx.restore();
 }
 
@@ -562,6 +720,40 @@ function drawProductionPanel(
   rr(ctx, barX, barY, barW * production.progress, 10, 5);
   ctx.fill();
   ctx.restore();
+}
+
+function drawTileCard(ctx: CanvasRenderingContext2D, W: number, H: number, tile: TileView) {
+  const card = selectionCardRect(W, H);
+  drawPanel(ctx, card.x, card.y, card.w, 96, CARD_R);
+
+  ctx.save();
+  ctx.fillStyle = "rgba(195,145,28,0.70)";
+  ctx.font = "bold 9px system-ui,sans-serif";
+  ctx.textBaseline = "top";
+  ctx.fillText("◆  TILE  ◆", card.x + 12, card.y + 9);
+
+  ctx.fillStyle = TEXT_CREAM;
+  ctx.font = "bold 16px system-ui,sans-serif";
+  ctx.fillText(tile.isMountain ? "Mountain Tile" : tile.wood > 0 ? "Forest Tile" : "Grass Tile", card.x + 14, card.y + 34);
+
+  ctx.fillStyle = "rgba(255,215,130,0.68)";
+  ctx.font = "12px system-ui,sans-serif";
+  ctx.fillText(`Wood: ${tile.wood} / ${tile.maxWood}`, card.x + 14, card.y + 56);
+  ctx.fillText(
+    tile.isMountain
+      ? `Blocked terrain  •  Height: ${tile.height.toFixed(2)}`
+      : `Gold: ${tile.gold}  •  Height: ${tile.height.toFixed(2)}`,
+    card.x + 14,
+    card.y + 74
+  );
+  ctx.restore();
+}
+
+/** Easing with slight overshoot (0 → 1). */
+function easeOutBack(t: number): number {
+  const c1 = 1.70158;
+  const c3 = c1 + 1;
+  return 1 + c3 * (t - 1) ** 3 + c1 * (t - 1) ** 2;
 }
 
 function rr(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, r = 8) {
