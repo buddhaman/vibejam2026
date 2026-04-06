@@ -2,6 +2,7 @@ import type { BuildingType, SquadSpread, TileType, UnitType } from "./game-rules
 
 export const MessageType = {
   INTENT:        "intent",
+  ATTACK:        "attack",
   BUILD:         "build",
   TRAIN:         "train",
   SQUAD_SPREAD:  "squad_spread",
@@ -17,6 +18,11 @@ export type IntentMessage = {
   blobId: string;
   targetX: number;
   targetY: number;
+};
+
+export type AttackMessage = {
+  blobId: string;
+  targetBlobId: string;
 };
 
 export type BuildMessage = {

@@ -3,6 +3,7 @@ import { RoomEnvironment } from "three/examples/jsm/environments/RoomEnvironment
 import { GAME_RULES, snapWorldToTileCenter } from "../../shared/game-rules.js";
 import type { Game } from "./game.js";
 import { BeamDrawer } from "./beam-drawer.js";
+import { BlobEntity } from "./blob-entity.js";
 import {
   addMoveMarker,
   createHudCanvas,
@@ -276,6 +277,12 @@ export function startRender(game: Game) {
     const picked = game.pickEntityFromRay(raycaster);
     if (picked) {
       cancelPendingMove();
+      const selectedBlob = game.getSelectedMyBlobEntity();
+      if (selectedBlob && picked instanceof BlobEntity && !picked.isMine()) {
+        game.sendAttackIntent(selectedBlob.id, picked.id);
+        lastGroundTap.t = 0;
+        return;
+      }
       game.toggleSelection(picked.id);
       lastGroundTap.t = 0;
       return;

@@ -14,6 +14,7 @@ export class Player extends Schema {
 export class Blob extends Schema {
   @type("string") id: string = "";
   @type("string") ownerId: string = "";
+  @type("string") attackTargetBlobId: string = "";
   @type("number") x: number = 0;
   @type("number") y: number = 0;
   @type("number") targetX: number = 0;

@@ -3,6 +3,7 @@ import {
   GAME_RULES,
   SquadSpread,
   UnitType,
+  getBlobMaxHealth,
   getSquadAxes,
   getUnitRules,
   type SquadSpread as SquadSpreadValue,
@@ -91,6 +92,8 @@ const SWORD_LEN_FRAC = 0.75;
 const SWORD_W = 0.048;
 /** Maximum arm swing angle (radians) while walking. */
 const ARM_SWING_MAX = Math.PI * 0.40;
+const ATTACK_SWING_MAX = Math.PI * 0.95;
+const UNIT_ATTACK_REACH = GAME_RULES.UNIT_RADIUS * 1.7;
 
 const SHIELD_RADIUS    = 0.44;
 const SHIELD_THICKNESS = 0.055;
@@ -133,6 +136,7 @@ export class BlobEntity extends Entity {
   private ovalFill!: THREE.Mesh<THREE.CircleGeometry, THREE.MeshBasicMaterial>;
   private ovalRing!: THREE.Mesh<THREE.RingGeometry, THREE.MeshBasicMaterial>;
   private blob: {
+    attackTargetBlobId: string;
     x: number;
     y: number;
     targetX: number;
@@ -166,6 +170,7 @@ export class BlobEntity extends Entity {
   private targetConnector!: THREE.Line<THREE.BufferGeometry, THREE.LineBasicMaterial>;
   private pingPhase = Math.random(); // stagger so multiple blobs don't pulse in sync
   private targetAnimT = 0;
+  private combatAnimT = Math.random() * Math.PI * 2;
 
 
   public constructor(game: Game, id: string) {
@@ -249,6 +254,7 @@ export class BlobEntity extends Entity {
   }
 
   public sync(blob: {
+    attackTargetBlobId: string;
     x: number;
     y: number;
     targetX: number;
@@ -289,6 +295,10 @@ export class BlobEntity extends Entity {
         this.formationForwardY = this.forwardY;
       }
     }
+  }
+
+  private getCombatTarget() {
+    return this.game.getBlobCombatTarget(this.id);
   }
 
   private getCanonicalFormationAxis(dx: number, dy: number): { x: number; y: number } | null {
@@ -556,8 +566,31 @@ export class BlobEntity extends Entity {
     return { x: center.x, y: center.y, major, minor, heading: this.heading };
   }
 
+  public getRadius(): number {
+    return this.blob?.radius ?? 0;
+  }
+
+  public getPredictedWorldCenter(): { x: number; z: number } {
+    const center = this.getPredictedCenter();
+    return { x: center.x, z: center.y };
+  }
+
+  public getApproxUnitWorldPosition(rank: number): { x: number; z: number } {
+    const layout = this.getLayout();
+    const count = Math.max(1, Math.min(this.blob?.unitCount ?? 1, INSTANCE_CAP));
+    const slot = this.getSlotPosition(Math.max(0, Math.min(rank, count - 1)), count, layout.major, layout.minor);
+    const rightX = Math.cos(layout.heading);
+    const rightZ = -Math.sin(layout.heading);
+    const forwardX = Math.sin(layout.heading);
+    const forwardZ = Math.cos(layout.heading);
+    const px = rightX * slot.x + forwardX * slot.z;
+    const pz = rightZ * slot.x + forwardZ * slot.z;
+    return { x: layout.x + px, z: layout.y + pz };
+  }
+
   public render(dt: number): void {
     if (!this.blob) return;
+    this.combatAnimT += dt;
 
     this.visualTime += Math.min(0.05, dt);
     while (this.visualTime >= VISUAL_STEP) {
@@ -642,6 +675,13 @@ export class BlobEntity extends Entity {
     this.stepUnits(stepDt, layout);
 
     const unitRules = getUnitRules(this.blob.unitType);
+    const combatTarget = this.getCombatTarget();
+    const combatTargetCenter = combatTarget?.getPredictedWorldCenter() ?? null;
+    const engagedInCombat =
+      !!combatTarget &&
+      !!combatTargetCenter &&
+      Math.hypot(layout.x - combatTargetCenter.x, layout.y - combatTargetCenter.z) <=
+        this.getRadius() + combatTarget.getRadius() + GAME_RULES.BLOB_COMBAT_ENGAGE_PADDING;
     const rightX = Math.cos(layout.heading);
     const rightZ = -Math.sin(layout.heading);
     const forwardX = Math.sin(layout.heading);
@@ -649,8 +689,26 @@ export class BlobEntity extends Entity {
     const tiles = this.game.getTiles();
     for (let i = 0; i < n; i++) {
       const state = this.unitStates[i];
-      const desiredPx = rightX * state.x + forwardX * state.z;
-      const desiredPz = rightZ * state.x + forwardZ * state.z;
+      let desiredPx = rightX * state.x + forwardX * state.z;
+      let desiredPz = rightZ * state.x + forwardZ * state.z;
+      let enemyWorldX = 0;
+      let enemyWorldZ = 0;
+      let hasEnemyAssignment = false;
+      if (engagedInCombat && combatTarget) {
+        const enemyCount = Math.max(1, combatTarget.getUnitCount());
+        const enemyRank = Math.min(enemyCount - 1, Math.floor((i / Math.max(1, n)) * enemyCount));
+        const enemyPos = combatTarget.getApproxUnitWorldPosition(enemyRank);
+        const enemyDx = enemyPos.x - layout.x;
+        const enemyDz = enemyPos.z - layout.y;
+        const enemyDist = Math.hypot(enemyDx, enemyDz);
+        if (enemyDist > 1e-4) {
+          desiredPx = enemyDx - (enemyDx / enemyDist) * UNIT_ATTACK_REACH;
+          desiredPz = enemyDz - (enemyDz / enemyDist) * UNIT_ATTACK_REACH;
+          enemyWorldX = enemyPos.x;
+          enemyWorldZ = enemyPos.z;
+          hasEnemyAssignment = true;
+        }
+      }
       if (!state.bodyReady) {
         state.bodyX = desiredPx;
         state.bodyZ = desiredPz;
@@ -680,8 +738,17 @@ export class BlobEntity extends Entity {
       const bodyVz = state.feetReady ? (worldZ - state.lastBodyWorldZ) / Math.max(stepDt, 1e-4) : this.visualVy;
       let stepForwardX = forwardX;
       let stepForwardZ = forwardZ;
+      if (hasEnemyAssignment) {
+        const engageDx = enemyWorldX - worldX;
+        const engageDz = enemyWorldZ - worldZ;
+        const engageDist = Math.hypot(engageDx, engageDz);
+        if (engageDist > 1e-4) {
+          stepForwardX = engageDx / engageDist;
+          stepForwardZ = engageDz / engageDist;
+        }
+      }
       const bodySpeed = Math.hypot(bodyVx, bodyVz);
-      if (bodySpeed > FOOT_IDLE_SPEED) {
+      if (!hasEnemyAssignment && bodySpeed > FOOT_IDLE_SPEED) {
         stepForwardX = bodyVx / bodySpeed;
         stepForwardZ = bodyVz / bodySpeed;
       }
@@ -752,9 +819,20 @@ export class BlobEntity extends Entity {
         // Arm swing: driven by stride phase. Right arm leads when left foot plants.
         const walkPhase  = state.distanceWalked / (FOOT_STRIDE * vs + 1e-6);
         const swingSign  = state.leftPlanted ? 1 : -1;
-        const isStriding = bodySpeed > FOOT_IDLE_SPEED * 2;
-        const rightSwing = isStriding ? Math.sin(walkPhase * Math.PI * 2) * swingSign * ARM_SWING_MAX : 0;
-        const leftSwing  = isStriding ? Math.sin(walkPhase * Math.PI * 2) * (-swingSign) * SHIELD_SWING_MAX : 0;
+        const enemyDist = hasEnemyAssignment ? Math.hypot(enemyWorldX - worldX, enemyWorldZ - worldZ) : Infinity;
+        const isAttacking = hasEnemyAssignment && enemyDist <= UNIT_ATTACK_REACH * 1.25;
+        const isStriding = !isAttacking && bodySpeed > FOOT_IDLE_SPEED * 2;
+        const attackPhase = this.combatAnimT * 9 + i * 0.37;
+        const rightSwing = isAttacking
+          ? -0.24 + Math.max(0, Math.sin(attackPhase)) * ATTACK_SWING_MAX
+          : isStriding
+            ? Math.sin(walkPhase * Math.PI * 2) * swingSign * ARM_SWING_MAX
+            : 0;
+        const leftSwing  = isAttacking
+          ? Math.sin(attackPhase * 0.85) * SHIELD_SWING_MAX * 0.8
+          : isStriding
+            ? Math.sin(walkPhase * Math.PI * 2) * (-swingSign) * SHIELD_SWING_MAX
+            : 0;
 
         // Right shoulder → hand → sword tip (all in the forward-up plane)
         const rShX = worldX + sideX * shoulderSide;
@@ -987,7 +1065,7 @@ export class BlobEntity extends Entity {
           ? "Can gather resources"
           : `${this.blob.unitCount} units`,
       health: this.blob.health,
-      maxHealth: unitRules.health,
+      maxHealth: getBlobMaxHealth(this.blob.unitType, this.blob.unitCount),
       color: this.game.getPlayerColor(this.blob.ownerId),
       actions: this.isMine() && this.blob.unitType !== UnitType.VILLAGER
         ? [

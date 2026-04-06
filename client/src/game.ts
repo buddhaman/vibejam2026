@@ -14,6 +14,7 @@ import {
   type UnitType as UnitTypeValue,
 } from "../../shared/game-rules.js";
 import {
+  type AttackMessage,
   MessageType,
   type BuildMessage,
   type IntentMessage,
@@ -170,6 +171,7 @@ export class Game {
       let entity = this.findBlobEntity(id as string);
       if (!entity) entity = new BlobEntity(this, id as string);
       entity.sync(blob as {
+        attackTargetBlobId: string;
         x: number;
         y: number;
         targetX: number;
@@ -373,6 +375,10 @@ export class Game {
     this.room.send(MessageType.INTENT, { blobId: blob.id, targetX, targetY } satisfies IntentMessage);
   }
 
+  public sendAttackIntent(blobId: string, targetBlobId: string): void {
+    this.room.send(MessageType.ATTACK, { blobId, targetBlobId } satisfies AttackMessage);
+  }
+
   public sendBuildIntent(type: BuildMessage["type"], worldX: number, worldZ: number): void {
     const snapped = snapWorldToTileCenter(worldX, worldZ);
     this.room.send(MessageType.BUILD, { type, worldX: snapped.x, worldZ: snapped.z } satisfies BuildMessage);
@@ -399,5 +405,22 @@ export class Game {
     if (actionId === "spread:tight") this.sendSquadSpreadIntent(selected.id, SquadSpread.TIGHT);
     if (actionId === "spread:default") this.sendSquadSpreadIntent(selected.id, SquadSpread.DEFAULT);
     if (actionId === "spread:wide") this.sendSquadSpreadIntent(selected.id, SquadSpread.WIDE);
+  }
+
+  public getBlobCombatTarget(blobId: string): BlobEntity | null {
+    const blob = this.room.state.blobs.get(blobId) as { attackTargetBlobId?: string } | undefined;
+    const targetId = blob?.attackTargetBlobId;
+    if (typeof targetId === "string" && targetId.length > 0) {
+      return this.findBlobEntity(targetId);
+    }
+
+    let fallback: BlobEntity | null = null;
+    this.room.state.blobs.forEach((candidate, id) => {
+      const attackTarget = (candidate as { attackTargetBlobId?: string }).attackTargetBlobId;
+      if (attackTarget !== blobId) return;
+      const entity = this.findBlobEntity(id as string);
+      if (entity) fallback = entity;
+    });
+    return fallback;
   }
 }

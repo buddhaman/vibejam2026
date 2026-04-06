@@ -9,6 +9,7 @@ import {
   canAfford,
   assignDatacenterSites,
   generateTile,
+  getBlobMaxHealth,
   getTileCoordsFromWorld,
   getTileKey,
   getBuildingRules,
@@ -26,6 +27,7 @@ import {
   type ResourceCost,
 } from "../../shared/game-rules.js";
 import {
+  type AttackMessage,
   MessageType,
   type IntentMessage,
   type BuildMessage,
@@ -96,6 +98,7 @@ export class BattleRoom extends Room<{ state: GameState }> {
       const targetTile = this.getTileAtWorld(msg.targetX, msg.targetY);
       if (!targetTile?.canWalk) return;
 
+      blob.attackTargetBlobId = "";
       blob.targetX = clamp(msg.targetX, CONFIG.WORLD_MIN, CONFIG.WORLD_MAX);
       blob.targetY = clamp(msg.targetY, CONFIG.WORLD_MIN, CONFIG.WORLD_MAX);
 
@@ -117,6 +120,23 @@ export class BattleRoom extends Room<{ state: GameState }> {
       client.send(MessageType.PATH, {
         blobId: blob.id,
         waypoints: path,
+      } satisfies PathMessage);
+    });
+
+    this.onMessage(MessageType.ATTACK, (client, raw) => {
+      const msg = raw as AttackMessage;
+      if (typeof msg?.blobId !== "string" || typeof msg.targetBlobId !== "string") return;
+      const blob = this.state.blobs.get(msg.blobId);
+      const target = this.state.blobs.get(msg.targetBlobId);
+      if (!blob || !target || blob.ownerId !== client.sessionId || target.ownerId === client.sessionId) return;
+
+      blob.attackTargetBlobId = target.id;
+      blob.targetX = target.x;
+      blob.targetY = target.y;
+      this.blobPaths.delete(blob.id);
+      client.send(MessageType.PATH, {
+        blobId: blob.id,
+        waypoints: [],
       } satisfies PathMessage);
     });
 
@@ -241,6 +261,17 @@ export class BattleRoom extends Room<{ state: GameState }> {
     }
 
     for (const blob of this.state.blobs.values()) {
+      if (blob.attackTargetBlobId.length > 0) {
+        const target = this.state.blobs.get(blob.attackTargetBlobId);
+        if (!target || target.ownerId === blob.ownerId) {
+          blob.attackTargetBlobId = "";
+        } else {
+          blob.targetX = target.x;
+          blob.targetY = target.y;
+          this.blobPaths.delete(blob.id);
+        }
+      }
+
       blob.radius = getSquadRadius(blob.unitCount, blob.spread);
 
       // Resolve the immediate movement target from the A* path (or fall back to targetX/Y)
@@ -323,6 +354,7 @@ export class BattleRoom extends Room<{ state: GameState }> {
       }
     }
 
+    this.resolveBlobCombat(dt);
     this.rebalanceFriendlyBlobs();
   }
 
@@ -547,6 +579,15 @@ export class BattleRoom extends Room<{ state: GameState }> {
     blob.radius = getSquadRadius(blob.unitCount, blob.spread);
   }
 
+  private syncBlobHealthToUnitCount(blob: Blob): void {
+    const hpPerUnit = Math.max(1, getUnitRules(blob.unitType).health);
+    blob.health = Math.max(0, blob.health);
+    blob.unitCount = Math.max(0, Math.ceil(blob.health / hpPerUnit));
+    const maxHealth = getBlobMaxHealth(blob.unitType, blob.unitCount);
+    blob.health = Math.min(blob.health, maxHealth);
+    this.refreshBlobDerived(blob);
+  }
+
   private isBlobHeavilyEngaged(blob: Blob): boolean {
     for (const other of this.state.blobs.values()) {
       if (other.id === blob.id || other.ownerId === blob.ownerId) continue;
@@ -575,6 +616,7 @@ export class BattleRoom extends Room<{ state: GameState }> {
   }
 
   private rebalancePair(a: Blob, b: Blob): void {
+    const totalHealth = a.health + b.health;
     const total = a.unitCount + b.unitCount;
     if (a.unitCount >= b.unitCount) {
       a.unitCount = Math.ceil(total / 2);
@@ -582,6 +624,10 @@ export class BattleRoom extends Room<{ state: GameState }> {
     } else {
       a.unitCount = Math.floor(total / 2);
       b.unitCount = Math.ceil(total / 2);
+    }
+    if (total > 0 && totalHealth > 0) {
+      a.health = totalHealth * (a.unitCount / total);
+      b.health = totalHealth - a.health;
     }
     this.refreshBlobDerived(a);
     this.refreshBlobDerived(b);
@@ -647,6 +693,43 @@ export class BattleRoom extends Room<{ state: GameState }> {
     return best;
   }
 
+  private resolveBlobCombat(dt: number): void {
+    const locked = new Set<string>();
+    const deadIds = new Set<string>();
+
+    for (const blob of this.state.blobs.values()) {
+      if (locked.has(blob.id) || blob.attackTargetBlobId.length === 0) continue;
+      const target = this.state.blobs.get(blob.attackTargetBlobId);
+      if (!target || target.ownerId === blob.ownerId || locked.has(target.id)) continue;
+
+      const engageDistance = blob.radius + target.radius + CONFIG.BLOB_COMBAT_ENGAGE_PADDING;
+      if (Math.hypot(blob.x - target.x, blob.y - target.y) > engageDistance) continue;
+
+      const blobRules = getUnitRules(blob.unitType);
+      const targetRules = getUnitRules(target.unitType);
+      blob.health -= target.unitCount * targetRules.dpsPerUnit * dt;
+      target.health -= blob.unitCount * blobRules.dpsPerUnit * dt;
+
+      this.syncBlobHealthToUnitCount(blob);
+      this.syncBlobHealthToUnitCount(target);
+
+      if (blob.unitCount <= 0 || blob.health <= 0) deadIds.add(blob.id);
+      if (target.unitCount <= 0 || target.health <= 0) deadIds.add(target.id);
+
+      locked.add(blob.id);
+      locked.add(target.id);
+    }
+
+    if (deadIds.size === 0) return;
+    for (const deadId of deadIds) {
+      this.blobPaths.delete(deadId);
+      this.state.blobs.delete(deadId);
+    }
+    for (const blob of this.state.blobs.values()) {
+      if (deadIds.has(blob.attackTargetBlobId)) blob.attackTargetBlobId = "";
+    }
+  }
+
   private spawnProducedUnit(building: Building, unitType: UnitType, unitCountOverride?: number) {
     const buildingRules = getBuildingRules(building.buildingType);
     const unitRules = getUnitRules(unitType);
@@ -657,6 +740,7 @@ export class BattleRoom extends Room<{ state: GameState }> {
     const nearby = this.findNearbyFriendlyBlobForTrainedUnits(building.ownerId, unitType, spawnX, spawnY);
     if (nearby) {
       nearby.unitCount += producedCount;
+      nearby.health += getBlobMaxHealth(unitType, producedCount);
       this.refreshBlobDerived(nearby);
       return;
     }
@@ -673,7 +757,7 @@ export class BattleRoom extends Room<{ state: GameState }> {
     blob.unitCount = producedCount;
     blob.spread = unitType === UnitType.VILLAGER ? SquadSpread.TIGHT : SquadSpread.DEFAULT;
     blob.radius = getSquadRadius(blob.unitCount, blob.spread);
-    blob.health = unitRules.health;
+    blob.health = getBlobMaxHealth(unitType, producedCount);
     blob.unitType = unitType;
     this.state.blobs.set(blob.id, blob);
   }

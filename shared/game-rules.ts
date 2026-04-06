@@ -64,6 +64,7 @@ export const GAME_RULES = {
   BLOB_ACCELERATION: 10,
   BLOB_DECELERATION_RADIUS: 14,
   BLOB_STOP_EPSILON: 0.65,
+  BLOB_COMBAT_ENGAGE_PADDING: 2.5,
   CLIENT_PREDICTION_LEAD: 0.09,
   UNIT_RADIUS: 0.56,
   UNIT_HEIGHT: 1.18,
@@ -155,6 +156,7 @@ export const UNIT_RULES = {
     health: 55,
     unitCount: 1,
     visualScale: 0.82,
+    dpsPerUnit: 1,
     targetSize: 3,
     rebalanceThreshold: 1,
     mergeDistance: 18,
@@ -164,9 +166,10 @@ export const UNIT_RULES = {
     detail: "Elite hoplites",
     cost: { biomass: 80, material: 0, compute: 35 },
     trainTimeMs: 12000,
-    health: GAME_RULES.DEFAULT_BLOB_HEALTH,
+    health: 10,
     unitCount: 12,
     visualScale: 1,
+    dpsPerUnit: 2,
     targetSize: 40,
     rebalanceThreshold: 5,
     mergeDistance: 32,
@@ -188,6 +191,10 @@ export function getUnitBalanceRules(unitType: UnitType) {
     rebalanceThreshold: rules.rebalanceThreshold,
     mergeDistance: rules.mergeDistance,
   };
+}
+
+export function getBlobMaxHealth(unitType: UnitType, unitCount: number): number {
+  return Math.max(0, unitCount) * getUnitRules(unitType).health;
 }
 
 export function canBuildingProduceUnit(buildingType: BuildingType, unitType: UnitType): boolean {
