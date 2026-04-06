@@ -12,6 +12,7 @@ import {
   getTileCoordsFromWorld,
   getTileKey,
   getBuildingRules,
+  getUnitBalanceRules,
   getUnitRules,
   getSquadRadius,
   getWorldTileCount,
@@ -43,6 +44,7 @@ function makeId(prefix: string) {
 }
 
 const CHUNK_SIZE = 50; // tiles per chunk — keeps each message well under 5 KB
+const BLOB_REBALANCE_BATTLE_BUFFER = 10;
 
 /** @see https://docs.colyseus.io/state/ — state is assigned on the class in 0.17+ */
 export class BattleRoom extends Room<{ state: GameState }> {
@@ -261,6 +263,8 @@ export class BattleRoom extends Room<{ state: GameState }> {
         blob.vy = 0;
       }
     }
+
+    this.rebalanceFriendlyBlobs();
   }
 
   private spawnTownCenter(ownerId: string, playerIndex: number): Building {
@@ -480,19 +484,134 @@ export class BattleRoom extends Room<{ state: GameState }> {
     }
   }
 
+  private refreshBlobDerived(blob: Blob): void {
+    blob.radius = getSquadRadius(blob.unitCount, blob.spread);
+  }
+
+  private isBlobHeavilyEngaged(blob: Blob): boolean {
+    for (const other of this.state.blobs.values()) {
+      if (other.id === blob.id || other.ownerId === blob.ownerId) continue;
+      const engageDistance = blob.radius + other.radius + BLOB_REBALANCE_BATTLE_BUFFER;
+      if (Math.hypot(blob.x - other.x, blob.y - other.y) <= engageDistance) return true;
+    }
+    return false;
+  }
+
+  private canRebalancePair(a: Blob, b: Blob): boolean {
+    if (a.id === b.id) return false;
+    if (a.ownerId !== b.ownerId || a.unitType !== b.unitType) return false;
+
+    const balanceRules = getUnitBalanceRules(a.unitType);
+    if (Math.hypot(a.x - b.x, a.y - b.y) > balanceRules.mergeDistance) return false;
+    if (this.isBlobHeavilyEngaged(a) || this.isBlobHeavilyEngaged(b)) return false;
+
+    const diff = Math.abs(a.unitCount - b.unitCount);
+    if (diff < balanceRules.rebalanceThreshold) return false;
+
+    const total = a.unitCount + b.unitCount;
+    const nextA = Math.max(Math.ceil(total / 2), Math.floor(total / 2));
+    const nextB = Math.min(Math.ceil(total / 2), Math.floor(total / 2));
+    const wouldMove = Math.min(Math.abs(a.unitCount - nextA), Math.abs(b.unitCount - nextB));
+    return wouldMove >= balanceRules.rebalanceThreshold;
+  }
+
+  private rebalancePair(a: Blob, b: Blob): void {
+    const total = a.unitCount + b.unitCount;
+    if (a.unitCount >= b.unitCount) {
+      a.unitCount = Math.ceil(total / 2);
+      b.unitCount = Math.floor(total / 2);
+    } else {
+      a.unitCount = Math.floor(total / 2);
+      b.unitCount = Math.ceil(total / 2);
+    }
+    this.refreshBlobDerived(a);
+    this.refreshBlobDerived(b);
+  }
+
+  private rebalanceFriendlyBlobs(): void {
+    const groups = new Map<string, Blob[]>();
+    for (const blob of this.state.blobs.values()) {
+      const key = `${blob.ownerId}:${blob.unitType}`;
+      const arr = groups.get(key);
+      if (arr) arr.push(blob);
+      else groups.set(key, [blob]);
+    }
+
+    for (const blobs of groups.values()) {
+      blobs.sort((a, b) => a.id.localeCompare(b.id));
+      const locked = new Set<string>();
+
+      for (let i = 0; i < blobs.length; i++) {
+        const a = blobs[i]!;
+        if (locked.has(a.id)) continue;
+
+        let best: Blob | null = null;
+        let bestDistance = Infinity;
+        let bestDiff = -1;
+        for (let j = i + 1; j < blobs.length; j++) {
+          const b = blobs[j]!;
+          if (locked.has(b.id) || !this.canRebalancePair(a, b)) continue;
+          const diff = Math.abs(a.unitCount - b.unitCount);
+          const distance = Math.hypot(a.x - b.x, a.y - b.y);
+          if (diff > bestDiff || (diff === bestDiff && distance < bestDistance)) {
+            best = b;
+            bestDiff = diff;
+            bestDistance = distance;
+          }
+        }
+
+        if (!best) continue;
+        this.rebalancePair(a, best);
+        locked.add(a.id);
+        locked.add(best.id);
+      }
+    }
+  }
+
+  private findNearbyFriendlyBlobForTrainedUnits(ownerId: string, unitType: UnitType, x: number, y: number): Blob | null {
+    const balanceRules = getUnitBalanceRules(unitType);
+    let best: Blob | null = null;
+    let bestDistance = Infinity;
+
+    for (const blob of this.state.blobs.values()) {
+      if (blob.ownerId !== ownerId || blob.unitType !== unitType) continue;
+      if (blob.unitCount >= balanceRules.targetSize) continue;
+      if (this.isBlobHeavilyEngaged(blob)) continue;
+      const distance = Math.hypot(blob.x - x, blob.y - y);
+      if (distance > balanceRules.mergeDistance) continue;
+      if (distance < bestDistance) {
+        best = blob;
+        bestDistance = distance;
+      }
+    }
+
+    return best;
+  }
+
   private spawnProducedUnit(building: Building, unitType: UnitType, unitCountOverride?: number) {
     const buildingRules = getBuildingRules(building.buildingType);
     const unitRules = getUnitRules(unitType);
+    const spawnX = clamp(building.x + buildingRules.trainSpawnOffsetX, CONFIG.WORLD_MIN, CONFIG.WORLD_MAX);
+    const spawnY = clamp(building.y, CONFIG.WORLD_MIN, CONFIG.WORLD_MAX);
+    const producedCount = unitCountOverride ?? unitRules.unitCount;
+
+    const nearby = this.findNearbyFriendlyBlobForTrainedUnits(building.ownerId, unitType, spawnX, spawnY);
+    if (nearby) {
+      nearby.unitCount += producedCount;
+      this.refreshBlobDerived(nearby);
+      return;
+    }
+
     const blob = new Blob();
     blob.id = makeId("blob");
     blob.ownerId = building.ownerId;
-    blob.x = clamp(building.x + buildingRules.trainSpawnOffsetX, CONFIG.WORLD_MIN, CONFIG.WORLD_MAX);
-    blob.y = clamp(building.y, CONFIG.WORLD_MIN, CONFIG.WORLD_MAX);
+    blob.x = spawnX;
+    blob.y = spawnY;
     blob.targetX = blob.x;
     blob.targetY = blob.y;
     blob.vx = 0;
     blob.vy = 0;
-    blob.unitCount = unitCountOverride ?? unitRules.unitCount;
+    blob.unitCount = producedCount;
     blob.spread = unitType === UnitType.VILLAGER ? SquadSpread.TIGHT : SquadSpread.DEFAULT;
     blob.radius = getSquadRadius(blob.unitCount, blob.spread);
     blob.health = unitRules.health;

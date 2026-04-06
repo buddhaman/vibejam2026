@@ -41,8 +41,10 @@ const OVAL_RING_MAT = new THREE.MeshBasicMaterial({
   depthWrite: false,
 });
 const DUMMY = new THREE.Object3D();
-/** Keep ≥ GAME_RULES.START_WARBAND_UNIT_COUNT so the free starter Phalanx isn’t culled. */
-const INSTANCE_CAP = Math.max(512, GAME_RULES.START_WARBAND_UNIT_COUNT);
+/** Keep ≥ starter Phalanx size — dev server uses a larger START_WARBAND_UNIT_COUNT (see server config). */
+const INSTANCE_CAP = import.meta.env.DEV
+  ? 8192
+  : Math.max(512, GAME_RULES.START_WARBAND_UNIT_COUNT);
 const GOLDEN_ANGLE = Math.PI * (3 - Math.sqrt(5));
 const VISUAL_STEP = 1 / 120;
 const VISUAL_CATCHUP = 12;
@@ -125,7 +127,10 @@ export class BlobEntity extends Entity {
   private visualTime = 0;
   private forwardX = 0;
   private forwardY = 1;
+  private formationForwardX = 0;
+  private formationForwardY = 1;
   private unitStates: UnitState[] = [];
+  private needsUnitReassignment = false;
 
   // Target destination indicator
   private targetGroup!: THREE.Group;
@@ -218,7 +223,21 @@ export class BlobEntity extends Entity {
     spread: SquadSpreadValue;
     unitType: UnitTypeValue;
   }): void {
+    const previousBlob = this.blob;
+    const previousTargetX = this.blob?.targetX ?? blob.targetX;
+    const previousTargetY = this.blob?.targetY ?? blob.targetY;
     this.blob = blob;
+    if (Math.hypot(blob.targetX - previousTargetX, blob.targetY - previousTargetY) > 0.25) {
+      const previousAxis = previousBlob
+        ? this.getCanonicalFormationAxis(previousBlob.targetX - previousBlob.x, previousBlob.targetY - previousBlob.y)
+        : null;
+      const nextAxis = this.getCanonicalFormationAxis(blob.targetX - blob.x, blob.targetY - blob.y);
+      this.setFormationForward(blob.targetX - blob.x, blob.targetY - blob.y);
+      this.needsUnitReassignment =
+        !!previousAxis &&
+        !!nextAxis &&
+        (previousAxis.x * nextAxis.x + previousAxis.y * nextAxis.y) < 0.985;
+    }
     if (this.visualX === null || this.visualY === null) {
       this.visualX = blob.x;
       this.visualY = blob.y;
@@ -228,8 +247,66 @@ export class BlobEntity extends Entity {
       if (speed > MIN_DIRECTION_SPEED) {
         this.forwardX = blob.vx / speed;
         this.forwardY = blob.vy / speed;
+        this.formationForwardX = this.forwardX;
+        this.formationForwardY = this.forwardY;
       }
     }
+  }
+
+  private getCanonicalFormationAxis(dx: number, dy: number): { x: number; y: number } | null {
+    const len = Math.hypot(dx, dy);
+    if (len <= 1e-4) return null;
+
+    let x = dx / len;
+    let y = dy / len;
+    if (y < 0 || (Math.abs(y) <= 1e-6 && x < 0)) {
+      x = -x;
+      y = -y;
+    }
+    return { x, y };
+  }
+
+  private setFormationForward(dx: number, dy: number): void {
+    const axis = this.getCanonicalFormationAxis(dx, dy);
+    if (!axis) return;
+    this.formationForwardX = axis.x;
+    this.formationForwardY = axis.y;
+  }
+
+  private reassignUnitStates(count: number, layout: { major: number; minor: number; heading: number }): void {
+    if (count <= 1) return;
+
+    const rightX = Math.cos(layout.heading);
+    const rightZ = -Math.sin(layout.heading);
+    const forwardX = Math.sin(layout.heading);
+    const forwardZ = Math.cos(layout.heading);
+
+    const slots = Array.from({ length: count }, (_, index) => {
+      const slot = this.getSlotPosition(index, count, layout.major, layout.minor);
+      return { index, front: slot.z, side: slot.x };
+    }).sort((a, b) => {
+      if (Math.abs(b.front - a.front) > 1e-4) return b.front - a.front;
+      return a.side - b.side;
+    });
+
+    const orderedStates = this.unitStates.slice(0, count).map((state) => {
+      const px = state.bodyReady ? state.bodyX : rightX * state.x + forwardX * state.z;
+      const pz = state.bodyReady ? state.bodyZ : rightZ * state.x + forwardZ * state.z;
+      return {
+        state,
+        front: px * forwardX + pz * forwardZ,
+        side: px * rightX + pz * rightZ,
+      };
+    }).sort((a, b) => {
+      if (Math.abs(b.front - a.front) > 1e-4) return b.front - a.front;
+      return a.side - b.side;
+    });
+
+    const remapped = this.unitStates.slice();
+    for (let rank = 0; rank < count; rank++) {
+      remapped[slots[rank]!.index] = orderedStates[rank]!.state;
+    }
+    this.unitStates = remapped;
   }
 
   private ensureUnitStateCount(count: number): void {
@@ -427,7 +504,13 @@ export class BlobEntity extends Entity {
     const speed = Math.hypot(center.vx, center.vy);
     const moveDistance = Math.hypot(tx, ty);
 
-    this.heading = Math.atan2(this.forwardX, this.forwardY);
+    if (moveDistance > 0.5) {
+      this.setFormationForward(tx, ty);
+    } else if (speed > MIN_DIRECTION_SPEED) {
+      this.setFormationForward(center.vx, center.vy);
+    }
+
+    this.heading = Math.atan2(this.formationForwardX, this.formationForwardY);
 
     const { major, minor } = getSquadAxes(this.blob.unitCount, moveDistance, speed, this.blob.spread);
     return { x: center.x, y: center.y, major, minor, heading: this.heading };
@@ -506,6 +589,11 @@ export class BlobEntity extends Entity {
     }
 
     const stepDt = Math.min(0.05, dt);
+    if (this.needsUnitReassignment) {
+      this.ensureUnitStateCount(n);
+      this.reassignUnitStates(n, layout);
+      this.needsUnitReassignment = false;
+    }
     this.stepUnits(stepDt, layout);
 
     const unitRules = getUnitRules(this.blob.unitType);

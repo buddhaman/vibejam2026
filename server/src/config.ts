@@ -12,7 +12,18 @@ function listenPort(): number {
   return n;
 }
 
+/** `npm run dev:server` sets NODE_ENV=development — keep Player uint16 fields ≤ 65535. */
+const is_dev_server = process.env.NODE_ENV === "development";
+
 export const CONFIG = {
   PORT: listenPort(),
   ...GAME_RULES,
+  ...(is_dev_server
+    ? {
+        START_BIOMASS: 50_000,
+        START_MATERIAL: 50_000,
+        START_COMPUTE: 50_000,
+        START_WARBAND_UNIT_COUNT: 4_000,
+      }
+    : {}),
 } as const;

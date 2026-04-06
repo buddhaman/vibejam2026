@@ -156,6 +156,9 @@ export const UNIT_RULES = {
     health: 55,
     unitCount: 1,
     visualScale: 0.82,
+    targetSize: 3,
+    rebalanceThreshold: 1,
+    mergeDistance: 18,
   },
   [UnitType.WARBAND]: {
     label: "Phalanx",
@@ -165,6 +168,9 @@ export const UNIT_RULES = {
     health: GAME_RULES.DEFAULT_BLOB_HEALTH,
     unitCount: 12,
     visualScale: 1,
+    targetSize: 40,
+    rebalanceThreshold: 5,
+    mergeDistance: 24,
   },
 } as const;
 
@@ -174,6 +180,15 @@ export function getBuildingRules(buildingType: BuildingType) {
 
 export function getUnitRules(unitType: UnitType) {
   return UNIT_RULES[unitType] ?? UNIT_RULES[UnitType.WARBAND];
+}
+
+export function getUnitBalanceRules(unitType: UnitType) {
+  const rules = getUnitRules(unitType);
+  return {
+    targetSize: rules.targetSize,
+    rebalanceThreshold: rules.rebalanceThreshold,
+    mergeDistance: rules.mergeDistance,
+  };
 }
 
 export function canBuildingProduceUnit(buildingType: BuildingType, unitType: UnitType): boolean {

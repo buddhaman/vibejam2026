@@ -90,6 +90,8 @@ The server only updates numbers. The client interprets those numbers as a living
 
 Aggregate RTS: many **visual** units per blob, **instancing**, local ragdoll/floppy physics, fake arrows and blood — all **client-only**. The server keeps **tens** of entities; the client may show **hundreds** of decorative bodies. **Bandwidth stays small** because only aggregates sync.
 
+Friendly blobs of the same owner and unit type also rebalance on the server as aggregate counters only. Each unit type defines a `targetSize`, `rebalanceThreshold`, and `mergeDistance` in [shared/game-rules.ts](/Users/tim/Code/vibejam/shared/game-rules.ts). When two nearby friendly blobs are close enough and not heavily engaged, the server may rebalance them toward an even split if the move would be meaningful. Newly trained units first try to join a nearby same-type blob that is still below its target size; otherwise they spawn as their own blob. The server never tracks individual soldiers for this.
+
 Next steps when the MVP is stable:
 
 1. Multiple blobs per player (already two at join for testing selection).
@@ -217,4 +219,3 @@ Keep the architecture **boring on the wire**, **expressive on the GPU**.
  - Map editor
  - Map savefile design
  - Sync map
-
