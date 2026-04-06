@@ -1,6 +1,10 @@
 import * as THREE from "three";
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
 import { GAME_RULES } from "../../shared/game-rules.js";
+import {
+  applyTeamColorTexturesToMaterial,
+  textureLikelyHasBrightFactionColors,
+} from "./render-texture-recolor.js";
 
 const PHALANX_GLB = "/models/buildings/phalanx.glb";
 
@@ -9,9 +13,6 @@ const PHALANX_GLB = "/models/buildings/phalanx.glb";
  * when the squad is first rendered (per-player textures).
  */
 export const PHALANX_TEAM_TEXTURE_REMAP = "phalanxTeamTexRemap" as const;
-
-/** After `applyPhalanxTeamTextureReplacements`, guards double processing. */
-const PHALANX_TEAM_TEX_APPLIED = "phalanxTeamTexApplied" as const;
 
 export type PhalanxPartTemplate = {
   geometry: THREE.BufferGeometry;
@@ -74,153 +75,6 @@ function isRedFabricColor(color: THREE.Color, loose: boolean): boolean {
   return true;
 }
 
-/** sRGB 0–1 samples from canvas `getImageData` (approx). */
-function pixelIsFactionRed(r: number, g: number, b: number): boolean {
-  return r > 0.22 && r - Math.max(g, b) > 0.07 && r > g * 1.08 && r > b * 1.1;
-}
-
-function pixelIsFactionBlue(r: number, g: number, b: number): boolean {
-  return b > 0.2 && b - Math.max(r, g) > 0.06 && b > r * 1.08 && b > g * 1.05;
-}
-
-const _srgbOut: THREE.RGB = { r: 0, g: 0, b: 0 };
-
-function writeSrgbBytes(hex: number, data: Uint8ClampedArray, i: number): void {
-  const c = new THREE.Color(hex);
-  c.getRGB(_srgbOut, THREE.SRGBColorSpace);
-  data[i] = Math.round(_srgbOut.r * 255);
-  data[i + 1] = Math.round(_srgbOut.g * 255);
-  data[i + 2] = Math.round(_srgbOut.b * 255);
-}
-
-/**
- * Replace baked “enemy” albedo texels with team palette (no multiply — literal RGB swap).
- */
-function replaceFactionPixels(imgData: ImageData, primaryHex: number, secondaryHex: number): number {
-  const d = imgData.data;
-  let n = 0;
-  for (let i = 0; i < d.length; i += 4) {
-    if (d[i + 3] < 4) continue;
-    const r = d[i] / 255;
-    const g = d[i + 1] / 255;
-    const b = d[i + 2] / 255;
-    const red = pixelIsFactionRed(r, g, b);
-    const blue = pixelIsFactionBlue(r, g, b);
-    if (!red && !blue) continue;
-    const rs = r - Math.max(g, b);
-    const bs = b - Math.max(r, g);
-    let usePrimary = red;
-    if (red && blue) usePrimary = rs >= bs;
-    else if (blue) usePrimary = false;
-    if (usePrimary) writeSrgbBytes(primaryHex, d, i);
-    else writeSrgbBytes(secondaryHex, d, i);
-    n++;
-  }
-  return n;
-}
-
-function getDrawableImageSize(image: unknown): { w: number; h: number } | null {
-  if (
-    image instanceof HTMLImageElement ||
-    image instanceof HTMLCanvasElement ||
-    image instanceof ImageBitmap ||
-    (typeof OffscreenCanvas !== "undefined" && image instanceof OffscreenCanvas)
-  ) {
-    const w = image.width;
-    const h = image.height;
-    if (w > 0 && h > 0) return { w, h };
-  }
-  return null;
-}
-
-/** Downsampled scan: any noticeable red / blue faction pixels in albedo? */
-function albedoTextureHasFactionPixels(tex: THREE.Texture): boolean {
-  const size = getDrawableImageSize(tex.image);
-  if (!size) return false;
-  const tw = size.w;
-  const th = size.h;
-  const maxSide = 96;
-  const scale = Math.min(1, maxSide / Math.max(tw, th));
-  const w = Math.max(2, Math.round(tw * scale));
-  const h = Math.max(2, Math.round(th * scale));
-  const canvas = document.createElement("canvas");
-  canvas.width = w;
-  canvas.height = h;
-  const ctx = canvas.getContext("2d");
-  if (!ctx) return false;
-  try {
-    ctx.drawImage(tex.image as CanvasImageSource, 0, 0, tw, th, 0, 0, w, h);
-  } catch {
-    return false;
-  }
-  const { data } = ctx.getImageData(0, 0, w, h);
-  let hits = 0;
-  let opaque = 0;
-  for (let i = 0; i < data.length; i += 4) {
-    if (data[i + 3] < 8) continue;
-    opaque++;
-    const r = data[i] / 255;
-    const g = data[i + 1] / 255;
-    const b = data[i + 2] / 255;
-    if (pixelIsFactionRed(r, g, b) || pixelIsFactionBlue(r, g, b)) hits++;
-  }
-  return opaque > 80 && hits / opaque > 0.004;
-}
-
-function cloneTextureWithFactionReplace(
-  src: THREE.Texture,
-  primaryHex: number,
-  secondaryHex: number,
-): THREE.Texture {
-  const size = getDrawableImageSize(src.image);
-  if (!size) return src.clone();
-
-  const canvas = document.createElement("canvas");
-  canvas.width = size.w;
-  canvas.height = size.h;
-  const ctx = canvas.getContext("2d");
-  if (!ctx) return src.clone();
-  try {
-    ctx.drawImage(src.image as CanvasImageSource, 0, 0, size.w, size.h);
-  } catch {
-    return src.clone();
-  }
-  const imgData = ctx.getImageData(0, 0, size.w, size.h);
-  replaceFactionPixels(imgData, primaryHex, secondaryHex);
-  ctx.putImageData(imgData, 0, 0);
-
-  // Must NOT use `src.clone()` then set `.image`: Three shares `texture.source` across
-  // clones, so swapping the image would mutate every material still referencing that source
-  // (template + other squads) — everyone would end up one team’s colors.
-  return newTextureFromCanvasLike(src, canvas);
-}
-
-/** New GPU texture with its own `Source` (see note above). */
-function newTextureFromCanvasLike(src: THREE.Texture, canvas: HTMLCanvasElement): THREE.Texture {
-  const tex = new THREE.Texture(canvas);
-  tex.name = src.name;
-  tex.wrapS = src.wrapS;
-  tex.wrapT = src.wrapT;
-  tex.magFilter = src.magFilter;
-  tex.minFilter = src.minFilter;
-  tex.anisotropy = src.anisotropy;
-  tex.format = src.format;
-  tex.type = src.type;
-  tex.offset.copy(src.offset);
-  tex.repeat.copy(src.repeat);
-  tex.center.copy(src.center);
-  tex.rotation = src.rotation;
-  tex.matrixAutoUpdate = src.matrixAutoUpdate;
-  tex.matrix.copy(src.matrix);
-  tex.generateMipmaps = src.generateMipmaps;
-  tex.premultiplyAlpha = src.premultiplyAlpha;
-  tex.flipY = src.flipY;
-  tex.unpackAlignment = src.unpackAlignment;
-  tex.colorSpace = src.colorSpace;
-  tex.needsUpdate = true;
-  return tex;
-}
-
 const FABRIC_NAME =
   /cape|cloak|mantle|robe|fabric|cloth|banner|plume|feather|skirt|tabard|sash|trim|lining|undershirt/i;
 
@@ -232,7 +86,7 @@ function markTeamTextureRemap(std: THREE.MeshStandardMaterial, label: string): v
   const loose = FABRIC_NAME.test(label);
   const hasMap = std.map !== null;
   const skipScan = SKIP_AUTO_TEX_REMAP.test(label);
-  const autoFromTex = hasMap && !skipScan && albedoTextureHasFactionPixels(std.map!);
+  const autoFromTex = hasMap && !skipScan && textureLikelyHasBrightFactionColors(std.map!);
 
   if (isRedFabricColor(std.emissive, loose)) std.emissive.setScalar(0);
 
@@ -307,15 +161,8 @@ export function hasPhalanxGlbMeshes(): boolean {
   return templates !== null && templates.length > 0;
 }
 
-/** Second accent derived from the player’s primary hex (one palette slot in game state). */
-export function phalanxSecondaryTeamHex(primaryHex: number): number {
-  const c = new THREE.Color(primaryHex);
-  c.offsetHSL(0.11, 0.08, 0.03);
-  return c.getHex();
-}
-
 /**
- * One squad = one palette. Clones albedo/emissive maps and rewrites faction pixels (CPU).
+ * One squad = one palette. Clones albedo/emissive maps and rewrites bright faction pixels (CPU).
  * Safe to call once per `BlobEntity` when `ownerId` is known.
  */
 export function applyPhalanxTeamTextureReplacements(
@@ -323,19 +170,9 @@ export function applyPhalanxTeamTextureReplacements(
   primaryHex: number,
   secondaryHex: number,
 ): void {
-  const sec = secondaryHex;
   for (const mesh of meshes) {
     const mat = mesh.material as THREE.MeshStandardMaterial;
     if (!mat.userData[PHALANX_TEAM_TEXTURE_REMAP]) continue;
-    if (mat.userData[PHALANX_TEAM_TEX_APPLIED]) continue;
-
-    if (mat.map) {
-      mat.map = cloneTextureWithFactionReplace(mat.map, primaryHex, sec);
-    }
-    if (mat.emissiveMap) {
-      mat.emissiveMap = cloneTextureWithFactionReplace(mat.emissiveMap, primaryHex, sec);
-    }
-
-    mat.userData[PHALANX_TEAM_TEX_APPLIED] = true;
+    applyTeamColorTexturesToMaterial(mat, primaryHex, secondaryHex);
   }
 }

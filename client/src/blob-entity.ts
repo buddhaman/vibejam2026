@@ -16,8 +16,8 @@ import {
   applyPhalanxTeamTextureReplacements,
   createPhalanxInstancedMeshes,
   hasPhalanxGlbMeshes,
-  phalanxSecondaryTeamHex,
 } from "./phalanx-unit-model.js";
+import { secondaryTeamHexFromPrimary } from "./render-texture-recolor.js";
 
 const UNIT_GEOM = createUnitBodyGeometry();
 const UNIT_MAT = new THREE.MeshStandardMaterial({
@@ -66,11 +66,12 @@ const VILLAGER_CONTAINS_ELLIPSE_MULT = 1.7;
 const VILLAGER_PICK_CYLINDER_R = 1.35;
 const VILLAGER_PICK_CYLINDER_H = 3.8;
 
-/** Legs, ovals, and move markers stay neutral; villager torsos use team color like Phalanx tints. */
+/** Legs & move markers stay neutral; squad ovals use owner team color (see `render`). */
 const COLOR_LEG_BEAM = new THREE.Color(0x4a433a);
-const COLOR_OVAL_FILL = new THREE.Color(0xd8d4cc);
-const COLOR_OVAL_RING = new THREE.Color(0xbfb6a8);
 const COLOR_MOVE_MARKER = new THREE.Color(0xfff8ef);
+const TEMP_OVAL_RING = new THREE.Color();
+const TEMP_OVAL_FILL = new THREE.Color();
+const _ovalHsl = { h: 0, s: 0, l: 0 };
 
 type UnitState = {
   x: number;
@@ -448,13 +449,25 @@ export class BlobEntity extends Entity {
 
     this.ovalFill.scale.set(layout.minor, layout.major, 1);
     this.ovalRing.scale.set(layout.minor * 1.04, layout.major * 1.04, 1);
-    this.ovalFill.material.color.copy(COLOR_OVAL_FILL);
-    this.ovalRing.material.color.copy(COLOR_OVAL_RING);
-    if (this.isSelected()) {
-      this.ovalRing.material.color.offsetHSL(0, 0, 0.12);
-    }
-    this.ovalFill.material.opacity = this.isMine() ? 0.12 : 0.07;
-    this.ovalRing.material.opacity = this.isSelected() ? 0.65 : this.isMine() ? 0.22 : 0.12;
+
+    const zoomT = this.game.getCameraZoomOut01();
+    const enemyZoom = !this.isMine() ? zoomT : 0;
+
+    TEMP_OVAL_RING.copy(teamTint);
+    TEMP_OVAL_RING.getHSL(_ovalHsl, THREE.SRGBColorSpace);
+    if (_ovalHsl.l < 0.42) TEMP_OVAL_RING.offsetHSL(0, 0, 0.07);
+    if (this.isSelected()) TEMP_OVAL_RING.offsetHSL(0, 0.04, 0.1);
+    TEMP_OVAL_FILL.copy(TEMP_OVAL_RING).offsetHSL(0, -0.1, 0.11);
+
+    this.ovalRing.material.color.copy(TEMP_OVAL_RING);
+    this.ovalFill.material.color.copy(TEMP_OVAL_FILL);
+
+    this.ovalFill.material.opacity = this.isMine() ? 0.12 : 0.055 + enemyZoom * 0.14;
+    this.ovalRing.material.opacity = this.isSelected()
+      ? 0.7 + enemyZoom * 0.1
+      : this.isMine()
+        ? 0.24 + zoomT * 0.08
+        : 0.1 + enemyZoom * 0.28;
 
     const isVillager = this.blob.unitType === UnitType.VILLAGER;
     const n = Math.min(this.blob.unitCount, INSTANCE_CAP);
@@ -472,7 +485,7 @@ export class BlobEntity extends Entity {
       applyPhalanxTeamTextureReplacements(
         this.unitsPhalanx,
         primary,
-        phalanxSecondaryTeamHex(primary)
+        secondaryTeamHexFromPrimary(primary)
       );
       this.phalanxTeamTexApplied = true;
     }

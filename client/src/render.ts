@@ -398,6 +398,7 @@ export function startRender(game: Game) {
     game.sync();
     game.clearBeamDraws();
     tileVisuals.sync(game);
+    game.setOrbitCameraForFrame(distance, CAM.distanceMin, CAM.distanceMax);
     for (const entity of game.entities) entity.render(dt);
     game.flushBeamDraws();
     dir.shadow.camera.updateProjectionMatrix();

@@ -42,6 +42,11 @@ export class Game {
   private _dirtyTileVisualLayers = new Set<"forest" | "datacenters">(["forest", "datacenters"]);
   private _allTileVisualsDirty = true;
 
+  /** Updated every frame by `render.ts` for zoom-dependent squad affordances. */
+  private _orbitCameraDistance = 165;
+  private _orbitCameraDistanceMin = 26;
+  private _orbitCameraDistanceMax = 420;
+
   public constructor(room: Room) {
     this.room = room;
     this.scene = new THREE.Scene();
@@ -104,6 +109,21 @@ export class Game {
   public getPlayerColor(ownerId: string): number {
     const player = this.room.state.players.get(ownerId) as { color?: number } | undefined;
     return typeof player?.color === "number" ? player.color : 0x8899aa;
+  }
+
+  public setOrbitCameraForFrame(distance: number, distanceMin: number, distanceMax: number): void {
+    this._orbitCameraDistance = distance;
+    this._orbitCameraDistanceMin = distanceMin;
+    this._orbitCameraDistanceMax = distanceMax;
+  }
+
+  /** 0 = zoomed in (min distance), 1 = zoomed out (max distance). */
+  public getCameraZoomOut01(): number {
+    const a = this._orbitCameraDistanceMin;
+    const b = this._orbitCameraDistanceMax;
+    if (b <= a) return 0;
+    const t = (this._orbitCameraDistance - a) / (b - a);
+    return Math.max(0, Math.min(1, t));
   }
 
   public add(entity: Entity): void {

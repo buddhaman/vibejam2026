@@ -44,6 +44,23 @@ function fitGroundAndCenterXZ(root: THREE.Object3D, targetHeight: number): void 
   root.position.z -= center.z;
 }
 
+/**
+ * `Object3D.clone(true)` keeps **material references** from the source — every building
+ * would otherwise share one set of materials with the template and each other, so team
+ * texture recolor would apply once globally.
+ */
+function deepCloneMeshMaterials(root: THREE.Object3D): void {
+  root.traverse((obj) => {
+    if (!(obj instanceof THREE.Mesh)) return;
+    const m = obj.material;
+    if (Array.isArray(m)) {
+      obj.material = m.map((mat) => (mat && "clone" in mat ? (mat as THREE.Material).clone() : mat!));
+    } else if (m && "clone" in m) {
+      obj.material = (m as THREE.Material).clone();
+    }
+  });
+}
+
 function classifyMaterials(root: THREE.Object3D): { tintMaterials: TintableMaterial[]; accentMaterials: TintableMaterial[] } {
   const tintMaterials: TintableMaterial[] = [];
   const accentMaterials: TintableMaterial[] = [];
@@ -67,6 +84,7 @@ function classifyMaterials(root: THREE.Object3D): { tintMaterials: TintableMater
 
 function variantFromGltfScene(source: THREE.Object3D, buildingType: BuildingTypeValue): BuildingVariant {
   const root = source.clone(true) as THREE.Group;
+  deepCloneMeshMaterials(root);
   root.traverse((obj) => {
     if (obj instanceof THREE.Mesh) {
       obj.castShadow = true;
@@ -121,6 +139,7 @@ function mergeTemplateSet(gltf: Partial<Record<BuildingTypeValue, BuildingVarian
 
 function cloneBuildingVariant(template: BuildingVariant): BuildingVariant {
   const root = template.root.clone(true) as THREE.Group;
+  deepCloneMeshMaterials(root);
   root.traverse((obj) => {
     if (obj instanceof THREE.Mesh) {
       obj.castShadow = true;

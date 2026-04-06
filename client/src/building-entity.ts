@@ -12,12 +12,18 @@ import { Entity, type SelectionInfo } from "./entity.js";
 import { getTerrainHeightAt } from "./terrain.js";
 import { getBuildingVariantTemplates, instantiateBuildingSet } from "./building-model-registry.js";
 import type { BuildingSet } from "./building-visuals.js";
+import {
+  applyTeamColorTexturesToObject3D,
+  secondaryTeamHexFromPrimary,
+} from "./render-texture-recolor.js";
 
 const ORB_RADIUS = 1.05;
 const ORB_Y_ABOVE_ROOF = 1.25;
 
 export class BuildingEntity extends Entity {
   private variants!: BuildingSet;
+  /** One-time CPU recolor of GLB albedo/emissive maps to this owner’s palette. */
+  private buildingTeamTexturesApplied = false;
   /** Single unlit sphere — full-brightness player palette color. */
   private ownerOrb!: THREE.Mesh;
   private ownerOrbMaterial!: THREE.MeshBasicMaterial;
@@ -86,6 +92,19 @@ export class BuildingEntity extends Entity {
     const playerHex = this.game.getPlayerColor(this.building.ownerId);
     this.ownerOrbMaterial.color.setHex(playerHex);
     this.ownerOrb.position.set(0, rules.height + ORB_Y_ABOVE_ROOF, 0);
+
+    if (!this.buildingTeamTexturesApplied && this.building.ownerId.length > 0) {
+      const auth = this.game.room.state.players.get(this.building.ownerId) as { color?: number } | undefined;
+      if (typeof auth?.color === "number") {
+        const secondary = secondaryTeamHexFromPrimary(playerHex);
+        for (const variant of Object.values(this.variants)) {
+          applyTeamColorTexturesToObject3D(variant.root, playerHex, secondary, {
+            blueChannelUsesSecondary: false,
+          });
+        }
+        this.buildingTeamTexturesApplied = true;
+      }
+    }
 
     this.mesh.position.set(this.building.x, terrainY, this.building.y);
   }
