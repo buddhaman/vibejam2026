@@ -71,11 +71,34 @@ const VILLAGER_PICK_CYLINDER_R = 1.35;
 const VILLAGER_PICK_CYLINDER_H = 3.8;
 
 /** Legs & move markers stay neutral; squad ovals use owner team color (see `render`). */
-const COLOR_LEG_BEAM = new THREE.Color(0x4a433a);
+const COLOR_LEG_BEAM  = new THREE.Color(0x4a433a);
+const COLOR_SWORD     = new THREE.Color(0xd0d4dc); // light steel gray
 const COLOR_MOVE_MARKER = new THREE.Color(0xfff8ef);
-const TEMP_OVAL_RING = new THREE.Color();
-const TEMP_OVAL_FILL = new THREE.Color();
+const TEMP_OVAL_RING  = new THREE.Color();
+const TEMP_OVAL_FILL  = new THREE.Color();
 const _ovalHsl = { h: 0, s: 0, l: 0 };
+
+// ── Weapon / shield geometry (phalanx only) ───────────────────────────────────
+/** Fraction of UNIT_HEIGHT where the shoulder joint sits. */
+const SHOULDER_H_FRAC = 0.78;
+/** Lateral shoulder offset as fraction of UNIT_RADIUS. */
+const SHOULDER_SIDE_FRAC = 0.30;
+/** Arm length (shoulder → hand) as fraction of UNIT_HEIGHT. */
+const ARM_LEN_FRAC = 0.30;
+/** Sword beam length as fraction of UNIT_HEIGHT. */
+const SWORD_LEN_FRAC = 0.75;
+/** Sword beam square cross-section side. */
+const SWORD_W = 0.048;
+/** Maximum arm swing angle (radians) while walking. */
+const ARM_SWING_MAX = Math.PI * 0.40;
+
+const SHIELD_RADIUS    = 0.44;
+const SHIELD_THICKNESS = 0.055;
+/** Shield barely moves — just a subtle sway, not a full arm swing. */
+const SHIELD_SWING_MAX = Math.PI * 0.06;
+const _shieldFwdVec  = new THREE.Vector3();
+const _shieldQuat    = new THREE.Quaternion();
+const _upAxis        = new THREE.Vector3(0, 1, 0);
 
 type UnitState = {
   x: number;
@@ -105,6 +128,8 @@ export class BlobEntity extends Entity {
   /** One mesh (cylinder fallback) or multiple parts from `phalanx.glb`. */
   private unitsPhalanx: THREE.InstancedMesh[] = [];
   private phalanxTeamTexApplied = false;
+  /** Flat disc in the left hand of each phalanx soldier. */
+  private unitShield!: THREE.InstancedMesh;
   private ovalFill!: THREE.Mesh<THREE.CircleGeometry, THREE.MeshBasicMaterial>;
   private ovalRing!: THREE.Mesh<THREE.RingGeometry, THREE.MeshBasicMaterial>;
   private blob: {
@@ -204,11 +229,22 @@ export class BlobEntity extends Entity {
     this.villagerPickProxy.visible = false;
     this.villagerPickProxy.frustumCulled = false;
 
+    // Shield disc — flat cylinder in the left hand, one per phalanx unit
+    const shieldGeom = new THREE.CylinderGeometry(SHIELD_RADIUS, SHIELD_RADIUS, SHIELD_THICKNESS, 18);
+    const shieldMat  = new THREE.MeshStandardMaterial({ color: 0xa8b4c0, roughness: 0.55, metalness: 0.38 });
+    this.unitShield  = new THREE.InstancedMesh(shieldGeom, shieldMat, INSTANCE_CAP);
+    this.unitShield.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+    this.unitShield.castShadow    = true;
+    this.unitShield.receiveShadow = true;
+    this.unitShield.frustumCulled = false;
+    this.unitShield.count = 0;
+
     const group = new THREE.Group();
     group.add(this.ovalRoot);
     group.add(this.unitsVillager);
     group.add(this.villagerPickProxy);
     for (const m of this.unitsPhalanx) group.add(m);
+    group.add(this.unitShield);
     return group;
   }
 
@@ -592,6 +628,11 @@ export class BlobEntity extends Entity {
       pm.transparent = !this.isMine();
     }
 
+    this.unitShield.count   = !isVillager ? n : 0;
+    this.unitShield.visible = !isVillager;
+    (this.unitShield.material as THREE.MeshStandardMaterial).color
+      .copy(teamTint).offsetHSL(0, 0.04, -0.14);
+
     const stepDt = Math.min(0.05, dt);
     if (this.needsUnitReassignment) {
       this.ensureUnitStateCount(n);
@@ -698,8 +739,67 @@ export class BlobEntity extends Entity {
         LEG_DEPTH * unitRules.visualScale,
         COLOR_LEG_BEAM
       );
+
+      // ── Sword (right arm) + Shield (left arm) — phalanx only ──────────────
+      if (!isVillager) {
+        const vs = unitRules.visualScale;
+        const shoulderH    = GAME_RULES.UNIT_HEIGHT * SHOULDER_H_FRAC * vs;
+        const shoulderSide = GAME_RULES.UNIT_RADIUS  * SHOULDER_SIDE_FRAC * vs;
+        const armLen       = GAME_RULES.UNIT_HEIGHT  * ARM_LEN_FRAC  * vs;
+        const swordLen     = GAME_RULES.UNIT_HEIGHT  * SWORD_LEN_FRAC * vs;
+        const shoulderWorldY = unitTerrainY + shoulderH;
+
+        // Arm swing: driven by stride phase. Right arm leads when left foot plants.
+        const walkPhase  = state.distanceWalked / (FOOT_STRIDE * vs + 1e-6);
+        const swingSign  = state.leftPlanted ? 1 : -1;
+        const isStriding = bodySpeed > FOOT_IDLE_SPEED * 2;
+        const rightSwing = isStriding ? Math.sin(walkPhase * Math.PI * 2) * swingSign * ARM_SWING_MAX : 0;
+        const leftSwing  = isStriding ? Math.sin(walkPhase * Math.PI * 2) * (-swingSign) * SHIELD_SWING_MAX : 0;
+
+        // Right shoulder → hand → sword tip (all in the forward-up plane)
+        const rShX = worldX + sideX * shoulderSide;
+        const rShZ = worldZ + sideZ * shoulderSide;
+        const rFwd = Math.cos(rightSwing); // component along stepForward
+        const rUp  = Math.sin(rightSwing); // component along world-up
+
+        // Hand = shoulder + arm along (forward*rFwd, up*rUp)
+        const handX = rShX + stepForwardX * rFwd * armLen;
+        const handY = shoulderWorldY + rUp * armLen;
+        const handZ = rShZ + stepForwardZ * rFwd * armLen;
+
+        // Sword tip continues from hand in same direction
+        const tipX = handX + stepForwardX * rFwd * swordLen;
+        const tipY = handY + rUp * swordLen;
+        const tipZ = handZ + stepForwardZ * rFwd * swordLen;
+
+        TEMP_A.set(handX, handY, handZ);
+        TEMP_B.set(tipX,  tipY,  tipZ);
+        this.game.drawBeam(TEMP_A, TEMP_B, SWORD_W * vs, SWORD_W * vs, COLOR_SWORD);
+
+        // Left shoulder → hand → shield center
+        const lShX = worldX - sideX * shoulderSide;
+        const lShZ = worldZ - sideZ * shoulderSide;
+        const lFwd = Math.cos(leftSwing);
+        const lUp  = Math.sin(leftSwing);
+
+        const shieldX = lShX + stepForwardX * lFwd * armLen;
+        const shieldY = shoulderWorldY + lUp * armLen;
+        const shieldZ = lShZ + stepForwardZ * lFwd * armLen;
+
+        // Orient shield disc: cylinder Y-axis → arm direction (so face points forward)
+        _shieldFwdVec.set(stepForwardX * lFwd, lUp, stepForwardZ * lFwd).normalize();
+        _shieldQuat.setFromUnitVectors(_upAxis, _shieldFwdVec);
+
+        // Position is relative to the group root (layout.x, terrainY, layout.y)
+        DUMMY.position.set(shieldX - layout.x, shieldY - terrainY, shieldZ - layout.y);
+        DUMMY.quaternion.copy(_shieldQuat);
+        DUMMY.scale.setScalar(vs);
+        DUMMY.updateMatrix();
+        this.unitShield.setMatrixAt(i, DUMMY.matrix);
+      }
     }
     this.unitsVillager.instanceMatrix.needsUpdate = true;
+    this.unitShield.instanceMatrix.needsUpdate = true;
     for (const m of this.unitsPhalanx) m.instanceMatrix.needsUpdate = true;
 
     this.updatePathLine(teamTint);
