@@ -230,6 +230,12 @@ export function startRender(game: Game) {
     return "Units can't walk through blocked tiles";
   }
 
+  function getBuildBlockedMessage(tile: TileView | null): string {
+    if (!tile) return "Can't build there";
+    if (tile.isMountain) return "Can't build on mountains";
+    return "Can't build on blocked tiles";
+  }
+
   function handleClick(clientX: number, clientY: number) {
     const selectedInfo = game.getSelectedEntity()?.getSelectionInfo() ?? null;
 
@@ -251,7 +257,7 @@ export function startRender(game: Game) {
       if (menuAction !== "dismiss") {
         const tile = game.getTileAtWorld(hud.buildMenu.worldX, hud.buildMenu.worldZ);
         if (!tile?.canBuild) {
-          showWarning(hud, "Can't build on mountains", performance.now() / 1000);
+          showWarning(hud, getBuildBlockedMessage(tile), performance.now() / 1000);
         } else {
           game.sendBuildIntent(menuAction, hud.buildMenu.worldX, hud.buildMenu.worldZ);
         }
@@ -316,7 +322,7 @@ export function startRender(game: Game) {
       const snapped = snapWorldToTileCenter(point.x, point.z);
       const tile = game.getTileAtWorld(snapped.x, snapped.z);
       if (!tile?.canBuild) {
-        showWarning(hud, "Can't build on mountains", now / 1000);
+        showWarning(hud, getBuildBlockedMessage(tile), now / 1000);
         lastGroundTap.t = 0;
         return;
       }

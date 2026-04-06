@@ -98,7 +98,6 @@ export const GAME_RULES = {
   TERRAIN_HEIGHT_THRESHOLD: 0.62,
   TERRAIN_HEIGHT_SCALE: 140,
   MOUNTAIN_THRESHOLD: 7.2,
-  BUILDABLE_TILE_HEIGHT_MAX: 0.35,
 } as const;
 
 const TILE_HALF = GAME_RULES.TILE_SIZE * 0.5;
@@ -170,7 +169,7 @@ export const UNIT_RULES = {
     visualScale: 1,
     targetSize: 40,
     rebalanceThreshold: 5,
-    mergeDistance: 24,
+    mergeDistance: 32,
   },
 } as const;
 
@@ -347,7 +346,6 @@ export function generateTile(tx: number, tz: number, seed: number): GeneratedTil
   const rawH01 = getTerrainVertexHeight(tx, tz + 1, seed);
   const rawHeight = (rawH00 + rawH10 + rawH11 + rawH01) * 0.25;
   const isMountain = rawHeight > GAME_RULES.MOUNTAIN_THRESHOLD;
-  const isBuildFlat = rawHeight <= GAME_RULES.BUILDABLE_TILE_HEIGHT_MAX;
   const h00 = rawH00;
   const h10 = rawH10;
   const h11 = rawH11;
@@ -377,7 +375,7 @@ export function generateTile(tx: number, tz: number, seed: number): GeneratedTil
     compute: 0,
     maxCompute: 0,
     isMountain,
-    canBuild: !isMountain && isBuildFlat,
+    canBuild: !isMountain,
     canWalk: !isMountain,
   };
 }

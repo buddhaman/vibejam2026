@@ -428,7 +428,7 @@ export class BattleRoom extends Room<{ state: GameState }> {
     const tile = this.tileData.get(key);
     if (!tile) return;
     const terrainWalkOk = !tile.isMountain;
-    const terrainBuildOk = !tile.isMountain && tile.height <= GAME_RULES.BUILDABLE_TILE_HEIGHT_MAX;
+    const terrainBuildOk = !tile.isMountain;
     const occ = this.buildingTileOcc.get(key) ?? 0;
     const nextWalk = terrainWalkOk && occ === 0;
     const nextBuild = terrainBuildOk && occ === 0;
