@@ -51,6 +51,7 @@ const MIN_DIRECTION_SPEED = 0.2;
 const UNIT_SPRING = 20;
 const UNIT_DAMPING = 0.24;
 const UNIT_WALK_SPEED = 4.4;
+const UNIT_BODY_MAX_SPEED = 5.2;
 const FOOT_IDLE_SPEED = 0.01;
 const FOOT_STRIDE = GAME_RULES.UNIT_RADIUS * 1.05;
 const HIP_WIDTH = GAME_RULES.UNIT_RADIUS * 0.32;
@@ -78,6 +79,8 @@ type UnitState = {
   z: number;
   vx: number;
   vz: number;
+  bodyX: number;
+  bodyZ: number;
   lastBodyWorldX: number;
   lastBodyWorldZ: number;
   leftFootX: number;
@@ -86,6 +89,7 @@ type UnitState = {
   rightFootZ: number;
   leftPlanted: boolean;
   distanceWalked: number;
+  bodyReady: boolean;
   feetReady: boolean;
 };
 
@@ -235,6 +239,8 @@ export class BlobEntity extends Entity {
         z: 0,
         vx: 0,
         vz: 0,
+        bodyX: 0,
+        bodyZ: 0,
         lastBodyWorldX: 0,
         lastBodyWorldZ: 0,
         leftFootX: 0,
@@ -243,6 +249,7 @@ export class BlobEntity extends Entity {
         rightFootZ: 0,
         leftPlanted: Math.random() >= 0.5,
         distanceWalked: Math.random() * FOOT_STRIDE,
+        bodyReady: false,
         feetReady: false,
       });
     }
@@ -509,8 +516,29 @@ export class BlobEntity extends Entity {
     const tiles = this.game.getTiles();
     for (let i = 0; i < n; i++) {
       const state = this.unitStates[i];
-      const px = rightX * state.x + forwardX * state.z;
-      const pz = rightZ * state.x + forwardZ * state.z;
+      const desiredPx = rightX * state.x + forwardX * state.z;
+      const desiredPz = rightZ * state.x + forwardZ * state.z;
+      if (!state.bodyReady) {
+        state.bodyX = desiredPx;
+        state.bodyZ = desiredPz;
+        state.bodyReady = true;
+      } else {
+        const bodyDx = desiredPx - state.bodyX;
+        const bodyDz = desiredPz - state.bodyZ;
+        const bodyDist = Math.hypot(bodyDx, bodyDz);
+        const maxStep = UNIT_BODY_MAX_SPEED * stepDt;
+        if (bodyDist <= maxStep || bodyDist < 1e-5) {
+          state.bodyX = desiredPx;
+          state.bodyZ = desiredPz;
+        } else {
+          const scale = maxStep / bodyDist;
+          state.bodyX += bodyDx * scale;
+          state.bodyZ += bodyDz * scale;
+        }
+      }
+
+      const px = state.bodyX;
+      const pz = state.bodyZ;
       const worldX = layout.x + px;
       const worldZ = layout.y + pz;
       const unitTerrainY = getTerrainHeightAt(worldX, worldZ, tiles);
