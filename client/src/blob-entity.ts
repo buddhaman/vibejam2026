@@ -95,6 +95,11 @@ type UnitState = {
   feetReady: boolean;
 };
 
+type TransferredUnitVisual = {
+  worldX: number;
+  worldZ: number;
+};
+
 export class BlobEntity extends Entity {
   public mesh: THREE.Group;
   private ovalRoot!: THREE.Group;
@@ -311,24 +316,7 @@ export class BlobEntity extends Entity {
 
   private ensureUnitStateCount(count: number): void {
     while (this.unitStates.length < count) {
-      this.unitStates.push({
-        x: 0,
-        z: 0,
-        vx: 0,
-        vz: 0,
-        bodyX: 0,
-        bodyZ: 0,
-        lastBodyWorldX: 0,
-        lastBodyWorldZ: 0,
-        leftFootX: 0,
-        leftFootZ: 0,
-        rightFootX: 0,
-        rightFootZ: 0,
-        leftPlanted: Math.random() >= 0.5,
-        distanceWalked: Math.random() * FOOT_STRIDE,
-        bodyReady: false,
-        feetReady: false,
-      });
+      this.unitStates.push(this.createUnitStateAtLocal(0, 0));
     }
     if (this.unitStates.length > count) {
       this.unitStates.length = count;
@@ -342,6 +330,42 @@ export class BlobEntity extends Entity {
     return {
       x: Math.cos(angle) * radius * minor * 0.82,
       z: Math.sin(angle) * radius * major * 0.82,
+    };
+  }
+
+  private createUnitStateAtLocal(localX: number, localZ: number): UnitState {
+    return {
+      x: localX,
+      z: localZ,
+      vx: 0,
+      vz: 0,
+      bodyX: localX,
+      bodyZ: localZ,
+      lastBodyWorldX: 0,
+      lastBodyWorldZ: 0,
+      leftFootX: 0,
+      leftFootZ: 0,
+      rightFootX: 0,
+      rightFootZ: 0,
+      leftPlanted: Math.random() >= 0.5,
+      distanceWalked: Math.random() * FOOT_STRIDE,
+      bodyReady: true,
+      feetReady: false,
+    };
+  }
+
+  private getUnitVisualWorldPosition(state: UnitState): { x: number; z: number } {
+    const center = this.getPredictedCenter();
+    const layout = this.getLayout();
+    const rightX = Math.cos(layout.heading);
+    const rightZ = -Math.sin(layout.heading);
+    const forwardX = Math.sin(layout.heading);
+    const forwardZ = Math.cos(layout.heading);
+    const localX = state.bodyReady ? state.bodyX : rightX * state.x + forwardX * state.z;
+    const localZ = state.bodyReady ? state.bodyZ : rightZ * state.x + forwardZ * state.z;
+    return {
+      x: center.x + localX,
+      z: center.y + localZ,
     };
   }
 
@@ -817,6 +841,30 @@ export class BlobEntity extends Entity {
 
   public getUnitCount(): number {
     return this.blob?.unitCount ?? 0;
+  }
+
+  public getUnitType(): UnitTypeValue | null {
+    return this.blob?.unitType ?? null;
+  }
+
+  public releaseTransferredUnits(count: number): TransferredUnitVisual[] {
+    const released: TransferredUnitVisual[] = [];
+    const n = Math.min(count, this.unitStates.length);
+    for (let i = 0; i < n; i++) {
+      const state = this.unitStates.pop();
+      if (!state) break;
+      const world = this.getUnitVisualWorldPosition(state);
+      released.push({ worldX: world.x, worldZ: world.z });
+    }
+    return released;
+  }
+
+  public receiveTransferredUnits(units: TransferredUnitVisual[]): void {
+    if (!this.blob || units.length === 0) return;
+    const center = this.getPredictedCenter();
+    for (const unit of units) {
+      this.unitStates.push(this.createUnitStateAtLocal(unit.worldX - center.x, unit.worldZ - center.y));
+    }
   }
 
   public getHealth(): number {

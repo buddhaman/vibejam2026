@@ -175,8 +175,6 @@ export function startRender(game: Game) {
   const groundPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
   const hit = new THREE.Vector3();
   const terrainHits: THREE.Intersection<THREE.Object3D>[] = [];
-  const hitNormal = new THREE.Vector3();
-  const hitNormalMatrix = new THREE.Matrix3();
 
   const hudCanvas = createHudCanvas();
   const hud = createHudState();
@@ -205,13 +203,8 @@ export function startRender(game: Game) {
     raycaster.setFromCamera(ndcV, camera);
     terrainHits.length = 0;
     raycaster.intersectObject(terrain, false, terrainHits);
-    hitNormalMatrix.getNormalMatrix(terrain.matrixWorld);
     for (const terrainHit of terrainHits) {
-      if (!terrainHit.face) continue;
-      hitNormal.copy(terrainHit.face.normal).applyMatrix3(hitNormalMatrix).normalize();
-      if (hitNormal.y > 0.35) {
-        return terrainHit.point.clone();
-      }
+      if (terrainHit.face) return terrainHit.point.clone();
     }
     return raycaster.ray.intersectPlane(groundPlane, hit) ? hit.clone() : null;
   }

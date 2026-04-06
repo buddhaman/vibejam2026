@@ -156,6 +156,25 @@ export class Game {
   }
 
   public sync(): void {
+    const previousBlobState = new Map<string, {
+      entity: BlobEntity;
+      ownerId: string;
+      unitType: UnitTypeValue;
+      unitCount: number;
+    }>();
+    for (const entity of this.entities) {
+      if (!(entity instanceof BlobEntity)) continue;
+      const ownerId = entity.getOwnerId();
+      const unitType = entity.getUnitType();
+      if (!ownerId || unitType === null) continue;
+      previousBlobState.set(entity.id, {
+        entity,
+        ownerId,
+        unitType,
+        unitCount: entity.getUnitCount(),
+      });
+    }
+
     this.room.state.blobs.forEach((blob, id) => {
       let entity = this.findBlobEntity(id as string);
       if (!entity) entity = new BlobEntity(this, id as string);
@@ -173,6 +192,71 @@ export class Game {
         unitType: UnitTypeValue;
       });
     });
+
+    const blobCenters = new Map<string, { x: number; y: number }>();
+    this.room.state.blobs.forEach((blob, id) => {
+      blobCenters.set(id as string, { x: blob.x, y: blob.y });
+    });
+
+    const donorsByKey = new Map<string, Array<{ entity: BlobEntity; amount: number }>>();
+    const receiversByKey = new Map<string, Array<{ entity: BlobEntity; amount: number; x: number; y: number }>>();
+    this.room.state.blobs.forEach((blob, id) => {
+      const entity = this.findBlobEntity(id as string);
+      if (!entity) return;
+      const previous = previousBlobState.get(id as string);
+      const previousCount = previous?.unitCount ?? 0;
+      const delta = blob.unitCount - previousCount;
+      const key = `${blob.ownerId}:${blob.unitType}`;
+      if (delta < 0) {
+        const arr = donorsByKey.get(key);
+        const item = { entity, amount: -delta };
+        if (arr) arr.push(item);
+        else donorsByKey.set(key, [item]);
+      } else if (delta > 0 && previous) {
+        const arr = receiversByKey.get(key);
+        const center = blobCenters.get(id as string) ?? { x: blob.x, y: blob.y };
+        const item = { entity, amount: delta, x: center.x, y: center.y };
+        if (arr) arr.push(item);
+        else receiversByKey.set(key, [item]);
+      }
+    });
+
+    for (const [key, receivers] of receiversByKey) {
+      const donors = donorsByKey.get(key);
+      if (!donors || donors.length === 0) continue;
+
+      for (const receiver of receivers) {
+        receivers.sort((a, b) => a.amount - b.amount);
+        donors.sort((a, b) => b.amount - a.amount);
+        let needed = receiver.amount;
+        while (needed > 0) {
+          let bestIndex = -1;
+          let bestDistance = Infinity;
+          for (let i = 0; i < donors.length; i++) {
+            const donor = donors[i]!;
+            if (donor.amount <= 0 || donor.entity.id === receiver.entity.id) continue;
+            const center = blobCenters.get(donor.entity.id);
+            if (!center) continue;
+            const distance = Math.hypot(center.x - receiver.x, center.y - receiver.y);
+            if (distance < bestDistance) {
+              bestDistance = distance;
+              bestIndex = i;
+            }
+          }
+          if (bestIndex < 0) break;
+
+          const donor = donors[bestIndex]!;
+          const moved = Math.min(needed, donor.amount);
+          const units = donor.entity.releaseTransferredUnits(moved);
+          receiver.entity.receiveTransferredUnits(units);
+          const actualMoved = units.length;
+          donor.amount -= actualMoved;
+          needed -= actualMoved;
+          if (donor.amount <= 0) donors.splice(bestIndex, 1);
+          if (actualMoved === 0) break;
+        }
+      }
+    }
 
     this.room.state.buildings.forEach((building, id) => {
       let entity = this.findBuildingEntity(id as string);
