@@ -10,54 +10,12 @@ import {
 } from "../../shared/game-rules.js";
 import type { Game } from "./game.js";
 import { Entity, type SelectionInfo } from "./entity.js";
+import { createUnitBodyGeometry } from "./render-geom.js";
 import { getTerrainHeightAt } from "./terrain.js";
 import {
   PHALANX_TEAM_TINT_USERDATA,
   createPhalanxInstancedMeshes,
 } from "./phalanx-unit-model.js";
-
-function mergeBufferGeometries(geometries: THREE.BufferGeometry[]): THREE.BufferGeometry {
-  const merged = new THREE.BufferGeometry();
-  const positions: number[] = [];
-  const normals: number[] = [];
-  const uvs: number[] = [];
-
-  for (const geometry of geometries) {
-    const nonIndexed = geometry.index ? geometry.toNonIndexed() : geometry.clone();
-    const position = nonIndexed.getAttribute("position");
-    const normal = nonIndexed.getAttribute("normal");
-    const uv = nonIndexed.getAttribute("uv");
-
-    for (let i = 0; i < position.count; i++) {
-      positions.push(position.getX(i), position.getY(i), position.getZ(i));
-      normals.push(normal.getX(i), normal.getY(i), normal.getZ(i));
-      if (uv) {
-        uvs.push(uv.getX(i), uv.getY(i));
-      } else {
-        uvs.push(0, 0);
-      }
-    }
-  }
-
-  merged.setAttribute("position", new THREE.Float32BufferAttribute(positions, 3));
-  merged.setAttribute("normal", new THREE.Float32BufferAttribute(normals, 3));
-  merged.setAttribute("uv", new THREE.Float32BufferAttribute(uvs, 2));
-  return merged;
-}
-
-function createUnitBodyGeometry() {
-  const torsoHeight = GAME_RULES.UNIT_HEIGHT * 0.72;
-  const torsoWidth = GAME_RULES.UNIT_RADIUS * 1.12;
-  const torsoDepth = GAME_RULES.UNIT_RADIUS * 0.72;
-  const headRadius = GAME_RULES.UNIT_RADIUS * 0.34;
-  const torso = new THREE.BoxGeometry(torsoWidth, torsoHeight, torsoDepth);
-  torso.translate(0, torsoHeight * 0.5, 0);
-
-  const head = new THREE.SphereGeometry(headRadius, 12, 10);
-  head.translate(0, torsoHeight + headRadius * 1.6, 0);
-
-  return mergeBufferGeometries([torso, head]);
-}
 
 const UNIT_GEOM = createUnitBodyGeometry();
 const UNIT_MAT = new THREE.MeshStandardMaterial({
