@@ -189,10 +189,35 @@ function cloneTextureWithFactionReplace(
   replaceFactionPixels(imgData, primaryHex, secondaryHex);
   ctx.putImageData(imgData, 0, 0);
 
-  const tex = src.clone();
-  tex.image = canvas;
-  tex.needsUpdate = true;
+  // Must NOT use `src.clone()` then set `.image`: Three shares `texture.source` across
+  // clones, so swapping the image would mutate every material still referencing that source
+  // (template + other squads) — everyone would end up one team’s colors.
+  return newTextureFromCanvasLike(src, canvas);
+}
+
+/** New GPU texture with its own `Source` (see note above). */
+function newTextureFromCanvasLike(src: THREE.Texture, canvas: HTMLCanvasElement): THREE.Texture {
+  const tex = new THREE.Texture(canvas);
+  tex.name = src.name;
+  tex.wrapS = src.wrapS;
+  tex.wrapT = src.wrapT;
+  tex.magFilter = src.magFilter;
+  tex.minFilter = src.minFilter;
+  tex.anisotropy = src.anisotropy;
+  tex.format = src.format;
+  tex.type = src.type;
+  tex.offset.copy(src.offset);
+  tex.repeat.copy(src.repeat);
+  tex.center.copy(src.center);
+  tex.rotation = src.rotation;
+  tex.matrixAutoUpdate = src.matrixAutoUpdate;
+  tex.matrix.copy(src.matrix);
+  tex.generateMipmaps = src.generateMipmaps;
+  tex.premultiplyAlpha = src.premultiplyAlpha;
+  tex.flipY = src.flipY;
+  tex.unpackAlignment = src.unpackAlignment;
   tex.colorSpace = src.colorSpace;
+  tex.needsUpdate = true;
   return tex;
 }
 
