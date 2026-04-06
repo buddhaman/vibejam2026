@@ -184,3 +184,37 @@ No deep `systems/` tree — add files only when they earn their place.
 ---
 
 Keep the architecture **boring on the wire**, **expressive on the GPU**.
+
+### TODO:
+ - Villagers gather resources
+ - Farms
+ - Behavior trees (behavior of all units)
+ - Villagers build buildings
+ - Villagers join in blobs
+ - Buildings produce units that auto join in blobs
+ - Design attack mechanics
+ - Give health to buildings
+ - Build walls.
+ - Make trees cuttable and collectable
+ - Make weapons
+ - Swing animation
+ - Bows
+ - Arrows and shooting animation
+ - Give proper colors to all buildings and units in an efficient way
+ - Health per unit
+ - Make terrain more pretty
+ - Add water
+ - In game text 
+ - Music
+ - Sounds and voiceover
+ - User chat
+ - Score per user, realtime leaderboards
+
+ Stretch:
+  - Ships
+
+ Mabye:
+ - Map editor
+ - Map savefile design
+ - Sync map
+

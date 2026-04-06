@@ -177,7 +177,7 @@ export class BattleRoom extends Room<{ state: GameState }> {
 
     const playerIndex = this.getNextTownCenterIndex();
     const townCenter = this.spawnTownCenter(client.sessionId, playerIndex);
-    this.spawnProducedUnit(townCenter, UnitType.WARBAND);
+    this.spawnProducedUnit(townCenter, UnitType.WARBAND, CONFIG.START_WARBAND_UNIT_COUNT);
   }
 
   onLeave(client: Client, _code: number) {
@@ -480,7 +480,7 @@ export class BattleRoom extends Room<{ state: GameState }> {
     }
   }
 
-  private spawnProducedUnit(building: Building, unitType: UnitType) {
+  private spawnProducedUnit(building: Building, unitType: UnitType, unitCountOverride?: number) {
     const buildingRules = getBuildingRules(building.buildingType);
     const unitRules = getUnitRules(unitType);
     const blob = new Blob();
@@ -492,7 +492,7 @@ export class BattleRoom extends Room<{ state: GameState }> {
     blob.targetY = blob.y;
     blob.vx = 0;
     blob.vy = 0;
-    blob.unitCount = unitRules.unitCount;
+    blob.unitCount = unitCountOverride ?? unitRules.unitCount;
     blob.spread = unitType === UnitType.VILLAGER ? SquadSpread.TIGHT : SquadSpread.DEFAULT;
     blob.radius = getSquadRadius(blob.unitCount, blob.spread);
     blob.health = unitRules.health;

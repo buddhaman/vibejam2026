@@ -99,7 +99,7 @@ export function startRender(game: Game) {
   scene.add(forest.root);
   const datacenters = new DatacenterRenderer();
   scene.add(datacenters.root);
-  const beamDrawer = new BeamDrawer(4096);
+  const beamDrawer = new BeamDrawer(12_288);
   scene.add(beamDrawer.root);
   game.setBeamDrawer(beamDrawer);
 

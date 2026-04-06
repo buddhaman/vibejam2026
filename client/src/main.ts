@@ -3,6 +3,7 @@ import { Game } from "./game.js";
 import { startRender } from "./render.js";
 import { ensureBuildingModelsLoaded } from "./building-model-registry.js";
 import { ensureDatacenterModelLoaded } from "./datacenters.js";
+import { ensurePhalanxUnitModelLoaded } from "./phalanx-unit-model.js";
 
 async function boot() {
   const room = await joinBattle();
@@ -12,6 +13,7 @@ async function boot() {
   await waitForSyncedGameState(room);
   await ensureBuildingModelsLoaded();
   await ensureDatacenterModelLoaded();
+  await ensurePhalanxUnitModelLoaded();
   await game.streamTiles(); // request chunks sequentially until world is fully loaded
   startRender(game);
 }

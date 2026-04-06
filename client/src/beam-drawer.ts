@@ -23,6 +23,8 @@ export class BeamDrawer {
     this.root.receiveShadow = true;
     this.root.count = 0;
     this.root.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(capacity * 3), 3);
+    /** Instance transforms span the map; default bounds are wrong for frustum cull (beams vanish at some angles). */
+    this.root.frustumCulled = false;
   }
 
   public beginFrame(): void {

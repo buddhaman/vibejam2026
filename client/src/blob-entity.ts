@@ -11,6 +11,10 @@ import {
 import type { Game } from "./game.js";
 import { Entity, type SelectionInfo } from "./entity.js";
 import { getTerrainHeightAt } from "./terrain.js";
+import {
+  PHALANX_TEAM_TINT_USERDATA,
+  createPhalanxInstancedMeshes,
+} from "./phalanx-unit-model.js";
 
 function mergeBufferGeometries(geometries: THREE.BufferGeometry[]): THREE.BufferGeometry {
   const merged = new THREE.BufferGeometry();
@@ -77,6 +81,8 @@ const OVAL_RING_MAT = new THREE.MeshBasicMaterial({
   depthWrite: false,
 });
 const DUMMY = new THREE.Object3D();
+/** Keep ≥ GAME_RULES.START_WARBAND_UNIT_COUNT so the free starter Phalanx isn’t culled. */
+const INSTANCE_CAP = Math.max(512, GAME_RULES.START_WARBAND_UNIT_COUNT);
 const GOLDEN_ANGLE = Math.PI * (3 - Math.sqrt(5));
 const VISUAL_STEP = 1 / 120;
 const VISUAL_CATCHUP = 12;
@@ -95,6 +101,16 @@ const LEG_DEPTH = GAME_RULES.UNIT_RADIUS * 0.18;
 const FOOT_GROUND_LIFT = 0.03;
 const TEMP_A = new THREE.Vector3();
 const TEMP_B = new THREE.Vector3();
+/** Ground/st ray pick: villagers use a small procedural mesh — pad ellipse + invisible column for rays. */
+const VILLAGER_CONTAINS_ELLIPSE_MULT = 1.7;
+const VILLAGER_PICK_CYLINDER_R = 1.35;
+const VILLAGER_PICK_CYLINDER_H = 3.8;
+
+/** Legs, ovals, and move markers stay neutral; villager torsos use team color like Phalanx tints. */
+const COLOR_LEG_BEAM = new THREE.Color(0x4a433a);
+const COLOR_OVAL_FILL = new THREE.Color(0xd8d4cc);
+const COLOR_OVAL_RING = new THREE.Color(0xbfb6a8);
+const COLOR_MOVE_MARKER = new THREE.Color(0xfff8ef);
 
 type UnitState = {
   x: number;
@@ -115,7 +131,11 @@ type UnitState = {
 export class BlobEntity extends Entity {
   public mesh: THREE.Group;
   private ovalRoot!: THREE.Group;
-  private units!: THREE.InstancedMesh;
+  private unitsVillager!: THREE.InstancedMesh;
+  /** Invisible geometry so `Raycaster` can select villagers without pixel-hunting. */
+  private villagerPickProxy!: THREE.Mesh;
+  /** One mesh (cylinder fallback) or multiple parts from `phalanx.glb`. */
+  private unitsPhalanx: THREE.InstancedMesh[] = [];
   private ovalFill!: THREE.Mesh<THREE.CircleGeometry, THREE.MeshBasicMaterial>;
   private ovalRing!: THREE.Mesh<THREE.RingGeometry, THREE.MeshBasicMaterial>;
   private blob: {
@@ -169,10 +189,22 @@ export class BlobEntity extends Entity {
   }
 
   protected createMesh(): THREE.Group {
-    this.units = new THREE.InstancedMesh(UNIT_GEOM, UNIT_MAT.clone(), 256);
-    this.units.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
-    this.units.castShadow = true;
-    this.units.receiveShadow = true;
+    this.unitsVillager = new THREE.InstancedMesh(UNIT_GEOM, UNIT_MAT.clone(), INSTANCE_CAP);
+    this.unitsVillager.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+    this.unitsVillager.castShadow = true;
+    this.unitsVillager.receiveShadow = true;
+    /** InstancedMesh frustum culling uses geometry bounds at origin, not instance positions — whole squad vanishes at some angles. */
+    this.unitsVillager.frustumCulled = false;
+
+    this.unitsPhalanx = createPhalanxInstancedMeshes(INSTANCE_CAP);
+    if (this.unitsPhalanx.length === 0) {
+      const fallback = new THREE.InstancedMesh(UNIT_GEOM, UNIT_MAT.clone(), INSTANCE_CAP);
+      fallback.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+      fallback.castShadow = true;
+      fallback.receiveShadow = true;
+      fallback.frustumCulled = false;
+      this.unitsPhalanx = [fallback];
+    }
 
     this.ovalRoot = new THREE.Group();
 
@@ -187,9 +219,23 @@ export class BlobEntity extends Entity {
     this.ovalRoot.add(this.ovalFill);
     this.ovalRoot.add(this.ovalRing);
 
+    this.villagerPickProxy = new THREE.Mesh(
+      new THREE.CylinderGeometry(VILLAGER_PICK_CYLINDER_R, VILLAGER_PICK_CYLINDER_R, VILLAGER_PICK_CYLINDER_H, 16),
+      new THREE.MeshBasicMaterial({
+        transparent: true,
+        opacity: 0,
+        depthWrite: false,
+      })
+    );
+    this.villagerPickProxy.position.y = VILLAGER_PICK_CYLINDER_H * 0.5;
+    this.villagerPickProxy.visible = false;
+    this.villagerPickProxy.frustumCulled = false;
+
     const group = new THREE.Group();
     group.add(this.ovalRoot);
-    group.add(this.units);
+    group.add(this.unitsVillager);
+    group.add(this.villagerPickProxy);
+    for (const m of this.unitsPhalanx) group.add(m);
     return group;
   }
 
@@ -254,7 +300,7 @@ export class BlobEntity extends Entity {
   }
 
   private stepUnits(dt: number, layout: { major: number; minor: number }): void {
-    const count = Math.min(this.blob?.unitCount ?? 0, this.units.instanceMatrix.count);
+    const count = Math.min(this.blob?.unitCount ?? 0, INSTANCE_CAP);
     this.ensureUnitStateCount(count);
 
     for (let i = 0; i < count; i++) {
@@ -433,8 +479,7 @@ export class BlobEntity extends Entity {
 
     const layout = this.getLayout();
     const terrainY = getTerrainHeightAt(layout.x, layout.y, this.game.getTiles());
-    const color = this.game.getPlayerColor(this.blob.ownerId);
-    const tint = new THREE.Color(color);
+    const teamTint = new THREE.Color(this.game.getPlayerColor(this.blob.ownerId));
 
     this.mesh.position.set(layout.x, terrainY, layout.y);
     this.mesh.rotation.y = 0;
@@ -442,17 +487,36 @@ export class BlobEntity extends Entity {
 
     this.ovalFill.scale.set(layout.minor, layout.major, 1);
     this.ovalRing.scale.set(layout.minor * 1.04, layout.major * 1.04, 1);
-    this.ovalFill.material.color.copy(tint).offsetHSL(0, 0.06, 0.1);
-    this.ovalRing.material.color.copy(tint).offsetHSL(0, 0.03, this.isSelected() ? 0.18 : 0.08);
+    this.ovalFill.material.color.copy(COLOR_OVAL_FILL);
+    this.ovalRing.material.color.copy(COLOR_OVAL_RING);
+    if (this.isSelected()) {
+      this.ovalRing.material.color.offsetHSL(0, 0, 0.12);
+    }
     this.ovalFill.material.opacity = this.isMine() ? 0.12 : 0.07;
     this.ovalRing.material.opacity = this.isSelected() ? 0.65 : this.isMine() ? 0.22 : 0.12;
 
-    const unitsMaterial = this.units.material as THREE.MeshStandardMaterial;
-    unitsMaterial.color.copy(tint).offsetHSL(0, 0.02, 0.02);
-    unitsMaterial.opacity = this.isMine() ? 1 : 0.68;
-    unitsMaterial.transparent = !this.isMine();
+    const isVillager = this.blob.unitType === UnitType.VILLAGER;
+    const n = Math.min(this.blob.unitCount, INSTANCE_CAP);
 
-    this.units.count = Math.min(this.blob.unitCount, this.units.instanceMatrix.count);
+    this.unitsVillager.count = isVillager ? n : 0;
+    this.unitsVillager.visible = isVillager;
+    const villagerMat = this.unitsVillager.material as THREE.MeshStandardMaterial;
+    villagerMat.color.copy(teamTint).offsetHSL(0, 0.02, 0.02);
+    villagerMat.opacity = this.isMine() ? 1 : 0.68;
+    villagerMat.transparent = !this.isMine();
+    this.villagerPickProxy.visible = isVillager;
+
+    for (const m of this.unitsPhalanx) {
+      m.count = !isVillager ? n : 0;
+      m.visible = !isVillager;
+      const pm = m.material as THREE.MeshStandardMaterial;
+      if (pm.userData[PHALANX_TEAM_TINT_USERDATA]) {
+        pm.color.copy(teamTint).offsetHSL(0, 0.02, 0.02);
+      }
+      pm.opacity = this.isMine() ? 1 : 0.68;
+      pm.transparent = !this.isMine();
+    }
+
     const stepDt = Math.min(0.05, dt);
     this.stepUnits(stepDt, layout);
 
@@ -462,7 +526,7 @@ export class BlobEntity extends Entity {
     const forwardX = Math.sin(layout.heading);
     const forwardZ = Math.cos(layout.heading);
     const tiles = this.game.getTiles();
-    for (let i = 0; i < this.units.count; i++) {
+    for (let i = 0; i < n; i++) {
       const state = this.unitStates[i];
       const px = rightX * state.x + forwardX * state.z;
       const pz = rightZ * state.x + forwardZ * state.z;
@@ -501,24 +565,41 @@ export class BlobEntity extends Entity {
       DUMMY.rotation.set(0, layout.heading, 0);
       DUMMY.scale.setScalar(unitRules.visualScale);
       DUMMY.updateMatrix();
-      this.units.setMatrixAt(i, DUMMY.matrix);
+      if (isVillager) {
+        this.unitsVillager.setMatrixAt(i, DUMMY.matrix);
+      } else {
+        for (const m of this.unitsPhalanx) {
+          m.setMatrixAt(i, DUMMY.matrix);
+        }
+      }
 
       const hipOffsetX = sideX * HIP_WIDTH * unitRules.visualScale;
       const hipOffsetZ = sideZ * HIP_WIDTH * unitRules.visualScale;
       const hipWorldY = unitTerrainY + HIP_LIFT * unitRules.visualScale;
       const leftFootTerrainY = getTerrainHeightAt(state.leftFootX, state.leftFootZ, tiles) + FOOT_GROUND_LIFT;
       const rightFootTerrainY = getTerrainHeightAt(state.rightFootX, state.rightFootZ, tiles) + FOOT_GROUND_LIFT;
-      const legColor = tint.clone().offsetHSL(0.01, 0.01, -0.12);
-
       TEMP_A.set(worldX + hipOffsetX, hipWorldY, worldZ + hipOffsetZ);
       TEMP_B.set(state.leftFootX, leftFootTerrainY, state.leftFootZ);
-      this.game.drawBeam(TEMP_A, TEMP_B, LEG_WIDTH * unitRules.visualScale, LEG_DEPTH * unitRules.visualScale, legColor);
+      this.game.drawBeam(
+        TEMP_A,
+        TEMP_B,
+        LEG_WIDTH * unitRules.visualScale,
+        LEG_DEPTH * unitRules.visualScale,
+        COLOR_LEG_BEAM
+      );
 
       TEMP_A.set(worldX - hipOffsetX, hipWorldY, worldZ - hipOffsetZ);
       TEMP_B.set(state.rightFootX, rightFootTerrainY, state.rightFootZ);
-      this.game.drawBeam(TEMP_A, TEMP_B, LEG_WIDTH * unitRules.visualScale, LEG_DEPTH * unitRules.visualScale, legColor);
+      this.game.drawBeam(
+        TEMP_A,
+        TEMP_B,
+        LEG_WIDTH * unitRules.visualScale,
+        LEG_DEPTH * unitRules.visualScale,
+        COLOR_LEG_BEAM
+      );
     }
-    this.units.instanceMatrix.needsUpdate = true;
+    this.unitsVillager.instanceMatrix.needsUpdate = true;
+    for (const m of this.unitsPhalanx) m.instanceMatrix.needsUpdate = true;
 
     this.updateTargetIndicator(Math.min(0.05, dt), terrainY);
   }
@@ -573,8 +654,6 @@ export class BlobEntity extends Entity {
 
     this.targetAnimT += dt;
     const tgtTerrainY = getTerrainHeightAt(this.blob.targetX, this.blob.targetY, this.game.getTiles());
-    const tint = new THREE.Color(this.game.getPlayerColor(this.blob.ownerId));
-    const bright = tint.clone().offsetHSL(0, 0.0, 0.16);
 
     // Position group at target
     this.targetGroup.visible = true;
@@ -582,7 +661,7 @@ export class BlobEntity extends Entity {
 
     // Slowly rotate pin ring for liveliness
     this.targetPinRing.rotation.z = this.targetAnimT * 0.45;
-    this.targetPinRing.material.color.copy(bright);
+    this.targetPinRing.material.color.copy(COLOR_MOVE_MARKER);
     const pinPulse = 1 + 0.06 * Math.sin(this.targetAnimT * 2.8);
     this.targetPinRing.scale.setScalar(pinPulse);
 
@@ -592,9 +671,9 @@ export class BlobEntity extends Entity {
     const pingAlpha = (1 - this.pingPhase) * 0.68;
     this.targetPingMesh.scale.setScalar(pingScale);
     this.targetPingMesh.material.opacity = pingAlpha;
-    this.targetPingMesh.material.color.copy(bright);
+    this.targetPingMesh.material.color.copy(COLOR_MOVE_MARKER);
 
-    this.targetDisc.material.color.copy(bright);
+    this.targetDisc.material.color.copy(COLOR_MOVE_MARKER);
 
     // Connector line: blob center → target
     const center = this.getPredictedCenter();
@@ -602,7 +681,7 @@ export class BlobEntity extends Entity {
     posAttr.setXYZ(0, center.x,            blobTerrainY + 0.12, center.y);
     posAttr.setXYZ(1, this.blob.targetX,   tgtTerrainY  + 0.12, this.blob.targetY);
     posAttr.needsUpdate = true;
-    this.targetConnector.material.color.copy(bright);
+    this.targetConnector.material.color.copy(COLOR_MOVE_MARKER);
     this.targetConnector.visible = true;
   }
 
@@ -617,11 +696,16 @@ export class BlobEntity extends Entity {
   public containsWorldPoint(x: number, z: number): boolean {
     if (!this.blob) return false;
     const layout = this.getLayout();
+    let { minor, major } = layout;
+    if (this.blob.unitType === UnitType.VILLAGER) {
+      minor *= VILLAGER_CONTAINS_ELLIPSE_MULT;
+      major *= VILLAGER_CONTAINS_ELLIPSE_MULT;
+    }
     const cos = Math.cos(-this.heading);
     const sin = Math.sin(-this.heading);
     const lx = (x - layout.x) * cos - (z - layout.y) * sin;
     const lz = (x - layout.x) * sin + (z - layout.y) * cos;
-    return (lx * lx) / (layout.minor * layout.minor) + (lz * lz) / (layout.major * layout.major) <= 1.05;
+    return (lx * lx) / (minor * minor) + (lz * lz) / (major * major) <= 1.05;
   }
 
   public worldDistanceTo(x: number, z: number): number {

@@ -77,6 +77,8 @@ export const GAME_RULES = {
   START_BIOMASS: 500,
   START_MATERIAL: 300,
   START_COMPUTE: 200,
+  /** Free Phalanx spawned with your first town center — does not affect barracks-trained warbands. */
+  START_WARBAND_UNIT_COUNT: 800,
   BARRACKS_HEALTH: 200,
   TOWER_HEALTH: 300,
   TOWN_CENTER_HEALTH: 950,
