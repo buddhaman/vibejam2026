@@ -9,6 +9,8 @@ export const MessageType = {
   TILES_REQUEST: "tiles_req",
   TILE_CHUNK:    "tile_chunk",
   TILE_UPDATE:   "tile_update",
+  // Path — server sends A* result to the owning client after each move intent
+  PATH:          "path",
 } as const;
 
 export type IntentMessage = {
@@ -70,4 +72,10 @@ export type TileUpdateMessage = {
   compute?: number;
   canWalk?: boolean;
   canBuild?: boolean;
+};
+
+/** Server → Client (owner only): A* path computed after a move intent. Empty waypoints = no path / direct move. */
+export type PathMessage = {
+  blobId: string;
+  waypoints: { x: number; y: number }[];
 };

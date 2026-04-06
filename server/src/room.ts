@@ -29,6 +29,7 @@ import {
   MessageType,
   type IntentMessage,
   type BuildMessage,
+  type PathMessage,
   type SquadSpreadMessage,
   type TrainMessage,
   type TileData,
@@ -36,6 +37,7 @@ import {
   type TilesRequestMessage,
   type TileUpdateMessage,
 } from "../../shared/protocol.js";
+import { findPath, type Waypoint } from "./astar.js";
 import { assignPlayerPaletteColor } from "../../shared/player-colors.js";
 
 let nextId = 1;
@@ -45,6 +47,8 @@ function makeId(prefix: string) {
 
 const CHUNK_SIZE = 50; // tiles per chunk — keeps each message well under 5 KB
 const BLOB_REBALANCE_BATTLE_BUFFER = 10;
+/** Distance at which a blob advances to its next path waypoint (intermediate only). */
+const WAYPOINT_REACH = GAME_RULES.TILE_SIZE * 0.45;
 
 /** @see https://docs.colyseus.io/state/ — state is assigned on the class in 0.17+ */
 export class BattleRoom extends Room<{ state: GameState }> {
@@ -56,6 +60,8 @@ export class BattleRoom extends Room<{ state: GameState }> {
   private tileChunks: TileData[][] = [];
   /** How many building footprints cover each tile (any owner). */
   private buildingTileOcc = new Map<string, number>();
+  /** Active A* paths per blob — server-side only, not part of schema. */
+  private blobPaths = new Map<string, { waypoints: Waypoint[]; index: number }>();
 
   onCreate() {
     this.state.terrainSeed = Math.floor(Math.random() * 0xffffffff);
@@ -89,8 +95,29 @@ export class BattleRoom extends Room<{ state: GameState }> {
       if (!blob || blob.ownerId !== client.sessionId) return;
       const targetTile = this.getTileAtWorld(msg.targetX, msg.targetY);
       if (!targetTile?.canWalk) return;
+
       blob.targetX = clamp(msg.targetX, CONFIG.WORLD_MIN, CONFIG.WORLD_MAX);
       blob.targetY = clamp(msg.targetY, CONFIG.WORLD_MIN, CONFIG.WORLD_MAX);
+
+      // Compute A* path from blob's current tile to goal tile
+      const walkable = (tx: number, tz: number) => this.tileData.get(getTileKey(tx, tz))?.canWalk ?? false;
+      const start = getTileCoordsFromWorld(blob.x, blob.y);
+      const goal  = getTileCoordsFromWorld(blob.targetX, blob.targetY);
+      const path  = findPath(start.tx, start.tz, goal.tx, goal.tz, walkable);
+
+      if (path.length > 0) {
+        // Replace last waypoint with the exact clicked position so the blob stops precisely there
+        path[path.length - 1] = { x: blob.targetX, y: blob.targetY };
+        this.blobPaths.set(blob.id, { waypoints: path, index: 0 });
+      } else {
+        // No path (start tile isolated) — fall back to straight-line movement
+        this.blobPaths.delete(blob.id);
+      }
+
+      client.send(MessageType.PATH, {
+        blobId: blob.id,
+        waypoints: path,
+      } satisfies PathMessage);
     });
 
     this.onMessage(MessageType.SQUAD_SPREAD, (client, raw) => {
@@ -190,7 +217,10 @@ export class BattleRoom extends Room<{ state: GameState }> {
     this.state.blobs.forEach((b, id) => {
       if (b.ownerId === sid) blobIds.push(id as string);
     });
-    for (const id of blobIds) this.state.blobs.delete(id);
+    for (const id of blobIds) {
+      this.blobPaths.delete(id);
+      this.state.blobs.delete(id);
+    }
 
     const buildingIds: string[] = [];
     this.state.buildings.forEach((b, id) => {
@@ -212,24 +242,53 @@ export class BattleRoom extends Room<{ state: GameState }> {
 
     for (const blob of this.state.blobs.values()) {
       blob.radius = getSquadRadius(blob.unitCount, blob.spread);
-      const dx = blob.targetX - blob.x;
-      const dy = blob.targetY - blob.y;
+
+      // Resolve the immediate movement target from the A* path (or fall back to targetX/Y)
+      let moveX = blob.targetX;
+      let moveY = blob.targetY;
+      let isFinalWaypoint = true;
+
+      const pathData = this.blobPaths.get(blob.id);
+      if (pathData && pathData.index < pathData.waypoints.length) {
+        const wp = pathData.waypoints[pathData.index]!;
+        const waypointDist = Math.hypot(blob.x - wp.x, blob.y - wp.y);
+        const reachRadius  = pathData.index === pathData.waypoints.length - 1
+          ? CONFIG.BLOB_STOP_EPSILON
+          : WAYPOINT_REACH;
+
+        if (waypointDist < reachRadius) {
+          // Advance to next waypoint
+          pathData.index++;
+        }
+
+        if (pathData.index < pathData.waypoints.length) {
+          const next = pathData.waypoints[pathData.index]!;
+          moveX = next.x;
+          moveY = next.y;
+          isFinalWaypoint = pathData.index === pathData.waypoints.length - 1;
+        }
+        // else: path exhausted, fall through to targetX/Y with isFinalWaypoint = true
+      }
+
+      const dx = moveX - blob.x;
+      const dy = moveY - blob.y;
       const dist = Math.hypot(dx, dy);
       const currentSpeed = Math.hypot(blob.vx, blob.vy);
 
-      if (dist < CONFIG.BLOB_STOP_EPSILON && currentSpeed < 0.75) {
+      if (isFinalWaypoint && dist < CONFIG.BLOB_STOP_EPSILON && currentSpeed < 0.75) {
         blob.x = blob.targetX;
         blob.y = blob.targetY;
         blob.vx = 0;
         blob.vy = 0;
+        this.blobPaths.delete(blob.id);
         this.tryVillagerGather(blob, dt);
         continue;
       }
 
-      const desiredSpeed =
-        dist < CONFIG.BLOB_DECELERATION_RADIUS
-          ? CONFIG.BLOB_MOVE_SPEED * Math.max(0, dist / CONFIG.BLOB_DECELERATION_RADIUS)
-          : CONFIG.BLOB_MOVE_SPEED;
+      // Decelerate only when approaching the final waypoint
+      const desiredSpeed = isFinalWaypoint && dist < CONFIG.BLOB_DECELERATION_RADIUS
+        ? CONFIG.BLOB_MOVE_SPEED * Math.max(0, dist / CONFIG.BLOB_DECELERATION_RADIUS)
+        : CONFIG.BLOB_MOVE_SPEED;
 
       const nx = dist > 0.0001 ? dx / dist : 0;
       const ny = dist > 0.0001 ? dy / dist : 0;
@@ -254,13 +313,13 @@ export class BattleRoom extends Room<{ state: GameState }> {
       blob.x = clamp(blob.x, CONFIG.WORLD_MIN, CONFIG.WORLD_MAX);
       blob.y = clamp(blob.y, CONFIG.WORLD_MIN, CONFIG.WORLD_MAX);
 
-      const remainingDx = blob.targetX - blob.x;
-      const remainingDy = blob.targetY - blob.y;
-      if (Math.hypot(remainingDx, remainingDy) < CONFIG.BLOB_STOP_EPSILON) {
+      // Snap to final target when within epsilon
+      if (isFinalWaypoint && Math.hypot(blob.targetX - blob.x, blob.targetY - blob.y) < CONFIG.BLOB_STOP_EPSILON) {
         blob.x = blob.targetX;
         blob.y = blob.targetY;
         blob.vx = 0;
         blob.vy = 0;
+        this.blobPaths.delete(blob.id);
       }
     }
 

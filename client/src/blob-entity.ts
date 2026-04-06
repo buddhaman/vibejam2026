@@ -64,6 +64,7 @@ const LEG_DEPTH = GAME_RULES.UNIT_RADIUS * 0.18;
 const FOOT_GROUND_LIFT = 0.03;
 const TEMP_A = new THREE.Vector3();
 const TEMP_B = new THREE.Vector3();
+const TEMP_PATH_COLOR = new THREE.Color();
 /** Ground/st ray pick: villagers use a small procedural mesh — pad ellipse + invisible column for rays. */
 const VILLAGER_CONTAINS_ELLIPSE_MULT = 1.7;
 const VILLAGER_PICK_CYLINDER_R = 1.35;
@@ -93,11 +94,6 @@ type UnitState = {
   distanceWalked: number;
   bodyReady: boolean;
   feetReady: boolean;
-};
-
-type TransferredUnitVisual = {
-  worldX: number;
-  worldZ: number;
 };
 
 export class BlobEntity extends Entity {
@@ -145,6 +141,7 @@ export class BlobEntity extends Entity {
   private targetConnector!: THREE.Line<THREE.BufferGeometry, THREE.LineBasicMaterial>;
   private pingPhase = Math.random(); // stagger so multiple blobs don't pulse in sync
   private targetAnimT = 0;
+
 
   public constructor(game: Game, id: string) {
     super(game, id);
@@ -316,7 +313,24 @@ export class BlobEntity extends Entity {
 
   private ensureUnitStateCount(count: number): void {
     while (this.unitStates.length < count) {
-      this.unitStates.push(this.createUnitStateAtLocal(0, 0));
+      this.unitStates.push({
+        x: 0,
+        z: 0,
+        vx: 0,
+        vz: 0,
+        bodyX: 0,
+        bodyZ: 0,
+        lastBodyWorldX: 0,
+        lastBodyWorldZ: 0,
+        leftFootX: 0,
+        leftFootZ: 0,
+        rightFootX: 0,
+        rightFootZ: 0,
+        leftPlanted: Math.random() >= 0.5,
+        distanceWalked: Math.random() * FOOT_STRIDE,
+        bodyReady: false,
+        feetReady: false,
+      });
     }
     if (this.unitStates.length > count) {
       this.unitStates.length = count;
@@ -330,42 +344,6 @@ export class BlobEntity extends Entity {
     return {
       x: Math.cos(angle) * radius * minor * 0.82,
       z: Math.sin(angle) * radius * major * 0.82,
-    };
-  }
-
-  private createUnitStateAtLocal(localX: number, localZ: number): UnitState {
-    return {
-      x: localX,
-      z: localZ,
-      vx: 0,
-      vz: 0,
-      bodyX: localX,
-      bodyZ: localZ,
-      lastBodyWorldX: 0,
-      lastBodyWorldZ: 0,
-      leftFootX: 0,
-      leftFootZ: 0,
-      rightFootX: 0,
-      rightFootZ: 0,
-      leftPlanted: Math.random() >= 0.5,
-      distanceWalked: Math.random() * FOOT_STRIDE,
-      bodyReady: true,
-      feetReady: false,
-    };
-  }
-
-  private getUnitVisualWorldPosition(state: UnitState): { x: number; z: number } {
-    const center = this.getPredictedCenter();
-    const layout = this.getLayout();
-    const rightX = Math.cos(layout.heading);
-    const rightZ = -Math.sin(layout.heading);
-    const forwardX = Math.sin(layout.heading);
-    const forwardZ = Math.cos(layout.heading);
-    const localX = state.bodyReady ? state.bodyX : rightX * state.x + forwardX * state.z;
-    const localZ = state.bodyReady ? state.bodyZ : rightZ * state.x + forwardZ * state.z;
-    return {
-      x: center.x + localX,
-      z: center.y + localZ,
     };
   }
 
@@ -528,10 +506,12 @@ export class BlobEntity extends Entity {
     const speed = Math.hypot(center.vx, center.vy);
     const moveDistance = Math.hypot(tx, ty);
 
-    if (moveDistance > 0.5) {
-      this.setFormationForward(tx, ty);
-    } else if (speed > MIN_DIRECTION_SPEED) {
+    if (speed > MIN_DIRECTION_SPEED) {
+      // Actively moving — face the current movement direction (follows path waypoints)
       this.setFormationForward(center.vx, center.vy);
+    } else if (moveDistance > 0.5) {
+      // Stationary but has a queued target — face it
+      this.setFormationForward(tx, ty);
     }
 
     this.heading = Math.atan2(this.formationForwardX, this.formationForwardY);
@@ -683,7 +663,7 @@ export class BlobEntity extends Entity {
       );
 
       DUMMY.position.set(px, hoverY, pz);
-      DUMMY.rotation.set(0, layout.heading, 0);
+      DUMMY.rotation.set(0, Math.atan2(stepForwardX, stepForwardZ), 0);
       DUMMY.scale.setScalar(unitRules.visualScale);
       DUMMY.updateMatrix();
       if (isVillager) {
@@ -722,7 +702,43 @@ export class BlobEntity extends Entity {
     this.unitsVillager.instanceMatrix.needsUpdate = true;
     for (const m of this.unitsPhalanx) m.instanceMatrix.needsUpdate = true;
 
+    this.updatePathLine(teamTint);
     this.updateTargetIndicator(Math.min(0.05, dt), terrainY);
+  }
+
+  private updatePathLine(teamTint: THREE.Color): void {
+    const path = this.game.getBlobPath(this.id);
+    if (!this.isSelected() || !this.isMine() || !path || path.length < 1) return;
+
+    const tiles = this.game.getTiles();
+    TEMP_PATH_COLOR.copy(teamTint).offsetHSL(0, -0.08, 0.22);
+
+    const H = 0.55;
+    const W = 0.32;
+    const D = 0.18;
+
+    // Skip waypoints the blob has already passed — find the one closest to current position.
+    // Everything before it is behind the blob and should not be drawn.
+    const center = this.getPredictedCenter();
+    let firstIdx = 0;
+    let nearestDist = Infinity;
+    for (let i = 0; i < path.length; i++) {
+      const d = Math.hypot(center.x - path[i]!.x, center.y - path[i]!.y);
+      if (d < nearestDist) { nearestDist = d; firstIdx = i; }
+    }
+
+    // Draw: blob's current position → nearest remaining waypoint → … → destination
+    let ax = center.x;
+    let ay = center.y;
+    let aTerrainY = getTerrainHeightAt(ax, ay, tiles);
+    for (let i = firstIdx; i < path.length; i++) {
+      const wp = path[i]!;
+      const bTerrainY = getTerrainHeightAt(wp.x, wp.y, tiles);
+      TEMP_A.set(ax,   aTerrainY + H, ay);
+      TEMP_B.set(wp.x, bTerrainY + H, wp.y);
+      this.game.drawBeam(TEMP_A, TEMP_B, W, D, TEMP_PATH_COLOR);
+      ax = wp.x; ay = wp.y; aTerrainY = bTerrainY;
+    }
   }
 
   private buildTargetIndicator(): void {
@@ -845,26 +861,6 @@ export class BlobEntity extends Entity {
 
   public getUnitType(): UnitTypeValue | null {
     return this.blob?.unitType ?? null;
-  }
-
-  public releaseTransferredUnits(count: number): TransferredUnitVisual[] {
-    const released: TransferredUnitVisual[] = [];
-    const n = Math.min(count, this.unitStates.length);
-    for (let i = 0; i < n; i++) {
-      const state = this.unitStates.pop();
-      if (!state) break;
-      const world = this.getUnitVisualWorldPosition(state);
-      released.push({ worldX: world.x, worldZ: world.z });
-    }
-    return released;
-  }
-
-  public receiveTransferredUnits(units: TransferredUnitVisual[]): void {
-    if (!this.blob || units.length === 0) return;
-    const center = this.getPredictedCenter();
-    for (const unit of units) {
-      this.unitStates.push(this.createUnitStateAtLocal(unit.worldX - center.x, unit.worldZ - center.y));
-    }
   }
 
   public getHealth(): number {
