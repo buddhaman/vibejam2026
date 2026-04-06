@@ -13,8 +13,10 @@ import { Entity, type SelectionInfo } from "./entity.js";
 import { createUnitBodyGeometry } from "./render-geom.js";
 import { getTerrainHeightAt } from "./terrain.js";
 import {
-  PHALANX_TEAM_TINT_USERDATA,
+  applyPhalanxTeamTextureReplacements,
   createPhalanxInstancedMeshes,
+  hasPhalanxGlbMeshes,
+  phalanxSecondaryTeamHex,
 } from "./phalanx-unit-model.js";
 
 const UNIT_GEOM = createUnitBodyGeometry();
@@ -94,6 +96,7 @@ export class BlobEntity extends Entity {
   private villagerPickProxy!: THREE.Mesh;
   /** One mesh (cylinder fallback) or multiple parts from `phalanx.glb`. */
   private unitsPhalanx: THREE.InstancedMesh[] = [];
+  private phalanxTeamTexApplied = false;
   private ovalFill!: THREE.Mesh<THREE.CircleGeometry, THREE.MeshBasicMaterial>;
   private ovalRing!: THREE.Mesh<THREE.RingGeometry, THREE.MeshBasicMaterial>;
   private blob: {
@@ -464,13 +467,20 @@ export class BlobEntity extends Entity {
     villagerMat.transparent = !this.isMine();
     this.villagerPickProxy.visible = isVillager;
 
+    if (!isVillager && this.unitsPhalanx.length > 0 && hasPhalanxGlbMeshes() && !this.phalanxTeamTexApplied) {
+      const primary = this.game.getPlayerColor(this.blob.ownerId);
+      applyPhalanxTeamTextureReplacements(
+        this.unitsPhalanx,
+        primary,
+        phalanxSecondaryTeamHex(primary)
+      );
+      this.phalanxTeamTexApplied = true;
+    }
+
     for (const m of this.unitsPhalanx) {
       m.count = !isVillager ? n : 0;
       m.visible = !isVillager;
       const pm = m.material as THREE.MeshStandardMaterial;
-      if (pm.userData[PHALANX_TEAM_TINT_USERDATA]) {
-        pm.color.copy(teamTint).offsetHSL(0, 0.02, 0.02);
-      }
       pm.opacity = this.isMine() ? 1 : 0.68;
       pm.transparent = !this.isMine();
     }

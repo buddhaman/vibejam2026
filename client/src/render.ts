@@ -14,10 +14,9 @@ import {
   showWarning,
 } from "./hud.js";
 import type { SelectionInfo } from "./entity.js";
-import { DatacenterRenderer } from "./datacenters.js";
-import { ForestRenderer } from "./forest.js";
 import { createTerrainMesh, type TileView } from "./terrain.js";
 import { attachDevNetworkPerf } from "./network-perf.js";
+import { TileVisualManager } from "./tile-visuals.js";
 
 const CAM = {
   polarFromDownDeg: 55,
@@ -95,10 +94,8 @@ export function startRender(game: Game) {
 
   const terrain = createTerrainMesh(game.getTilesOrdered());
   scene.add(terrain);
-  const forest = new ForestRenderer();
-  scene.add(forest.root);
-  const datacenters = new DatacenterRenderer();
-  scene.add(datacenters.root);
+  const tileVisuals = new TileVisualManager();
+  scene.add(tileVisuals.root);
   const beamDrawer = new BeamDrawer(12_288);
   scene.add(beamDrawer.root);
   game.setBeamDrawer(beamDrawer);
@@ -400,8 +397,7 @@ export function startRender(game: Game) {
     applyCameraArrowKeys(dt);
     game.sync();
     game.clearBeamDraws();
-    forest.sync(game.getTilesOrdered());
-    datacenters.sync(game.getTilesOrdered());
+    tileVisuals.sync(game);
     for (const entity of game.entities) entity.render(dt);
     game.flushBeamDraws();
     dir.shadow.camera.updateProjectionMatrix();

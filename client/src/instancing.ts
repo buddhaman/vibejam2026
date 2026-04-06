@@ -21,6 +21,8 @@ export type InstancedVariant = {
 
 export type InstancedVariantSet = {
   root: THREE.Group;
+  capacity: number;
+  definitions: InstancedVariant[];
   variants: Array<{
     meshes: THREE.InstancedMesh[];
   }>;
@@ -41,16 +43,47 @@ export function createInstancedVariantSet(variants: InstancedVariant[], capacity
     return { meshes };
   });
 
-  return { root, variants: built };
+  return { root, capacity, definitions: variants, variants: built };
+}
+
+function rebuildSet(set: InstancedVariantSet, capacity: number): void {
+  while (set.root.children.length > 0) set.root.remove(set.root.children[0]!);
+  set.capacity = capacity;
+  set.variants = set.definitions.map((variant) => {
+    const meshes = variant.parts.map((part) => {
+      const mesh = new THREE.InstancedMesh(part.geometry, part.material, capacity);
+      mesh.count = 0;
+      mesh.castShadow = part.castShadow ?? true;
+      mesh.receiveShadow = part.receiveShadow ?? true;
+      mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+      set.root.add(mesh);
+      return mesh;
+    });
+    return { meshes };
+  });
+}
+
+function ensureCapacity(set: InstancedVariantSet, required: number): void {
+  if (required <= set.capacity) return;
+  let nextCapacity = Math.max(1, set.capacity);
+  while (nextCapacity < required) nextCapacity *= 2;
+  rebuildSet(set, nextCapacity);
 }
 
 export function syncInstancedVariantSet(
   set: InstancedVariantSet,
   transformsByVariant: InstancedTransform[][]
 ) {
+  let maxCount = 0;
+  for (const transforms of transformsByVariant) {
+    if (transforms.length > maxCount) maxCount = transforms.length;
+  }
+  ensureCapacity(set, maxCount);
+
   for (let variantIndex = 0; variantIndex < set.variants.length; variantIndex++) {
     const transforms = transformsByVariant[variantIndex] ?? [];
     const variant = set.variants[variantIndex];
+    const previousCount = variant.meshes[0]?.count ?? 0;
     for (const mesh of variant.meshes) {
       mesh.count = transforms.length;
     }
@@ -62,13 +95,19 @@ export function syncInstancedVariantSet(
       DUMMY.updateMatrix();
       for (const mesh of variant.meshes) {
         mesh.setMatrixAt(i, DUMMY.matrix);
-        mesh.instanceMatrix.needsUpdate = true;
       }
     }
-    for (let i = transforms.length; i < variant.meshes[0].count; i++) {
-      for (const mesh of variant.meshes) {
-        mesh.instanceMatrix.needsUpdate = true;
+    if (transforms.length < previousCount) {
+      DUMMY.position.set(0, -10_000, 0);
+      DUMMY.rotation.set(0, 0, 0);
+      DUMMY.scale.set(0, 0, 0);
+      DUMMY.updateMatrix();
+      for (let i = transforms.length; i < previousCount; i++) {
+        for (const mesh of variant.meshes) {
+          mesh.setMatrixAt(i, DUMMY.matrix);
+        }
       }
     }
+    for (const mesh of variant.meshes) mesh.instanceMatrix.needsUpdate = true;
   }
 }

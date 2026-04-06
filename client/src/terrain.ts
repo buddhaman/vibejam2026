@@ -18,6 +18,17 @@ export type TileView = {
   isMountain: boolean;
   canBuild: boolean;
   canWalk: boolean;
+  treeSlots?: TreeSlot[];
+};
+
+export type TreeSlot = {
+  x: number;
+  z: number;
+  rotationY: number;
+  scaleX: number;
+  scaleY: number;
+  scaleZ: number;
+  variantIndex: number;
 };
 
 function hash(n: number) {

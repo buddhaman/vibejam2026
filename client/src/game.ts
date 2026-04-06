@@ -39,6 +39,8 @@ export class Game {
   private _tiles = new Map<string, TileView>();
   private _tilesOrdered: TileView[] = [];
   private _streamResolve: (() => void) | null = null;
+  private _dirtyTileVisualLayers = new Set<"forest" | "datacenters">(["forest", "datacenters"]);
+  private _allTileVisualsDirty = true;
 
   public constructor(room: Room) {
     this.room = room;
@@ -76,6 +78,9 @@ export class Game {
           const tile = this._tiles.get(getTileKey(tx, tz));
           if (tile) this._tilesOrdered.push(tile);
         }
+      this._allTileVisualsDirty = true;
+      this._dirtyTileVisualLayers.add("forest");
+      this._dirtyTileVisualLayers.add("datacenters");
       this._streamResolve?.();
       this._streamResolve = null;
     }
@@ -84,8 +89,14 @@ export class Game {
   private _onTileUpdate(msg: TileUpdateMessage): void {
     const tile = this._tiles.get(msg.key);
     if (!tile) return;
-    if (typeof msg.material === "number") tile.material = msg.material;
-    if (typeof msg.compute === "number") tile.compute = msg.compute;
+    if (typeof msg.material === "number") {
+      tile.material = msg.material;
+      this._dirtyTileVisualLayers.add("forest");
+    }
+    if (typeof msg.compute === "number") {
+      tile.compute = msg.compute;
+      this._dirtyTileVisualLayers.add("datacenters");
+    }
     if (typeof msg.canWalk === "boolean") tile.canWalk = msg.canWalk;
     if (typeof msg.canBuild === "boolean") tile.canBuild = msg.canBuild;
   }
@@ -267,6 +278,16 @@ export class Game {
 
   /** Ordered (tz, tx) array for terrain/forest rendering — object refs are live. */
   public getTilesOrdered(): TileView[] { return this._tilesOrdered; }
+
+  public consumeTileVisualDirty(): { all: boolean; layers: Set<"forest" | "datacenters"> } {
+    const dirty = {
+      all: this._allTileVisualsDirty,
+      layers: new Set(this._dirtyTileVisualLayers),
+    };
+    this._allTileVisualsDirty = false;
+    this._dirtyTileVisualLayers.clear();
+    return dirty;
+  }
 
   public getTileAtWorld(x: number, z: number): TileView | null {
     const { tx, tz } = getTileCoordsFromWorld(x, z);
