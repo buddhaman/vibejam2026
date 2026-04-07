@@ -9,6 +9,7 @@ import {
   canAfford,
   assignDatacenterSites,
   generateTile,
+  getTileCenter,
   getBlobMaxHealth,
   getTileCoordsFromWorld,
   getTileKey,
@@ -95,6 +96,7 @@ export class BattleRoom extends Room<{ state: GameState }> {
       }
       const blob = this.state.blobs.get(msg.blobId);
       if (!blob || blob.ownerId !== client.sessionId) return;
+      this.clearBlobCombatState(blob);
       blob.attackTargetBlobId = "";
       this.setBlobDestination(blob, msg.targetX, msg.targetY, client);
     });
@@ -107,7 +109,16 @@ export class BattleRoom extends Room<{ state: GameState }> {
       if (!blob || !target || blob.ownerId !== client.sessionId || target.ownerId === client.sessionId) return;
 
       blob.attackTargetBlobId = target.id;
-      this.setBlobDestination(blob, target.x, target.y, client);
+      const approach = this.getBlobAttackApproachPoint(blob, target);
+      if (!approach) {
+        blob.targetX = blob.x;
+        blob.targetY = blob.y;
+        blob.vx = 0;
+        blob.vy = 0;
+        this.clearBlobPath(blob, client);
+        return;
+      }
+      this.setBlobDestination(blob, approach.x, approach.y, client, { snapToNearestWalkable: true });
     });
 
     this.onMessage(MessageType.SQUAD_SPREAD, (client, raw) => {
@@ -231,31 +242,129 @@ export class BattleRoom extends Room<{ state: GameState }> {
     return Math.hypot(a.x - b.x, a.y - b.y) <= this.getBlobEngageDistance(a, b);
   }
 
-  private setBlobDestination(blob: Blob, targetX: number, targetY: number, client?: Client): void {
-    const tile = this.getTileAtWorld(targetX, targetY);
-    if (!tile?.canWalk) return;
+  private clearBlobCombatState(blob: Blob): void {
+    if (blob.engagedTargetBlobId.length > 0) {
+      const other = this.state.blobs.get(blob.engagedTargetBlobId);
+      if (other?.engagedTargetBlobId === blob.id) other.engagedTargetBlobId = "";
+    }
+    blob.engagedTargetBlobId = "";
+  }
 
-    blob.targetX = clamp(targetX, CONFIG.WORLD_MIN, CONFIG.WORLD_MAX);
-    blob.targetY = clamp(targetY, CONFIG.WORLD_MIN, CONFIG.WORLD_MAX);
+  private getBlobOwnerClient(blob: Blob): Client | undefined {
+    return this.clients.find((candidate) => candidate.sessionId === blob.ownerId);
+  }
+
+  private clearBlobPath(blob: Blob, client?: Client): void {
+    const removed = this.blobPaths.delete(blob.id);
+    if (!removed) return;
+    (client ?? this.getBlobOwnerClient(blob))?.send(MessageType.PATH, {
+      blobId: blob.id,
+      waypoints: [],
+    } satisfies PathMessage);
+  }
+
+  private findNearestWalkablePoint(x: number, y: number, maxRadiusTiles = 0): { x: number; y: number } | null {
+    const goalX = clamp(x, CONFIG.WORLD_MIN, CONFIG.WORLD_MAX);
+    const goalY = clamp(y, CONFIG.WORLD_MIN, CONFIG.WORLD_MAX);
+    const start = getTileCoordsFromWorld(goalX, goalY);
+    const walkable = (tx: number, tz: number) => this.tileData.get(getTileKey(tx, tz))?.canWalk ?? false;
+
+    if (walkable(start.tx, start.tz)) return { x: goalX, y: goalY };
+
+    let best: { x: number; y: number } | null = null;
+    let bestDistance = Infinity;
+    const tileCount = getWorldTileCount();
+
+    for (let radius = 1; radius <= maxRadiusTiles; radius++) {
+      for (let dz = -radius; dz <= radius; dz++) {
+        for (let dx = -radius; dx <= radius; dx++) {
+          if (Math.max(Math.abs(dx), Math.abs(dz)) !== radius) continue;
+          const tx = start.tx + dx;
+          const tz = start.tz + dz;
+          if (tx < 0 || tz < 0 || tx >= tileCount || tz >= tileCount || !walkable(tx, tz)) continue;
+          const center = getTileCenter(tx, tz);
+          const distance = Math.hypot(center.x - goalX, center.z - goalY);
+          if (distance < bestDistance) {
+            bestDistance = distance;
+            best = { x: center.x, y: center.z };
+          }
+        }
+      }
+      if (best) return best;
+    }
+
+    return null;
+  }
+
+  private getBlobAttackApproachPoint(blob: Blob, target: Blob): { x: number; y: number } | null {
+    const desiredCenterDistance = Math.max(
+      GAME_RULES.TILE_SIZE * 0.55,
+      this.getBlobEngageDistance(blob, target) - CONFIG.BLOB_STOP_EPSILON * 0.5
+    );
+    let dx = blob.x - target.x;
+    let dy = blob.y - target.y;
+    let dist = Math.hypot(dx, dy);
+    if (dist <= 1e-4) {
+      dx = blob.vx;
+      dy = blob.vy;
+      dist = Math.hypot(dx, dy);
+    }
+    if (dist <= 1e-4) {
+      dx = 1;
+      dy = 0;
+      dist = 1;
+    }
+    const nx = dx / dist;
+    const ny = dy / dist;
+    return this.findNearestWalkablePoint(
+      target.x + nx * desiredCenterDistance,
+      target.y + ny * desiredCenterDistance,
+      3
+    );
+  }
+
+  private setBlobDestination(
+    blob: Blob,
+    targetX: number,
+    targetY: number,
+    client?: Client,
+    options?: { snapToNearestWalkable?: boolean }
+  ): void {
+    const resolvedGoal =
+      this.findNearestWalkablePoint(targetX, targetY, options?.snapToNearestWalkable ? 3 : 0);
+    if (!resolvedGoal) {
+      blob.targetX = blob.x;
+      blob.targetY = blob.y;
+      blob.vx = 0;
+      blob.vy = 0;
+      this.clearBlobPath(blob, client);
+      return;
+    }
+
+    blob.targetX = resolvedGoal.x;
+    blob.targetY = resolvedGoal.y;
 
     const walkable = (tx: number, tz: number) => this.tileData.get(getTileKey(tx, tz))?.canWalk ?? false;
     const start = getTileCoordsFromWorld(blob.x, blob.y);
-    const goal = getTileCoordsFromWorld(blob.targetX, blob.targetY);
-    const path = findPath(start.tx, start.tz, goal.tx, goal.tz, walkable);
+    const goalTile = getTileCoordsFromWorld(blob.targetX, blob.targetY);
+    const path = findPath(start.tx, start.tz, goalTile.tx, goalTile.tz, walkable);
 
-    if (path.length > 0) {
-      path[path.length - 1] = { x: blob.targetX, y: blob.targetY };
-      this.blobPaths.set(blob.id, { waypoints: path, index: 0 });
-    } else {
-      this.blobPaths.delete(blob.id);
+    if (path.length === 0) {
+      blob.targetX = blob.x;
+      blob.targetY = blob.y;
+      blob.vx = 0;
+      blob.vy = 0;
+      this.clearBlobPath(blob, client);
+      return;
     }
 
-    if (client) {
-      client.send(MessageType.PATH, {
-        blobId: blob.id,
-        waypoints: path,
-      } satisfies PathMessage);
-    }
+    path[path.length - 1] = { x: blob.targetX, y: blob.targetY };
+    this.blobPaths.set(blob.id, { waypoints: path, index: 0 });
+
+    (client ?? this.getBlobOwnerClient(blob))?.send(MessageType.PATH, {
+      blobId: blob.id,
+      waypoints: path,
+    } satisfies PathMessage);
   }
 
   private tick(dtMs: number) {
@@ -266,35 +375,77 @@ export class BattleRoom extends Room<{ state: GameState }> {
     }
 
     for (const blob of this.state.blobs.values()) {
-      if (blob.attackTargetBlobId.length > 0) {
-        const target = this.state.blobs.get(blob.attackTargetBlobId);
-        if (!target || target.ownerId === blob.ownerId) {
-          blob.attackTargetBlobId = "";
+      blob.radius = getSquadRadius(blob.unitCount, blob.spread);
+    }
+
+    const engagedBlobIds = new Set<string>();
+    for (const blob of this.state.blobs.values()) {
+      if (blob.engagedTargetBlobId.length > 0) {
+        const engagedTarget = this.state.blobs.get(blob.engagedTargetBlobId);
+        if (!engagedTarget || engagedTarget.ownerId === blob.ownerId) {
+          this.clearBlobCombatState(blob);
         } else {
-          if (this.blobsCanEngage(blob, target)) {
-            blob.targetX = blob.x;
-            blob.targetY = blob.y;
-            blob.vx = 0;
-            blob.vy = 0;
-            this.blobPaths.delete(blob.id);
-          } else {
-            const targetTile = getTileCoordsFromWorld(target.x, target.y);
-            const goalTile = getTileCoordsFromWorld(blob.targetX, blob.targetY);
-            if (targetTile.tx !== goalTile.tx || targetTile.tz !== goalTile.tz) {
-              this.setBlobDestination(blob, target.x, target.y);
-            }
+          engagedBlobIds.add(blob.id);
+          engagedBlobIds.add(engagedTarget.id);
+          if (engagedTarget.engagedTargetBlobId !== blob.id) {
+            engagedTarget.engagedTargetBlobId = blob.id;
           }
         }
       }
 
-      blob.radius = getSquadRadius(blob.unitCount, blob.spread);
+      if (blob.engagedTargetBlobId.length > 0) continue;
+      if (blob.attackTargetBlobId.length > 0) {
+        const target = this.state.blobs.get(blob.attackTargetBlobId);
+        if (!target || target.ownerId === blob.ownerId) {
+          blob.attackTargetBlobId = "";
+          blob.targetX = blob.x;
+          blob.targetY = blob.y;
+          blob.vx = 0;
+          blob.vy = 0;
+          this.clearBlobPath(blob);
+        } else {
+          if (this.blobsCanEngage(blob, target)) {
+            engagedBlobIds.add(blob.id);
+            engagedBlobIds.add(target.id);
+            blob.engagedTargetBlobId = target.id;
+            target.engagedTargetBlobId = blob.id;
+            target.attackTargetBlobId = blob.id;
+            this.clearBlobPath(blob);
+          } else {
+            const approach = this.getBlobAttackApproachPoint(blob, target);
+            const needNewPath =
+              !approach ||
+              !this.blobPaths.has(blob.id) ||
+              Math.hypot(blob.targetX - approach.x, blob.targetY - approach.y) > GAME_RULES.TILE_SIZE * 0.35;
+            if (approach && needNewPath) {
+              this.setBlobDestination(
+                blob,
+                approach.x,
+                approach.y,
+                this.getBlobOwnerClient(blob),
+                { snapToNearestWalkable: true }
+              );
+            } else if (!approach) {
+              blob.targetX = blob.x;
+              blob.targetY = blob.y;
+              blob.vx = 0;
+              blob.vy = 0;
+              this.clearBlobPath(blob);
+            }
+          }
+        }
+      }
+    }
 
-      // Resolve the immediate movement target from the A* path (or fall back to targetX/Y)
-      let moveX = blob.targetX;
-      let moveY = blob.targetY;
-      let isFinalWaypoint = true;
+    for (const blob of this.state.blobs.values()) {
+      if (engagedBlobIds.has(blob.id)) {
+        blob.vx = 0;
+        blob.vy = 0;
+        this.clearBlobPath(blob);
+        continue;
+      }
 
-      const pathData = this.blobPaths.get(blob.id);
+      let pathData = this.blobPaths.get(blob.id);
       if (pathData && pathData.index < pathData.waypoints.length) {
         const wp = pathData.waypoints[pathData.index]!;
         const waypointDist = Math.hypot(blob.x - wp.x, blob.y - wp.y);
@@ -303,19 +454,32 @@ export class BattleRoom extends Room<{ state: GameState }> {
           : WAYPOINT_REACH;
 
         if (waypointDist < reachRadius) {
-          // Advance to next waypoint
           pathData.index++;
         }
-
-        if (pathData.index < pathData.waypoints.length) {
-          const next = pathData.waypoints[pathData.index]!;
-          moveX = next.x;
-          moveY = next.y;
-          isFinalWaypoint = pathData.index === pathData.waypoints.length - 1;
-        }
-        // else: path exhausted, fall through to targetX/Y with isFinalWaypoint = true
       }
 
+      if (!pathData || pathData.index >= pathData.waypoints.length) {
+        this.clearBlobPath(blob);
+        const currentSpeed = Math.hypot(blob.vx, blob.vy);
+        const slowDown = Math.max(0, 1 - dt * 10);
+        blob.vx *= slowDown;
+        blob.vy *= slowDown;
+        if (Math.hypot(blob.vx, blob.vy) < 0.05) {
+          blob.vx = 0;
+          blob.vy = 0;
+        }
+        if (Math.hypot(blob.targetX - blob.x, blob.targetY - blob.y) < CONFIG.BLOB_STOP_EPSILON && currentSpeed < 0.75) {
+          blob.x = blob.targetX;
+          blob.y = blob.targetY;
+          this.tryVillagerGather(blob, dt);
+        }
+        continue;
+      }
+
+      const next = pathData.waypoints[pathData.index]!;
+      const moveX = next.x;
+      const moveY = next.y;
+      const isFinalWaypoint = pathData.index === pathData.waypoints.length - 1;
       const dx = moveX - blob.x;
       const dy = moveY - blob.y;
       const dist = Math.hypot(dx, dy);
@@ -326,7 +490,7 @@ export class BattleRoom extends Room<{ state: GameState }> {
         blob.y = blob.targetY;
         blob.vx = 0;
         blob.vy = 0;
-        this.blobPaths.delete(blob.id);
+        this.clearBlobPath(blob);
         this.tryVillagerGather(blob, dt);
         continue;
       }
@@ -365,7 +529,7 @@ export class BattleRoom extends Room<{ state: GameState }> {
         blob.y = blob.targetY;
         blob.vx = 0;
         blob.vy = 0;
-        this.blobPaths.delete(blob.id);
+        this.clearBlobPath(blob);
       }
     }
 
@@ -713,11 +877,9 @@ export class BattleRoom extends Room<{ state: GameState }> {
     const deadIds = new Set<string>();
 
     for (const blob of this.state.blobs.values()) {
-      if (locked.has(blob.id) || blob.attackTargetBlobId.length === 0) continue;
-      const target = this.state.blobs.get(blob.attackTargetBlobId);
+      if (locked.has(blob.id) || blob.engagedTargetBlobId.length === 0) continue;
+      const target = this.state.blobs.get(blob.engagedTargetBlobId);
       if (!target || target.ownerId === blob.ownerId || locked.has(target.id)) continue;
-
-      if (!this.blobsCanEngage(blob, target)) continue;
 
       const blobRules = getUnitRules(blob.unitType);
       const targetRules = getUnitRules(target.unitType);
@@ -741,6 +903,7 @@ export class BattleRoom extends Room<{ state: GameState }> {
     }
     for (const blob of this.state.blobs.values()) {
       if (deadIds.has(blob.attackTargetBlobId)) blob.attackTargetBlobId = "";
+      if (deadIds.has(blob.engagedTargetBlobId)) blob.engagedTargetBlobId = "";
     }
   }
 

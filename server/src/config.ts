@@ -23,7 +23,7 @@ export const CONFIG = {
         START_BIOMASS: 50_000,
         START_MATERIAL: 50_000,
         START_COMPUTE: 50_000,
-        START_WARBAND_UNIT_COUNT: 4_000,
+        START_WARBAND_UNIT_COUNT: 100,
       }
     : {}),
 } as const;

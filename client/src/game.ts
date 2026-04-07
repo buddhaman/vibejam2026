@@ -43,6 +43,7 @@ export class Game {
   private _streamResolve: (() => void) | null = null;
   private _dirtyTileVisualLayers = new Set<"forest" | "datacenters">(["forest", "datacenters"]);
   private _allTileVisualsDirty = true;
+  private _walkabilityDirty = true;
   /** A* paths received from server per blob (owner client only). */
   private _blobPaths = new Map<string, { x: number; y: number }[]>();
 
@@ -97,6 +98,7 @@ export class Game {
       this._allTileVisualsDirty = true;
       this._dirtyTileVisualLayers.add("forest");
       this._dirtyTileVisualLayers.add("datacenters");
+      this._walkabilityDirty = true;
       this._streamResolve?.();
       this._streamResolve = null;
     }
@@ -113,7 +115,10 @@ export class Game {
       tile.compute = msg.compute;
       this._dirtyTileVisualLayers.add("datacenters");
     }
-    if (typeof msg.canWalk === "boolean") tile.canWalk = msg.canWalk;
+    if (typeof msg.canWalk === "boolean" && tile.canWalk !== msg.canWalk) {
+      tile.canWalk = msg.canWalk;
+      this._walkabilityDirty = true;
+    }
     if (typeof msg.canBuild === "boolean") tile.canBuild = msg.canBuild;
   }
 
@@ -172,6 +177,7 @@ export class Game {
       if (!entity) entity = new BlobEntity(this, id as string);
       entity.sync(blob as {
         attackTargetBlobId: string;
+        engagedTargetBlobId: string;
         x: number;
         y: number;
         targetX: number;
@@ -245,6 +251,54 @@ export class Game {
     for (const entity of this.entities) {
       if (!entity.isOwnedByMe() || !entity.containsWorldPoint(x, z)) continue;
       const distance = entity.worldDistanceTo(x, z);
+      if (distance < bestDistance) {
+        bestDistance = distance;
+        best = entity;
+      }
+    }
+    return best;
+  }
+
+  public pickEntityAtWorldPoint(x: number, z: number): Entity | null {
+    let best: Entity | null = null;
+    let bestDistance = Infinity;
+    for (const entity of this.entities) {
+      if (!entity.containsWorldPoint(x, z)) continue;
+      const distance = entity.worldDistanceTo(x, z);
+      if (distance < bestDistance) {
+        bestDistance = distance;
+        best = entity;
+      }
+    }
+    return best;
+  }
+
+  public pickBlobAtWorldPoint(x: number, z: number, options?: { enemyOnly?: boolean; mineOnly?: boolean }): BlobEntity | null {
+    let best: BlobEntity | null = null;
+    let bestDistance = Infinity;
+    for (const entity of this.entities) {
+      if (!(entity instanceof BlobEntity) || !entity.containsWorldPoint(x, z)) continue;
+      if (options?.enemyOnly && entity.isMine()) continue;
+      if (options?.mineOnly && !entity.isMine()) continue;
+      const distance = entity.worldDistanceTo(x, z);
+      if (distance < bestDistance) {
+        bestDistance = distance;
+        best = entity;
+      }
+    }
+    return best;
+  }
+
+  public pickBlobFromRay(raycaster: THREE.Raycaster, options?: { enemyOnly?: boolean; mineOnly?: boolean }): BlobEntity | null {
+    let best: BlobEntity | null = null;
+    let bestDistance = Infinity;
+    for (const entity of this.entities) {
+      if (!(entity instanceof BlobEntity)) continue;
+      if (options?.enemyOnly && entity.isMine()) continue;
+      if (options?.mineOnly && !entity.isMine()) continue;
+      const hits = raycaster.intersectObject(entity.mesh, true);
+      if (hits.length === 0) continue;
+      const distance = hits[0].distance;
       if (distance < bestDistance) {
         bestDistance = distance;
         best = entity;
@@ -329,6 +383,12 @@ export class Game {
     return dirty;
   }
 
+  public consumeWalkabilityDirty(): boolean {
+    const dirty = this._walkabilityDirty;
+    this._walkabilityDirty = false;
+    return dirty;
+  }
+
   public getTileAtWorld(x: number, z: number): TileView | null {
     const { tx, tz } = getTileCoordsFromWorld(x, z);
     return this._tiles.get(getTileKey(tx, tz)) ?? null;
@@ -408,16 +468,17 @@ export class Game {
   }
 
   public getBlobCombatTarget(blobId: string): BlobEntity | null {
-    const blob = this.room.state.blobs.get(blobId) as { attackTargetBlobId?: string } | undefined;
-    const targetId = blob?.attackTargetBlobId;
+    const blob = this.room.state.blobs.get(blobId) as { engagedTargetBlobId?: string; attackTargetBlobId?: string } | undefined;
+    const targetId = blob?.engagedTargetBlobId || blob?.attackTargetBlobId;
     if (typeof targetId === "string" && targetId.length > 0) {
       return this.findBlobEntity(targetId);
     }
 
     let fallback: BlobEntity | null = null;
     this.room.state.blobs.forEach((candidate, id) => {
-      const attackTarget = (candidate as { attackTargetBlobId?: string }).attackTargetBlobId;
-      if (attackTarget !== blobId) return;
+      const combatTarget = (candidate as { engagedTargetBlobId?: string; attackTargetBlobId?: string }).engagedTargetBlobId
+        || (candidate as { attackTargetBlobId?: string }).attackTargetBlobId;
+      if (combatTarget !== blobId) return;
       const entity = this.findBlobEntity(id as string);
       if (entity) fallback = entity;
     });

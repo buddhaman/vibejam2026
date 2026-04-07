@@ -61,21 +61,26 @@ function getGroundVertexColor(vx: number, vz: number, height: number) {
   const lush = valueNoise2D(vx * 0.09 - 8.4, vz * 0.09 + 18.6, 9201);
   const forestBoost = valueNoise2D(vx * 0.13 + 4.8, vz * 0.13 - 21.4, 1777);
   const patch = valueNoise2D(vx * 0.28 - 41.3, vz * 0.28 + 7.9, 6121);
-  const baseHue = 0.12 + lush * 0.18 - dry * 0.16 + forestBoost * 0.045 - patch * 0.03;
-  const baseSat = 0.7 + lush * 0.2 - dry * 0.12 + patch * 0.08;
-  const baseLight = 0.2 + dry * 0.24 + lush * 0.03 + patch * 0.06 + Math.min(0.03, height * 0.002);
 
-  const rockHue = 0.08 + dry * 0.015;
-  const rockSat = 0.05 + dry * 0.04;
-  const rockLight = 0.2 + Math.min(0.22, height * 0.011);
+  // Hue: vivid mid-green range (Snakebird grass). Dry patches drift toward yellow-green.
+  const baseHue   = 0.29 + lush * 0.06 - dry * 0.11 + forestBoost * 0.03 - patch * 0.02;
+  // Saturation: boldly saturated — never muddy.
+  const baseSat   = 0.86 + lush * 0.10 - dry * 0.08 + patch * 0.04;
+  // Lightness: bright! The old 0.2 base was the main culprit.
+  const baseLight = 0.48 + lush * 0.06 - dry * 0.09 + patch * 0.03 + Math.min(0.02, height * 0.001);
+
+  // Rock / mountain: warm stone, noticeably brighter than before.
+  const rockHue   = 0.09 + dry * 0.02;
+  const rockSat   = 0.18 + dry * 0.06;
+  const rockLight = 0.38 + Math.min(0.16, height * 0.008);
 
   const mountainBlend = smoothstep(
     Math.max(0, Math.min(1, (height - GAME_RULES.MOUNTAIN_THRESHOLD * 0.58) / (GAME_RULES.MOUNTAIN_THRESHOLD * 0.62)))
   );
 
   return new THREE.Color().setHSL(
-    baseHue + (rockHue - baseHue) * mountainBlend,
-    baseSat + (rockSat - baseSat) * mountainBlend,
+    baseHue   + (rockHue   - baseHue)   * mountainBlend,
+    baseSat   + (rockSat   - baseSat)   * mountainBlend,
     baseLight + (rockLight - baseLight) * mountainBlend
   );
 }
@@ -161,9 +166,9 @@ export function createTerrainMesh(tiles: Iterable<TileView>): THREE.Mesh {
     const c11 = getGroundVertexColor(tile.tx + 1, tile.tz + 1, tile.h11);
     const c01 = getGroundVertexColor(tile.tx, tile.tz + 1, tile.h01);
     const dirt = tile.isMountain
-      ? new THREE.Color().setHSL(0.08, 0.08, 0.09 + Math.min(0.15, tile.height * 0.008))
-      : new THREE.Color().setHSL(0.07, 0.58, 0.16);
-    const dirtDark = dirt.clone().multiplyScalar(0.82);
+      ? new THREE.Color().setHSL(0.09, 0.22, 0.28 + Math.min(0.14, tile.height * 0.007))
+      : new THREE.Color().setHSL(0.07, 0.68, 0.30);
+    const dirtDark = dirt.clone().multiplyScalar(0.74);
 
     const t00 = new THREE.Vector3(center.x - half, tile.h00, center.z - half);
     const t10 = new THREE.Vector3(center.x + half, tile.h10, center.z - half);
@@ -189,7 +194,7 @@ export function createTerrainMesh(tiles: Iterable<TileView>): THREE.Mesh {
 
   const material = new THREE.MeshStandardMaterial({
     vertexColors: true,
-    roughness: 0.95,
+    roughness: 0.88,
     metalness: 0,
   });
 

@@ -1,6 +1,6 @@
 import * as THREE from "three";
 import { RoomEnvironment } from "three/examples/jsm/environments/RoomEnvironment.js";
-import { GAME_RULES, snapWorldToTileCenter } from "../../shared/game-rules.js";
+import { GAME_RULES, getTileCenter, snapWorldToTileCenter } from "../../shared/game-rules.js";
 import type { Game } from "./game.js";
 import { BeamDrawer } from "./beam-drawer.js";
 import { BlobEntity } from "./blob-entity.js";
@@ -15,7 +15,7 @@ import {
   showWarning,
 } from "./hud.js";
 import type { SelectionInfo } from "./entity.js";
-import { createTerrainMesh, type TileView } from "./terrain.js";
+import { createTerrainMesh, getTerrainHeightAt, type TileView } from "./terrain.js";
 import { attachDevNetworkPerf } from "./network-perf.js";
 import { TileVisualManager } from "./tile-visuals.js";
 
@@ -36,18 +36,20 @@ const CAM = {
 
 const SUN = {
   direction: new THREE.Vector3(-0.55, 1, -0.35).normalize(),
-  intensity: 0.72,
+  intensity: 2.6,
   shadowRadius: 44,
   shadowDepth: 160,
   shadowDistance: 90,
-  mapSize: 2048,
+  mapSize: 4096,
 } as const;
 
 /**
  * `scene.environment` adds both reflections and diffuse IBL; RoomEnvironment is quite hot at 1.
  * Keep low enough to avoid blown highlights while metals still pick up reflections.
  */
-const SCENE_ENVIRONMENT_INTENSITY = 0.38;
+// IBL only for metal/specular highlights on glTF models — keep tiny so it doesn't fill shadows.
+const SCENE_ENVIRONMENT_INTENSITY = 0.08;
+const WALKABILITY_DEBUG_KEY = "KeyV";
 
 export function startRender(game: Game) {
   const netPerf = attachDevNetworkPerf(game.room);
@@ -59,11 +61,11 @@ export function startRender(game: Game) {
   const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
   renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
   renderer.setSize(window.innerWidth, window.innerHeight);
-  renderer.setClearColor(0xb8e4ff, 1);
+  renderer.setClearColor(0x62c8ff, 1);
   renderer.shadowMap.enabled = true;
-  renderer.shadowMap.type = THREE.VSMShadowMap;
+  renderer.shadowMap.type = THREE.PCFShadowMap;   // hard-edged cartoon shadows
   renderer.toneMapping = THREE.ACESFilmicToneMapping;
-  renderer.toneMappingExposure = 0.92;
+  renderer.toneMappingExposure = 1.75;
 
   const { scene } = game;
 
@@ -73,17 +75,17 @@ export function startRender(game: Game) {
   scene.environmentIntensity = SCENE_ENVIRONMENT_INTENSITY;
   pmrem.dispose();
 
-  scene.fog = new THREE.Fog(0xb8e4ff, 380, 1280);
-  scene.add(new THREE.AmbientLight(0xfff6d8, 0.34));
-  scene.add(new THREE.HemisphereLight(0xeaf8ff, 0x9bc67a, 1.02));
+  scene.fog = new THREE.Fog(0x62c8ff, 420, 1280);
+  // Ambient: warm fill so shadows aren't pitch black.
+  scene.add(new THREE.AmbientLight(0xfff0c0, 0.28));
+  // Hemisphere: sky/ground bounce for warm bright world.
+  scene.add(new THREE.HemisphereLight(0x98d8ff, 0x72c83a, 0.68));
 
   const dir = new THREE.DirectionalLight(0xfff3d6, SUN.intensity);
   dir.castShadow = true;
   dir.shadow.mapSize.setScalar(SUN.mapSize);
-  dir.shadow.bias = -0.00008;
-  dir.shadow.normalBias = 0.01;
-  dir.shadow.radius = 2.5;
-  dir.shadow.blurSamples = 8;
+  dir.shadow.bias = -0.0002;
+  dir.shadow.normalBias = 0.004;
   dir.shadow.camera.near = 1;
   dir.shadow.camera.far = SUN.shadowDepth;
   dir.shadow.camera.left = -SUN.shadowRadius;
@@ -95,6 +97,22 @@ export function startRender(game: Game) {
 
   const terrain = createTerrainMesh(game.getTilesOrdered());
   scene.add(terrain);
+  const walkabilityOverlay = new THREE.InstancedMesh(
+    new THREE.PlaneGeometry(GAME_RULES.TILE_SIZE * 0.9, GAME_RULES.TILE_SIZE * 0.9),
+    new THREE.MeshBasicMaterial({
+      color: 0xff5b49,
+      transparent: true,
+      opacity: 0.26,
+      depthWrite: false,
+      side: THREE.DoubleSide,
+    }),
+    Math.max(1, game.getTilesOrdered().length)
+  );
+  walkabilityOverlay.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+  walkabilityOverlay.frustumCulled = false;
+  walkabilityOverlay.count = 0;
+  walkabilityOverlay.visible = false;
+  scene.add(walkabilityOverlay);
   const tileVisuals = new TileVisualManager();
   scene.add(tileVisuals.root);
   const beamDrawer = new BeamDrawer(12_288);
@@ -132,6 +150,13 @@ export function startRender(game: Game) {
   placeCamera();
 
   function onCameraKeyDown(e: KeyboardEvent) {
+    if (e.code === WALKABILITY_DEBUG_KEY) {
+      walkabilityOverlayVisible = !walkabilityOverlayVisible;
+      walkabilityOverlay.visible = walkabilityOverlayVisible;
+      syncWalkabilityOverlay(true);
+      e.preventDefault();
+      return;
+    }
     if (
       e.key === "ArrowLeft" ||
       e.key === "ArrowRight" ||
@@ -176,6 +201,8 @@ export function startRender(game: Game) {
   const groundPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
   const hit = new THREE.Vector3();
   const terrainHits: THREE.Intersection<THREE.Object3D>[] = [];
+  const walkTileDummy = new THREE.Object3D();
+  let walkabilityOverlayVisible = false;
 
   const hudCanvas = createHudCanvas();
   const hud = createHudState();
@@ -237,6 +264,29 @@ export function startRender(game: Game) {
     return "Can't build on blocked tiles";
   }
 
+  function syncWalkabilityOverlay(force = false) {
+    if (!walkabilityOverlayVisible) return;
+    if (!force && !game.consumeWalkabilityDirty()) return;
+
+    let count = 0;
+    const tiles = game.getTiles();
+    for (const tile of game.getTilesOrdered()) {
+      if (tile.canWalk) continue;
+      const center = getTileCenter(tile.tx, tile.tz);
+      walkTileDummy.position.set(
+        center.x,
+        getTerrainHeightAt(center.x, center.z, tiles) + 0.18,
+        center.z
+      );
+      walkTileDummy.rotation.set(-Math.PI / 2, 0, 0);
+      walkTileDummy.scale.setScalar(1);
+      walkTileDummy.updateMatrix();
+      walkabilityOverlay.setMatrixAt(count++, walkTileDummy.matrix);
+    }
+    walkabilityOverlay.count = count;
+    walkabilityOverlay.instanceMatrix.needsUpdate = true;
+  }
+
   function handleClick(clientX: number, clientY: number) {
     const selectedInfo = game.getSelectedEntity()?.getSelectionInfo() ?? null;
 
@@ -274,10 +324,22 @@ export function startRender(game: Game) {
 
     ndcV.set((clientX / window.innerWidth) * 2 - 1, -(clientY / window.innerHeight) * 2 + 1);
     raycaster.setFromCamera(ndcV, camera);
-    const picked = game.pickEntityFromRay(raycaster);
+    const point = groundHit(clientX, clientY);
+    const pointPicked = point ? game.pickEntityAtWorldPoint(point.x, point.z) : null;
+    const selectedBlob = game.getSelectedMyBlobEntity();
+    const attackPicked =
+      game.pickBlobFromRay(raycaster, { enemyOnly: true }) ??
+      (point ? game.pickBlobAtWorldPoint(point.x, point.z, { enemyOnly: true }) : null);
+    if (selectedBlob && attackPicked) {
+      cancelPendingMove();
+      game.sendAttackIntent(selectedBlob.id, attackPicked.id);
+      lastGroundTap.t = 0;
+      return;
+    }
+
+    const picked = game.pickEntityFromRay(raycaster) ?? pointPicked;
     if (picked) {
       cancelPendingMove();
-      const selectedBlob = game.getSelectedMyBlobEntity();
       if (selectedBlob && picked instanceof BlobEntity && !picked.isMine()) {
         game.sendAttackIntent(selectedBlob.id, picked.id);
         lastGroundTap.t = 0;
@@ -288,7 +350,6 @@ export function startRender(game: Game) {
       return;
     }
 
-    const point = groundHit(clientX, clientY);
     if (!point) return;
 
     const now = performance.now();
@@ -344,6 +405,23 @@ export function startRender(game: Game) {
     game.selectTile(tile?.key ?? null);
   }
 
+  function handleSecondaryClick(clientX: number, clientY: number) {
+    cancelPendingMove();
+    ndcV.set((clientX / window.innerWidth) * 2 - 1, -(clientY / window.innerHeight) * 2 + 1);
+    raycaster.setFromCamera(ndcV, camera);
+    const point = groundHit(clientX, clientY);
+    const selectedBlob = game.getSelectedMyBlobEntity();
+    if (!selectedBlob) return;
+
+    const attackPicked =
+      game.pickBlobFromRay(raycaster, { enemyOnly: true }) ??
+      (point ? game.pickBlobAtWorldPoint(point.x, point.z, { enemyOnly: true }) : null);
+    if (!attackPicked) return;
+
+    game.sendAttackIntent(selectedBlob.id, attackPicked.id);
+    lastGroundTap.t = 0;
+  }
+
   canvas.addEventListener("pointerdown", (ev) => {
     canvas.setPointerCapture(ev.pointerId);
     drag = { startX: ev.clientX, startY: ev.clientY, prevX: ev.clientX, prevY: ev.clientY, moved: false };
@@ -366,9 +444,16 @@ export function startRender(game: Game) {
 
   canvas.addEventListener("pointerup", (ev) => {
     if (!drag) return;
-    if (!drag.moved) handleClick(ev.clientX, ev.clientY);
+    if (!drag.moved) {
+      if (ev.button === 2) handleSecondaryClick(ev.clientX, ev.clientY);
+      else handleClick(ev.clientX, ev.clientY);
+    }
     canvas.releasePointerCapture(ev.pointerId);
     drag = null;
+  });
+
+  canvas.addEventListener("contextmenu", (ev) => {
+    ev.preventDefault();
   });
 
   canvas.addEventListener("pointercancel", (ev) => {
@@ -404,6 +489,7 @@ export function startRender(game: Game) {
     game.sync();
     game.clearBeamDraws();
     tileVisuals.sync(game);
+    syncWalkabilityOverlay();
     game.setOrbitCameraForFrame(distance, CAM.distanceMin, CAM.distanceMax);
     for (const entity of game.entities) entity.render(dt);
     game.flushBeamDraws();
