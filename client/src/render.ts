@@ -18,6 +18,7 @@ import type { SelectionInfo } from "./entity.js";
 import { createTerrainMesh, getTerrainHeightAt, type TileView } from "./terrain.js";
 import { attachDevNetworkPerf } from "./network-perf.js";
 import { TileVisualManager } from "./tile-visuals.js";
+import { TileDebugOverlay, drawTileDebugPanel } from "./tile-debug.js";
 
 const CAM = {
   polarFromDownDeg: 55,
@@ -50,6 +51,7 @@ const SUN = {
 // IBL only for metal/specular highlights on glTF models — keep tiny so it doesn't fill shadows.
 const SCENE_ENVIRONMENT_INTENSITY = 0.08;
 const WALKABILITY_DEBUG_KEY = "KeyV";
+const TILE_DEBUG_KEY = "Backquote"; // ` key toggles tile debug mode
 
 export function startRender(game: Game) {
   const netPerf = attachDevNetworkPerf(game.room);
@@ -113,6 +115,10 @@ export function startRender(game: Game) {
   walkabilityOverlay.count = 0;
   walkabilityOverlay.visible = false;
   scene.add(walkabilityOverlay);
+  const tileDebug = new TileDebugOverlay(game.getTilesOrdered(), game.getTiles());
+  scene.add(tileDebug.root);
+  let tileDebugInspected: TileView | null = null;
+
   const tileVisuals = new TileVisualManager();
   scene.add(tileVisuals.root);
   const beamDrawer = new BeamDrawer(12_288);
@@ -150,6 +156,12 @@ export function startRender(game: Game) {
   placeCamera();
 
   function onCameraKeyDown(e: KeyboardEvent) {
+    if (e.code === TILE_DEBUG_KEY) {
+      tileDebug.toggle(game.getTilesOrdered(), game.getTiles());
+      if (!tileDebug.visible) tileDebugInspected = null;
+      e.preventDefault();
+      return;
+    }
     if (e.code === WALKABILITY_DEBUG_KEY) {
       walkabilityOverlayVisible = !walkabilityOverlayVisible;
       walkabilityOverlay.visible = walkabilityOverlayVisible;
@@ -288,6 +300,17 @@ export function startRender(game: Game) {
   }
 
   function handleClick(clientX: number, clientY: number) {
+    // In tile debug mode, clicks select a tile for inspection instead of normal game actions.
+    if (tileDebug.visible) {
+      const point = groundHit(clientX, clientY);
+      if (point) {
+        const tile = game.getTileAtWorld(point.x, point.z) ?? null;
+        tileDebugInspected = tile;
+        tileDebug.inspectTile(tile, game.getTiles());
+      }
+      return;
+    }
+
     const selectedInfo = game.getSelectedEntity()?.getSelectionInfo() ?? null;
 
     if (hitTestDeselect(clientX, clientY, game.selectedEntityId !== null)) {
@@ -503,6 +526,11 @@ export function startRender(game: Game) {
     const selectedTile: TileView | null = game.getSelectedTile();
 
     drawHUD(hudCanvas, hud, myColor, mySquadCount, myResources, selectedInfo, selectedTile, now / 1000);
+
+    if (tileDebug.visible && tileDebugInspected) {
+      const ctx = hudCanvas.getContext("2d")!;
+      drawTileDebugPanel(ctx, tileDebugInspected, hudCanvas.width, hudCanvas.height);
+    }
 
     netPerf.tick(now);
   }
