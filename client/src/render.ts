@@ -17,6 +17,7 @@ import {
 import type { SelectionInfo } from "./entity.js";
 import { createTerrainMesh, getTerrainHeightAt, type TileView } from "./terrain.js";
 import { attachDevNetworkPerf } from "./network-perf.js";
+import { RagdollFxSystem } from "./ragdoll-fx.js";
 import { TileVisualManager } from "./tile-visuals.js";
 import { TileDebugOverlay, drawTileDebugPanel } from "./tile-debug.js";
 
@@ -121,6 +122,9 @@ export function startRender(game: Game) {
 
   const tileVisuals = new TileVisualManager();
   scene.add(tileVisuals.root);
+  const ragdollFx = new RagdollFxSystem();
+  scene.add(ragdollFx.root);
+  game.setRagdollFxSystem(ragdollFx);
   const beamDrawer = new BeamDrawer(12_288);
   scene.add(beamDrawer.root);
   game.setBeamDrawer(beamDrawer);
@@ -514,6 +518,7 @@ export function startRender(game: Game) {
     tileVisuals.sync(game);
     syncWalkabilityOverlay();
     game.setOrbitCameraForFrame(distance, CAM.distanceMin, CAM.distanceMax);
+    game.updateRagdollFx(dt);
     for (const entity of game.entities) entity.render(dt);
     game.flushBeamDraws();
     dir.shadow.camera.updateProjectionMatrix();

@@ -156,6 +156,21 @@ export class BlobEntity extends Entity {
   private unitShield!: THREE.InstancedMesh;
   private ovalFill!: THREE.Mesh<THREE.CircleGeometry, THREE.MeshBasicMaterial>;
   private ovalRing!: THREE.Mesh<THREE.RingGeometry, THREE.MeshBasicMaterial>;
+  private blobSnapshot: {
+    attackTargetBlobId: string;
+    engagedTargetBlobId: string;
+    x: number;
+    y: number;
+    targetX: number;
+    targetY: number;
+    vx: number;
+    vy: number;
+    ownerId: string;
+    unitCount: number;
+    health: number;
+    spread: SquadSpreadValue;
+    unitType: UnitTypeValue;
+  } | null = null;
   private blob: {
     attackTargetBlobId: string;
     engagedTargetBlobId: string;
@@ -290,10 +305,18 @@ export class BlobEntity extends Entity {
     spread: SquadSpreadValue;
     unitType: UnitTypeValue;
   }): void {
-    const previousBlob = this.blob;
-    const previousTargetX = this.blob?.targetX ?? blob.targetX;
-    const previousTargetY = this.blob?.targetY ?? blob.targetY;
+    const previousSnapshot = this.blobSnapshot;
+    const previousLayout = this.blob ? this.getLayout() : null;
+    const previousCount = previousSnapshot?.unitCount ?? 0;
+    const previousUnitType = previousSnapshot?.unitType ?? blob.unitType;
+    const previousOwnerId = previousSnapshot?.ownerId ?? blob.ownerId;
+    const previousBlob = previousSnapshot;
+    const previousTargetX = previousSnapshot?.targetX ?? blob.targetX;
+    const previousTargetY = previousSnapshot?.targetY ?? blob.targetY;
     this.blob = blob;
+    if (previousLayout && previousCount > blob.unitCount) {
+      this.spawnDeathFxForLostUnits(previousLayout, previousCount, blob.unitCount, previousUnitType, previousOwnerId);
+    }
     if (Math.hypot(blob.targetX - previousTargetX, blob.targetY - previousTargetY) > 0.25) {
       const previousAxis = previousBlob
         ? this.getCanonicalFormationAxis(previousBlob.targetX - previousBlob.x, previousBlob.targetY - previousBlob.y)
@@ -317,6 +340,86 @@ export class BlobEntity extends Entity {
         this.formationForwardX = this.forwardX;
         this.formationForwardY = this.forwardY;
       }
+    }
+    this.blobSnapshot = {
+      attackTargetBlobId: blob.attackTargetBlobId,
+      engagedTargetBlobId: blob.engagedTargetBlobId,
+      x: blob.x,
+      y: blob.y,
+      targetX: blob.targetX,
+      targetY: blob.targetY,
+      vx: blob.vx,
+      vy: blob.vy,
+      ownerId: blob.ownerId,
+      unitCount: blob.unitCount,
+      health: blob.health,
+      spread: blob.spread,
+      unitType: blob.unitType,
+    };
+  }
+
+  private getUnitWorldPositionFromLayout(
+    layout: { x: number; y: number; major: number; minor: number; heading: number },
+    state: UnitState
+  ): { x: number; z: number } {
+    if (state.bodyReady) {
+      return { x: layout.x + state.bodyX, z: layout.y + state.bodyZ };
+    }
+    const rightX = Math.cos(layout.heading);
+    const rightZ = -Math.sin(layout.heading);
+    const forwardX = Math.sin(layout.heading);
+    const forwardZ = Math.cos(layout.heading);
+    return {
+      x: layout.x + rightX * state.x + forwardX * state.z,
+      z: layout.y + rightZ * state.x + forwardZ * state.z,
+    };
+  }
+
+  private spawnDeathFxForLostUnits(
+    layout: { x: number; y: number; major: number; minor: number; heading: number },
+    previousCount: number,
+    nextCount: number,
+    unitType: UnitTypeValue,
+    ownerId: string
+  ): void {
+    const lostStart = Math.max(0, nextCount);
+    const lostEnd = Math.min(previousCount, this.unitStates.length);
+    if (lostEnd > lostStart) {
+      console.info("[death-fx] lost units", {
+        blobId: this.id,
+        previousCount,
+        nextCount,
+        spawned: lostEnd - lostStart,
+        unitType,
+      });
+    }
+    for (let i = lostStart; i < lostEnd; i++) {
+      const state = this.unitStates[i];
+      if (!state) continue;
+      const world = this.getUnitWorldPositionFromLayout(layout, state);
+      let dirX = 0;
+      let dirZ = 1;
+      if (state.combatMode !== "formation" && this.blob?.engagedTargetBlobId) {
+        const combatTarget = this.game.getBlobCombatTarget(this.id);
+        const targetCenter = combatTarget?.getPredictedWorldCenter() ?? null;
+        if (targetCenter) {
+          dirX = world.x - targetCenter.x;
+          dirZ = world.z - targetCenter.z;
+        }
+      }
+      const dirLen = Math.hypot(dirX, dirZ);
+      if (dirLen <= 1e-4) {
+        dirX = this.forwardX + (Math.random() - 0.5) * 0.6;
+        dirZ = this.forwardY + (Math.random() - 0.5) * 0.6;
+      }
+      this.game.spawnUnitDeathFx({
+        x: world.x,
+        z: world.z,
+        dirX,
+        dirZ,
+        teamColor: this.game.getPlayerColor(ownerId),
+        unitType,
+      });
     }
   }
 
