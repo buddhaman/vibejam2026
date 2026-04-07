@@ -97,6 +97,9 @@ const UNIT_ATTACK_REACH = GAME_RULES.UNIT_RADIUS * 2.25;
 const COMBAT_PAIR_SEPARATION = Math.max(UNIT_ATTACK_REACH * 0.78, GAME_RULES.UNIT_RADIUS * 2.35);
 const COMBAT_PAIR_PADDING = GAME_RULES.UNIT_RADIUS * 2.1;
 const COMBAT_ATTACK_ENTER_DISTANCE = GAME_RULES.UNIT_RADIUS * 0.7;
+const COMBAT_RADIUS_SCALE = 1.45;
+const COMBAT_DRIFT_SCALE = 0.12;
+const COMBAT_ORBIT_RADIUS = GAME_RULES.UNIT_RADIUS * 0.75;
 
 const SHIELD_RADIUS    = 0.44;
 const SHIELD_THICKNESS = 0.055;
@@ -105,6 +108,18 @@ const SHIELD_SWING_MAX = Math.PI * 0.06;
 const _shieldFwdVec  = new THREE.Vector3();
 const _shieldQuat    = new THREE.Quaternion();
 const _upAxis        = new THREE.Vector3(0, 1, 0);
+const _combatPairA   = new THREE.Vector2();
+const _combatPairB   = new THREE.Vector2();
+const _combatPush    = new THREE.Vector2();
+
+function hashString01(value: string): number {
+  let hash = 2166136261;
+  for (let i = 0; i < value.length; i++) {
+    hash ^= value.charCodeAt(i);
+    hash = Math.imul(hash, 16777619);
+  }
+  return ((hash >>> 0) % 1000000) / 1000000;
+}
 
 type UnitCombatMode = "formation" | "chase" | "attack";
 
@@ -618,12 +633,70 @@ export class BlobEntity extends Entity {
     return { x: layout.x + px, z: layout.y + pz };
   }
 
+  private getCombatPairCenters(
+    layout: { x: number; y: number; major: number; minor: number; heading: number },
+    target: BlobEntity,
+    pairCount: number
+  ): { x: number; z: number }[] {
+    const targetCenter = target.getPredictedWorldCenter();
+    const combatRadius = Math.max(
+      GAME_RULES.UNIT_RADIUS * 3,
+      Math.sqrt(pairCount) * COMBAT_PAIR_PADDING * COMBAT_RADIUS_SCALE
+    );
+    const combatCenterX = (layout.x + targetCenter.x) * 0.5;
+    const combatCenterZ = (layout.y + targetCenter.z) * 0.5;
+    const time = performance.now() / 1000;
+    const pairKeyBase = [this.id, target.id].sort().join(":");
+    const centers = Array.from({ length: pairCount }, (_, index) => {
+      const slot = this.getSlotPosition(index, pairCount, combatRadius, combatRadius);
+      const seedA = hashString01(`${pairKeyBase}:a:${index}`);
+      const seedB = hashString01(`${pairKeyBase}:b:${index}`);
+      const amp = combatRadius * (COMBAT_DRIFT_SCALE + seedA * 0.08);
+      const freqA = 0.7 + seedA * 0.9;
+      const freqB = 0.8 + seedB * 0.85;
+      const driftX = Math.sin(time * freqA + seedB * Math.PI * 2) * amp;
+      const driftZ = Math.cos(time * freqB + seedA * Math.PI * 2) * amp;
+      return {
+        x: combatCenterX + slot.x + driftX,
+        z: combatCenterZ + slot.z + driftZ,
+      };
+    });
+
+    const minDist = COMBAT_PAIR_PADDING * 1.15;
+    for (let iter = 0; iter < 2; iter++) {
+      for (let i = 0; i < centers.length; i++) {
+        for (let j = i + 1; j < centers.length; j++) {
+          const a = centers[i]!;
+          const b = centers[j]!;
+          _combatPairA.set(a.x, a.z);
+          _combatPairB.set(b.x, b.z);
+          _combatPush.subVectors(_combatPairA, _combatPairB);
+          let dist = _combatPush.length();
+          if (dist < 1e-4) {
+            _combatPush.set(1, 0);
+            dist = 1;
+          }
+          if (dist >= minDist) continue;
+          const push = (minDist - dist) * 0.5;
+          _combatPush.multiplyScalar(1 / dist);
+          a.x += _combatPush.x * push;
+          a.z += _combatPush.y * push;
+          b.x -= _combatPush.x * push;
+          b.z -= _combatPush.y * push;
+        }
+      }
+    }
+
+    return centers;
+  }
+
   private getCombatPlan(
     layout: { x: number; y: number; major: number; minor: number; heading: number },
     unitIndex: number,
     unitCount: number,
     state: UnitState,
-    target: BlobEntity
+    target: BlobEntity,
+    pairCenters: { x: number; z: number }[]
   ): {
     mode: UnitCombatMode;
     desiredPx: number;
@@ -646,26 +719,21 @@ export class BlobEntity extends Entity {
     const nz = dz / dist;
     const sideX = -nz;
     const sideZ = nx;
-    const targetUnitCount = Math.max(1, target.getUnitCount());
-    const pairCount = Math.max(unitCount, targetUnitCount);
-    const combatRadius = Math.max(
-      GAME_RULES.UNIT_RADIUS * 3,
-      Math.sqrt(pairCount) * COMBAT_PAIR_PADDING
-    );
+    const pairCount = pairCenters.length;
     const pairIndex = pairCount <= 1 ? 0 : Math.round((unitIndex / Math.max(1, unitCount - 1)) * (pairCount - 1));
-    // Future polish: add subtle Brownian drift + local avoidance to these pair centers
-    // so battles feel more alive without changing any server-side combat results.
-    const pairSlot = this.getSlotPosition(pairIndex, pairCount, combatRadius, combatRadius);
-    const combatCenterX = (layout.x + targetCenter.x) * 0.5;
-    const combatCenterZ = (layout.y + targetCenter.z) * 0.5;
-    const pairCenterX = combatCenterX + pairSlot.x;
-    const pairCenterZ = combatCenterZ + pairSlot.z;
+    const pairCenter = pairCenters[Math.max(0, Math.min(pairIndex, pairCount - 1))]!;
+    const pairCenterX = pairCenter.x;
+    const pairCenterZ = pairCenter.z;
+    const time = performance.now() / 1000;
+    const orbitSeed = hashString01(`${this.id}:${target.id}:orbit:${unitIndex}`);
+    const orbitAngle = time * (0.9 + orbitSeed * 1.35) + orbitSeed * Math.PI * 2;
+    const orbitRadius = COMBAT_ORBIT_RADIUS * (0.7 + orbitSeed * 0.9);
+    const orbitX = sideX * Math.sin(orbitAngle) * orbitRadius + nx * Math.cos(orbitAngle * 0.7) * orbitRadius * 0.25;
+    const orbitZ = sideZ * Math.sin(orbitAngle) * orbitRadius + nz * Math.cos(orbitAngle * 0.7) * orbitRadius * 0.25;
     const currentPx = state.bodyReady ? state.bodyX : state.x;
     const currentPz = state.bodyReady ? state.bodyZ : state.z;
-    const ownAnchorX = pairCenterX - nx * (COMBAT_PAIR_SEPARATION * 0.5);
-    const ownAnchorZ = pairCenterZ - nz * (COMBAT_PAIR_SEPARATION * 0.5);
-    const enemyAnchorX = pairCenterX + nx * (COMBAT_PAIR_SEPARATION * 0.5);
-    const enemyAnchorZ = pairCenterZ + nz * (COMBAT_PAIR_SEPARATION * 0.5);
+    const ownAnchorX = pairCenterX - nx * (COMBAT_PAIR_SEPARATION * 0.5) + orbitX;
+    const ownAnchorZ = pairCenterZ - nz * (COMBAT_PAIR_SEPARATION * 0.5) + orbitZ;
     const anchorDist = Math.hypot(layout.x + currentPx - ownAnchorX, layout.y + currentPz - ownAnchorZ);
 
     return {
@@ -765,6 +833,9 @@ export class BlobEntity extends Entity {
 
     const unitRules = getUnitRules(this.blob.unitType);
     const combatTarget = this.getCombatTarget();
+    const combatPairCenters = combatTarget
+      ? this.getCombatPairCenters(layout, combatTarget, Math.max(n, combatTarget.getUnitCount()))
+      : null;
     const rightX = Math.cos(layout.heading);
     const rightZ = -Math.sin(layout.heading);
     const forwardX = Math.sin(layout.heading);
@@ -776,7 +847,10 @@ export class BlobEntity extends Entity {
       let desiredPz = rightZ * state.x + forwardZ * state.z;
       let pairCenterWorldX = 0;
       let pairCenterWorldZ = 0;
-      const combatPlan = combatTarget ? this.getCombatPlan(layout, i, n, state, combatTarget) : null;
+      const combatPlan =
+        combatTarget && combatPairCenters
+          ? this.getCombatPlan(layout, i, n, state, combatTarget, combatPairCenters)
+          : null;
       if (combatPlan) {
         desiredPx = combatPlan.desiredPx;
         desiredPz = combatPlan.desiredPz;
