@@ -93,7 +93,8 @@ const SWORD_W = 0.048;
 /** Maximum arm swing angle (radians) while walking. */
 const ARM_SWING_MAX = Math.PI * 0.40;
 const ATTACK_SWING_MAX = Math.PI * 0.95;
-const UNIT_ATTACK_REACH = GAME_RULES.UNIT_RADIUS * 1.7;
+const UNIT_ATTACK_REACH = GAME_RULES.UNIT_RADIUS * 2.25;
+const UNIT_ATTACK_LANE_SPACING = GAME_RULES.UNIT_RADIUS * 1.05;
 
 const SHIELD_RADIUS    = 0.44;
 const SHIELD_THICKNESS = 0.055;
@@ -702,8 +703,15 @@ export class BlobEntity extends Entity {
         const enemyDz = enemyPos.z - layout.y;
         const enemyDist = Math.hypot(enemyDx, enemyDz);
         if (enemyDist > 1e-4) {
-          desiredPx = enemyDx - (enemyDx / enemyDist) * UNIT_ATTACK_REACH;
-          desiredPz = enemyDz - (enemyDz / enemyDist) * UNIT_ATTACK_REACH;
+          const nx = enemyDx / enemyDist;
+          const nz = enemyDz / enemyDist;
+          const sideXToEnemy = -nz;
+          const sideZToEnemy = nx;
+          const lane = (i % 5) - 2;
+          desiredPx =
+            enemyDx - nx * UNIT_ATTACK_REACH + sideXToEnemy * lane * UNIT_ATTACK_LANE_SPACING;
+          desiredPz =
+            enemyDz - nz * UNIT_ATTACK_REACH + sideZToEnemy * lane * UNIT_ATTACK_LANE_SPACING;
           enemyWorldX = enemyPos.x;
           enemyWorldZ = enemyPos.z;
           hasEnemyAssignment = true;

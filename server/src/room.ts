@@ -95,32 +95,8 @@ export class BattleRoom extends Room<{ state: GameState }> {
       }
       const blob = this.state.blobs.get(msg.blobId);
       if (!blob || blob.ownerId !== client.sessionId) return;
-      const targetTile = this.getTileAtWorld(msg.targetX, msg.targetY);
-      if (!targetTile?.canWalk) return;
-
       blob.attackTargetBlobId = "";
-      blob.targetX = clamp(msg.targetX, CONFIG.WORLD_MIN, CONFIG.WORLD_MAX);
-      blob.targetY = clamp(msg.targetY, CONFIG.WORLD_MIN, CONFIG.WORLD_MAX);
-
-      // Compute A* path from blob's current tile to goal tile
-      const walkable = (tx: number, tz: number) => this.tileData.get(getTileKey(tx, tz))?.canWalk ?? false;
-      const start = getTileCoordsFromWorld(blob.x, blob.y);
-      const goal  = getTileCoordsFromWorld(blob.targetX, blob.targetY);
-      const path  = findPath(start.tx, start.tz, goal.tx, goal.tz, walkable);
-
-      if (path.length > 0) {
-        // Replace last waypoint with the exact clicked position so the blob stops precisely there
-        path[path.length - 1] = { x: blob.targetX, y: blob.targetY };
-        this.blobPaths.set(blob.id, { waypoints: path, index: 0 });
-      } else {
-        // No path (start tile isolated) — fall back to straight-line movement
-        this.blobPaths.delete(blob.id);
-      }
-
-      client.send(MessageType.PATH, {
-        blobId: blob.id,
-        waypoints: path,
-      } satisfies PathMessage);
+      this.setBlobDestination(blob, msg.targetX, msg.targetY, client);
     });
 
     this.onMessage(MessageType.ATTACK, (client, raw) => {
@@ -131,13 +107,7 @@ export class BattleRoom extends Room<{ state: GameState }> {
       if (!blob || !target || blob.ownerId !== client.sessionId || target.ownerId === client.sessionId) return;
 
       blob.attackTargetBlobId = target.id;
-      blob.targetX = target.x;
-      blob.targetY = target.y;
-      this.blobPaths.delete(blob.id);
-      client.send(MessageType.PATH, {
-        blobId: blob.id,
-        waypoints: [],
-      } satisfies PathMessage);
+      this.setBlobDestination(blob, target.x, target.y, client);
     });
 
     this.onMessage(MessageType.SQUAD_SPREAD, (client, raw) => {
@@ -253,6 +223,41 @@ export class BattleRoom extends Room<{ state: GameState }> {
     }
   }
 
+  private getBlobEngageDistance(a: Blob, b: Blob): number {
+    return a.radius + b.radius + CONFIG.BLOB_COMBAT_ENGAGE_PADDING;
+  }
+
+  private blobsCanEngage(a: Blob, b: Blob): boolean {
+    return Math.hypot(a.x - b.x, a.y - b.y) <= this.getBlobEngageDistance(a, b);
+  }
+
+  private setBlobDestination(blob: Blob, targetX: number, targetY: number, client?: Client): void {
+    const tile = this.getTileAtWorld(targetX, targetY);
+    if (!tile?.canWalk) return;
+
+    blob.targetX = clamp(targetX, CONFIG.WORLD_MIN, CONFIG.WORLD_MAX);
+    blob.targetY = clamp(targetY, CONFIG.WORLD_MIN, CONFIG.WORLD_MAX);
+
+    const walkable = (tx: number, tz: number) => this.tileData.get(getTileKey(tx, tz))?.canWalk ?? false;
+    const start = getTileCoordsFromWorld(blob.x, blob.y);
+    const goal = getTileCoordsFromWorld(blob.targetX, blob.targetY);
+    const path = findPath(start.tx, start.tz, goal.tx, goal.tz, walkable);
+
+    if (path.length > 0) {
+      path[path.length - 1] = { x: blob.targetX, y: blob.targetY };
+      this.blobPaths.set(blob.id, { waypoints: path, index: 0 });
+    } else {
+      this.blobPaths.delete(blob.id);
+    }
+
+    if (client) {
+      client.send(MessageType.PATH, {
+        blobId: blob.id,
+        waypoints: path,
+      } satisfies PathMessage);
+    }
+  }
+
   private tick(dtMs: number) {
     const dt = dtMs / 1000;
 
@@ -266,9 +271,19 @@ export class BattleRoom extends Room<{ state: GameState }> {
         if (!target || target.ownerId === blob.ownerId) {
           blob.attackTargetBlobId = "";
         } else {
-          blob.targetX = target.x;
-          blob.targetY = target.y;
-          this.blobPaths.delete(blob.id);
+          if (this.blobsCanEngage(blob, target)) {
+            blob.targetX = blob.x;
+            blob.targetY = blob.y;
+            blob.vx = 0;
+            blob.vy = 0;
+            this.blobPaths.delete(blob.id);
+          } else {
+            const targetTile = getTileCoordsFromWorld(target.x, target.y);
+            const goalTile = getTileCoordsFromWorld(blob.targetX, blob.targetY);
+            if (targetTile.tx !== goalTile.tx || targetTile.tz !== goalTile.tz) {
+              this.setBlobDestination(blob, target.x, target.y);
+            }
+          }
         }
       }
 
@@ -702,8 +717,7 @@ export class BattleRoom extends Room<{ state: GameState }> {
       const target = this.state.blobs.get(blob.attackTargetBlobId);
       if (!target || target.ownerId === blob.ownerId || locked.has(target.id)) continue;
 
-      const engageDistance = blob.radius + target.radius + CONFIG.BLOB_COMBAT_ENGAGE_PADDING;
-      if (Math.hypot(blob.x - target.x, blob.y - target.y) > engageDistance) continue;
+      if (!this.blobsCanEngage(blob, target)) continue;
 
       const blobRules = getUnitRules(blob.unitType);
       const targetRules = getUnitRules(target.unitType);
