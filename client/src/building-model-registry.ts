@@ -158,6 +158,12 @@ export function instantiateBuildingSet(templates: BuildingSet): BuildingSet {
   };
 }
 
+/** Clone only the single variant needed for a given building type. Much cheaper than cloning all three. */
+export function instantiateBuildingVariant(type: BuildingTypeValue): BuildingVariant {
+  const templates = getBuildingVariantTemplates();
+  return cloneBuildingVariant(templates[type]);
+}
+
 /**
  * Fetch each GLB URL once, build shared templates, merge with procedural fallbacks.
  * Call once before spawning entities (e.g. from `main.ts` after network sync).

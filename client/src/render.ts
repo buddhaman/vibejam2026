@@ -25,7 +25,7 @@ const CAM = {
   polarFromDownDeg: 55,
   azimuthDeg: 45,
   distanceStart: 165,
-  distanceMin: 26,
+  distanceMin: 14,
   distanceMax: 420,
   zoomFactor: 1.035,
   fov: 52,

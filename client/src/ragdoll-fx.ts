@@ -1,14 +1,17 @@
 import * as THREE from "three";
 import { GAME_RULES, UnitType, type UnitType as UnitTypeValue } from "../../shared/game-rules.js";
 import { createUnitBodyGeometry } from "./render-geom.js";
+import { createPhalanxInstancedMeshes } from "./phalanx-unit-model.js";
 import type { TileView } from "./terrain.js";
 import { getTerrainHeightAt } from "./terrain.js";
 
 const GRAVITY = 18;
 const PARTICLE_DAMPING = 0.992;
 const PARTICLE_SUBSTEPS = 2;
-const TORSO_SETTLE_TIME = 8;
-const DEBRIS_SETTLE_TIME = 10;
+const PARTICLE_FLOOR_FRICTION = 0.82;
+const DEBRIS_FLOOR_FRICTION = 0.84;
+const TORSO_SETTLE_TIME = 13;
+const DEBRIS_SETTLE_TIME = 15;
 const DEBRIS_ANGULAR_DAMPING = 0.985;
 const TORSO_GEOM = createUnitBodyGeometry();
 const LEG_GEOM = new THREE.CylinderGeometry(
@@ -43,13 +46,13 @@ type Stick = {
 
 type RagdollFx = {
   root: THREE.Group;
-  torso: THREE.Mesh;
   leftLeg: THREE.Mesh;
   rightLeg: THREE.Mesh;
   particles: VerletParticle[];
   sticks: Stick[];
   age: number;
   ttl: number;
+  torsoScale: number;
 };
 
 type DebrisFx = {
@@ -70,6 +73,7 @@ export class RagdollFxSystem {
     roughness: 0.85,
     metalness: 0.05,
   });
+  private readonly torsoParts: THREE.InstancedMesh[];
   private readonly legMaterial = new THREE.MeshStandardMaterial({
     color: 0x181818,
     roughness: 0.95,
@@ -81,6 +85,22 @@ export class RagdollFxSystem {
     metalness: 0.45,
   });
 
+  public constructor() {
+    const loadedParts = createPhalanxInstancedMeshes(512);
+    this.torsoParts =
+      loadedParts.length > 0
+        ? loadedParts
+        : [new THREE.InstancedMesh(TORSO_GEOM, this.torsoMaterial.clone(), 512)];
+    for (const mesh of this.torsoParts) {
+      mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+      mesh.frustumCulled = false;
+      mesh.castShadow = true;
+      mesh.receiveShadow = true;
+      mesh.count = 0;
+      this.root.add(mesh);
+    }
+  }
+
   public spawnDeathFx(params: {
     x: number;
     z: number;
@@ -90,21 +110,14 @@ export class RagdollFxSystem {
     unitType: UnitTypeValue;
     tiles: Map<string, TileView>;
   }): void {
-    console.info("[death-fx] spawn request", {
-      x: Number(params.x.toFixed(2)),
-      z: Number(params.z.toFixed(2)),
-      dirX: Number(params.dirX.toFixed(2)),
-      dirZ: Number(params.dirZ.toFixed(2)),
-      unitType: params.unitType,
-    });
     const baseY = getTerrainHeightAt(params.x, params.z, params.tiles);
     const dirLen = Math.hypot(params.dirX, params.dirZ) || 1;
     const dirX = params.dirX / dirLen;
     const dirZ = params.dirZ / dirLen;
     const sideX = -dirZ;
     const sideZ = dirX;
-    const impulse = 3.2 + Math.random() * 1.8;
-    const upward = 4.5 + Math.random() * 2;
+    const impulse = 4.8 + Math.random() * 2.6;
+    const upward = 6.8 + Math.random() * 2.5;
 
     const particles: VerletParticle[] = [
       this.makeParticle(params.x, baseY + GAME_RULES.UNIT_HEIGHT * 0.72, params.z, dirX * impulse, upward, dirZ * impulse),
@@ -143,19 +156,14 @@ export class RagdollFxSystem {
     ];
 
     const root = new THREE.Group();
-    const torso = new THREE.Mesh(TORSO_GEOM, this.torsoMaterial.clone());
-    torso.castShadow = true;
-    torso.receiveShadow = true;
-    (torso.material as THREE.MeshStandardMaterial).color.setHex(params.teamColor).lerp(new THREE.Color(0xb7a079), 0.52);
     const leftLeg = new THREE.Mesh(LEG_GEOM, this.legMaterial);
     const rightLeg = new THREE.Mesh(LEG_GEOM, this.legMaterial);
     leftLeg.castShadow = rightLeg.castShadow = true;
-    root.add(torso, leftLeg, rightLeg);
+    root.add(leftLeg, rightLeg);
     this.root.add(root);
 
     this.ragdolls.push({
       root,
-      torso,
       leftLeg,
       rightLeg,
       particles,
@@ -168,6 +176,7 @@ export class RagdollFxSystem {
       ],
       age: 0,
       ttl: TORSO_SETTLE_TIME + Math.random() * 2,
+      torsoScale: params.unitType === UnitType.VILLAGER ? 0.82 : 1,
     });
 
     if (params.unitType !== UnitType.VILLAGER) {
@@ -199,7 +208,6 @@ export class RagdollFxSystem {
       for (let i = 0; i < PARTICLE_SUBSTEPS; i++) {
         this.integrateRagdoll(ragdoll, stepDt, tiles);
       }
-      this.renderRagdoll(ragdoll);
       ragdoll.root.visible = ragdoll.age < ragdoll.ttl;
     }
     this.ragdolls = this.ragdolls.filter((ragdoll) => {
@@ -207,6 +215,13 @@ export class RagdollFxSystem {
       this.root.remove(ragdoll.root);
       return false;
     });
+    for (const mesh of this.torsoParts) mesh.count = this.ragdolls.length;
+    for (let i = 0; i < this.ragdolls.length; i++) {
+      this.renderRagdoll(this.ragdolls[i]!, i);
+    }
+    for (const mesh of this.torsoParts) {
+      mesh.instanceMatrix.needsUpdate = true;
+    }
 
     for (const debris of this.debris) {
       debris.age += dt;
@@ -221,11 +236,13 @@ export class RagdollFxSystem {
         const floorY = getTerrainHeightAt(debris.mesh.position.x, debris.mesh.position.z, tiles);
         if (debris.mesh.position.y <= floorY + 0.03) {
           debris.mesh.position.y = floorY + 0.03;
-          debris.velocity.multiplyScalar(0.18);
+          debris.velocity.x *= DEBRIS_FLOOR_FRICTION;
+          debris.velocity.z *= DEBRIS_FLOOR_FRICTION;
+          debris.velocity.y *= -0.08;
           if (debris.velocity.lengthSq() < 1.2) {
             debris.stuck = true;
           } else {
-            debris.velocity.y = Math.abs(debris.velocity.y) * 0.2;
+            debris.velocity.y = Math.abs(debris.velocity.y) * 0.12;
           }
         }
       }
@@ -276,12 +293,17 @@ export class RagdollFxSystem {
 
       for (const particle of ragdoll.particles) {
         const floorY = getTerrainHeightAt(particle.pos.x, particle.pos.z, tiles);
-        if (particle.pos.y < floorY) particle.pos.y = floorY;
+        if (particle.pos.y < floorY) {
+          particle.pos.y = floorY;
+          particle.prev.x = particle.pos.x - (particle.pos.x - particle.prev.x) * PARTICLE_FLOOR_FRICTION;
+          particle.prev.z = particle.pos.z - (particle.pos.z - particle.prev.z) * PARTICLE_FLOOR_FRICTION;
+          particle.prev.y = particle.pos.y;
+        }
       }
     }
   }
 
-  private renderRagdoll(ragdoll: RagdollFx): void {
+  private renderRagdoll(ragdoll: RagdollFx, index: number): void {
     const body = ragdoll.particles[0]!;
     const hipL = ragdoll.particles[1]!;
     const hipR = ragdoll.particles[2]!;
@@ -295,8 +317,13 @@ export class RagdollFxSystem {
     const side = TEMP_SIDE.crossVectors(forward, down).normalize();
     forward.crossVectors(down, side).normalize();
     const basis = TEMP_MATRIX.makeBasis(side, down.clone().negate(), forward);
-    ragdoll.torso.position.copy(body.pos);
-    ragdoll.torso.setRotationFromMatrix(basis);
+    TEMP_OBJECT.position.copy(body.pos);
+    TEMP_OBJECT.setRotationFromMatrix(basis);
+    TEMP_OBJECT.scale.setScalar(ragdoll.torsoScale);
+    TEMP_OBJECT.updateMatrix();
+    for (const mesh of this.torsoParts) {
+      mesh.setMatrixAt(index, TEMP_OBJECT.matrix);
+    }
 
     this.placeLeg(ragdoll.leftLeg, hipL.pos, footL.pos);
     this.placeLeg(ragdoll.rightLeg, hipR.pos, footR.pos);
@@ -361,4 +388,5 @@ const TEMP_DOWN = new THREE.Vector3();
 const TEMP_MID = new THREE.Vector3();
 const TEMP_DIR = new THREE.Vector3();
 const TEMP_MATRIX = new THREE.Matrix4();
+const TEMP_OBJECT = new THREE.Object3D();
 const UP_AXIS = new THREE.Vector3(0, 1, 0);

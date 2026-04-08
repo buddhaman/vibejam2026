@@ -384,15 +384,6 @@ export class BlobEntity extends Entity {
   ): void {
     const lostStart = Math.max(0, nextCount);
     const lostEnd = Math.min(previousCount, this.unitStates.length);
-    if (lostEnd > lostStart) {
-      console.info("[death-fx] lost units", {
-        blobId: this.id,
-        previousCount,
-        nextCount,
-        spawned: lostEnd - lostStart,
-        unitType,
-      });
-    }
     for (let i = lostStart; i < lostEnd; i++) {
       const state = this.unitStates[i];
       if (!state) continue;

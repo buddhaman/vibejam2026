@@ -10,8 +10,8 @@ import {
 import type { Game } from "./game.js";
 import { Entity, type SelectionInfo } from "./entity.js";
 import { getTerrainHeightAt } from "./terrain.js";
-import { getBuildingVariantTemplates, instantiateBuildingSet } from "./building-model-registry.js";
-import type { BuildingSet } from "./building-visuals.js";
+import { instantiateBuildingVariant } from "./building-model-registry.js";
+import type { BuildingVariant } from "./building-visuals.js";
 import {
   applyTeamColorTexturesToObject3D,
   secondaryTeamHexFromPrimary,
@@ -21,7 +21,8 @@ const ORB_RADIUS = 1.05;
 const ORB_Y_ABOVE_ROOF = 1.25;
 
 export class BuildingEntity extends Entity {
-  private variants!: BuildingSet;
+  /** Cloned only for the one building type this entity actually uses. Set after first sync(). */
+  private variant: BuildingVariant | null = null;
   /** One-time CPU recolor of GLB albedo/emissive maps to this owner’s palette. */
   private buildingTeamTexturesApplied = false;
   /** Single unlit sphere — full-brightness player palette color. */
@@ -45,18 +46,12 @@ export class BuildingEntity extends Entity {
 
   protected createMesh(): THREE.Group {
     const root = new THREE.Group();
-    this.variants = instantiateBuildingSet(getBuildingVariantTemplates());
-
-    for (const variant of Object.values(this.variants)) {
-      variant.root.visible = false;
-      root.add(variant.root);
-    }
-
+    // Variant is NOT cloned here — we don’t know the building type yet.
+    // It is cloned lazily in sync() via setTimeout so it doesn’t block the Colyseus callback frame.
     this.ownerOrbMaterial = new THREE.MeshBasicMaterial({ color: 0xffffff });
     this.ownerOrb = new THREE.Mesh(new THREE.SphereGeometry(ORB_RADIUS, 32, 26), this.ownerOrbMaterial);
     this.ownerOrb.castShadow = true;
     root.add(this.ownerOrb);
-
     return root;
   }
 
@@ -69,14 +64,25 @@ export class BuildingEntity extends Entity {
     productionQueue: ArrayLike<UnitTypeValue>;
     productionProgressMs: number;
   }): void {
+    const firstSync = this.building === null;
     this.building = {
       ...building,
       productionQueue: Array.from(building.productionQueue ?? []),
     };
+
+    // Defer the clone to the next event-loop turn so it doesn’t stall the Colyseus schema callback.
+    if (firstSync) {
+      const type = building.buildingType;
+      setTimeout(() => {
+        if (this.isStale()) return; // building already destroyed before clone finished
+        this.variant = instantiateBuildingVariant(type);
+        this.mesh.add(this.variant.root);
+      }, 0);
+    }
   }
 
   public render(_dt: number): void {
-    if (!this.building) return;
+    if (!this.building || !this.variant) return;
 
     const terrainY = getTerrainHeightAt(
       this.building.x,
@@ -85,10 +91,6 @@ export class BuildingEntity extends Entity {
     );
 
     const rules = getBuildingRules(this.building.buildingType);
-    for (const [typeKey, variant] of Object.entries(this.variants)) {
-      variant.root.visible = Number(typeKey) === this.building.buildingType;
-    }
-
     const playerHex = this.game.getPlayerColor(this.building.ownerId);
     this.ownerOrbMaterial.color.setHex(playerHex);
     this.ownerOrb.position.set(0, rules.height + ORB_Y_ABOVE_ROOF, 0);
@@ -97,11 +99,9 @@ export class BuildingEntity extends Entity {
       const auth = this.game.room.state.players.get(this.building.ownerId) as { color?: number } | undefined;
       if (typeof auth?.color === "number") {
         const secondary = secondaryTeamHexFromPrimary(playerHex);
-        for (const variant of Object.values(this.variants)) {
-          applyTeamColorTexturesToObject3D(variant.root, playerHex, secondary, {
-            blueChannelUsesSecondary: false,
-          });
-        }
+        applyTeamColorTexturesToObject3D(this.variant.root, playerHex, secondary, {
+          blueChannelUsesSecondary: false,
+        });
         this.buildingTeamTexturesApplied = true;
       }
     }
