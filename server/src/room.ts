@@ -417,6 +417,18 @@ export class BattleRoom extends Room<{ state: GameState }> {
     }
 
     path[path.length - 1] = { x: blob.targetX, y: blob.targetY };
+    // Start from actual squad position so the first segment is not a jog to the start tile center.
+    if (path.length >= 2) {
+      path[0] = { x: blob.x, y: blob.y };
+    } else {
+      const gx = blob.targetX;
+      const gy = blob.targetY;
+      path[0] = { x: blob.x, y: blob.y };
+      if (Math.hypot(gx - blob.x, gy - blob.y) > 1e-4) {
+        path.push({ x: gx, y: gy });
+      }
+    }
+
     this.blobPaths.set(blob.id, { waypoints: path, index: 0 });
 
     (client ?? this.getBlobOwnerClient(blob))?.send(MessageType.PATH, {

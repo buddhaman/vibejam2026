@@ -108,9 +108,6 @@ const SHIELD_SWING_MAX = Math.PI * 0.06;
 const _shieldFwdVec  = new THREE.Vector3();
 const _shieldQuat    = new THREE.Quaternion();
 const _upAxis        = new THREE.Vector3(0, 1, 0);
-const _combatPairA   = new THREE.Vector2();
-const _combatPairB   = new THREE.Vector2();
-const _combatPush    = new THREE.Vector2();
 
 function hashString01(value: string): number {
   let hash = 2166136261;
@@ -755,31 +752,6 @@ export class BlobEntity extends Entity {
         z: combatCenterZ + slot.z + driftZ,
       };
     });
-
-    const minDist = COMBAT_PAIR_PADDING * 1.15;
-    for (let iter = 0; iter < 2; iter++) {
-      for (let i = 0; i < centers.length; i++) {
-        for (let j = i + 1; j < centers.length; j++) {
-          const a = centers[i]!;
-          const b = centers[j]!;
-          _combatPairA.set(a.x, a.z);
-          _combatPairB.set(b.x, b.z);
-          _combatPush.subVectors(_combatPairA, _combatPairB);
-          let dist = _combatPush.length();
-          if (dist < 1e-4) {
-            _combatPush.set(1, 0);
-            dist = 1;
-          }
-          if (dist >= minDist) continue;
-          const push = (minDist - dist) * 0.5;
-          _combatPush.multiplyScalar(1 / dist);
-          a.x += _combatPush.x * push;
-          a.z += _combatPush.y * push;
-          b.x -= _combatPush.x * push;
-          b.z -= _combatPush.y * push;
-        }
-      }
-    }
 
     return centers;
   }
