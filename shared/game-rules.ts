@@ -65,6 +65,10 @@ export const GAME_RULES = {
   BLOB_DECELERATION_RADIUS: 14,
   BLOB_STOP_EPSILON: 0.65,
   BLOB_COMBAT_ENGAGE_PADDING: 2.5,
+  /** While mutually engaged, both blobs move toward a shared center until they overlap (world units/sec). */
+  ENGAGE_OVERLAP_CONVERGE_SPEED: 16,
+  /** When centers are this close, snap to identical position for a stable stacked fight. */
+  ENGAGE_OVERLAP_EPSILON: 0.12,
   CLIENT_PREDICTION_LEAD: 0.09,
   UNIT_RADIUS: 0.56,
   UNIT_HEIGHT: 1.18,

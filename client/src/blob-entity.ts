@@ -801,16 +801,21 @@ export class BlobEntity extends Entity {
     const targetCenter = target.getPredictedWorldCenter();
     const dx = targetCenter.x - layout.x;
     const dz = targetCenter.z - layout.y;
-    const dist = Math.hypot(dx, dz);
-    if (
-      this.blob?.engagedTargetBlobId !== target.id ||
-      dist <= 1e-4
-    ) {
+    const distSq = dx * dx + dz * dz;
+    if (this.blob?.engagedTargetBlobId !== target.id) {
       return null;
     }
-
-    const nx = dx / dist;
-    const nz = dz / dist;
+    // Server stacks squad centers when fully engaged; use facing when separation is ~0.
+    let nx: number;
+    let nz: number;
+    if (distSq > 1e-8) {
+      const inv = 1 / Math.sqrt(distSq);
+      nx = dx * inv;
+      nz = dz * inv;
+    } else {
+      nx = Math.sin(layout.heading);
+      nz = Math.cos(layout.heading);
+    }
     const sideX = -nz;
     const sideZ = nx;
     const pairCount = pairCenters.length;

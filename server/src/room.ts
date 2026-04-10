@@ -242,6 +242,19 @@ export class BattleRoom extends Room<{ state: GameState }> {
     return Math.hypot(a.x - b.x, a.y - b.y) <= this.getBlobEngageDistance(a, b);
   }
 
+  /**
+   * Only lock engagement if the defender is idle or fighting back.
+   * If they issued a move (flee) and are not attacking this enemy, stay disengaged even when overlapping.
+   */
+  private defenderAllowsEngagement(defender: Blob, attacker: Blob): boolean {
+    if (defender.attackTargetBlobId === attacker.id) return true;
+    const moveSlack = CONFIG.BLOB_STOP_EPSILON * 2.5;
+    const hasActiveMove =
+      this.blobPaths.has(defender.id) ||
+      Math.hypot(defender.targetX - defender.x, defender.targetY - defender.y) > moveSlack;
+    return !hasActiveMove;
+  }
+
   private clearBlobCombatState(blob: Blob): void {
     if (blob.engagedTargetBlobId.length > 0) {
       const other = this.state.blobs.get(blob.engagedTargetBlobId);
@@ -261,6 +274,70 @@ export class BattleRoom extends Room<{ state: GameState }> {
       blobId: blob.id,
       waypoints: [],
     } satisfies PathMessage);
+  }
+
+  /**
+   * Mutually engaged blobs march toward a shared center until centers coincide (stacked fight).
+   * Velocity is set each tick for sync; paths stay cleared.
+   */
+  private applyEngagedOverlapForAllPairs(dt: number): void {
+    const seen = new Set<string>();
+    for (const blob of this.state.blobs.values()) {
+      if (blob.engagedTargetBlobId.length === 0) continue;
+      const other = this.state.blobs.get(blob.engagedTargetBlobId);
+      if (!other || other.ownerId === blob.ownerId) continue;
+      if (other.engagedTargetBlobId !== blob.id) continue;
+      const a = blob.id < other.id ? blob : other;
+      const b = blob.id < other.id ? other : blob;
+      const pairKey = `${a.id}:${b.id}`;
+      if (seen.has(pairKey)) continue;
+      seen.add(pairKey);
+
+      this.clearBlobPath(a);
+      this.clearBlobPath(b);
+
+      const midX = (a.x + b.x) * 0.5;
+      const midY = (a.y + b.y) * 0.5;
+      const sep = Math.hypot(a.x - b.x, a.y - b.y);
+      const eps = CONFIG.ENGAGE_OVERLAP_EPSILON;
+
+      if (sep <= eps) {
+        a.x = midX;
+        a.y = midY;
+        b.x = midX;
+        b.y = midY;
+        a.vx = 0;
+        a.vy = 0;
+        b.vx = 0;
+        b.vy = 0;
+        a.targetX = midX;
+        a.targetY = midY;
+        b.targetX = midX;
+        b.targetY = midY;
+        continue;
+      }
+
+      const step = CONFIG.ENGAGE_OVERLAP_CONVERGE_SPEED * dt;
+      const moveTowardMid = (blob: Blob): void => {
+        const dx = midX - blob.x;
+        const dy = midY - blob.y;
+        const d = Math.hypot(dx, dy);
+        if (d < 1e-6) return;
+        const move = Math.min(step, d);
+        const ox = blob.x;
+        const oy = blob.y;
+        blob.x += (dx / d) * move;
+        blob.y += (dy / d) * move;
+        blob.x = clamp(blob.x, CONFIG.WORLD_MIN, CONFIG.WORLD_MAX);
+        blob.y = clamp(blob.y, CONFIG.WORLD_MIN, CONFIG.WORLD_MAX);
+        blob.vx = (blob.x - ox) / dt;
+        blob.vy = (blob.y - oy) / dt;
+        blob.targetX = blob.x;
+        blob.targetY = blob.y;
+      };
+      moveTowardMid(a);
+      moveTowardMid(b);
+    }
   }
 
   private findNearestWalkablePoint(x: number, y: number, maxRadiusTiles = 0): { x: number; y: number } | null {
@@ -296,31 +373,12 @@ export class BattleRoom extends Room<{ state: GameState }> {
     return null;
   }
 
-  private getBlobAttackApproachPoint(blob: Blob, target: Blob): { x: number; y: number } | null {
-    const desiredCenterDistance = Math.max(
-      GAME_RULES.TILE_SIZE * 0.55,
-      this.getBlobEngageDistance(blob, target) - CONFIG.BLOB_STOP_EPSILON * 0.5
-    );
-    let dx = blob.x - target.x;
-    let dy = blob.y - target.y;
-    let dist = Math.hypot(dx, dy);
-    if (dist <= 1e-4) {
-      dx = blob.vx;
-      dy = blob.vy;
-      dist = Math.hypot(dx, dy);
-    }
-    if (dist <= 1e-4) {
-      dx = 1;
-      dy = 0;
-      dist = 1;
-    }
-    const nx = dx / dist;
-    const ny = dy / dist;
-    return this.findNearestWalkablePoint(
-      target.x + nx * desiredCenterDistance,
-      target.y + ny * desiredCenterDistance,
-      3
-    );
+  /**
+   * Attack move goal: the enemy squad center (nearest walkable point).
+   * Engagement triggers as soon as centers are within range — no stop at a ring outside the target.
+   */
+  private getBlobAttackApproachPoint(_blob: Blob, target: Blob): { x: number; y: number } | null {
+    return this.findNearestWalkablePoint(target.x, target.y, 3);
   }
 
   private setBlobDestination(
@@ -404,7 +462,7 @@ export class BattleRoom extends Room<{ state: GameState }> {
           blob.vy = 0;
           this.clearBlobPath(blob);
         } else {
-          if (this.blobsCanEngage(blob, target)) {
+          if (this.blobsCanEngage(blob, target) && this.defenderAllowsEngagement(target, blob)) {
             engagedBlobIds.add(blob.id);
             engagedBlobIds.add(target.id);
             blob.engagedTargetBlobId = target.id;
@@ -437,10 +495,10 @@ export class BattleRoom extends Room<{ state: GameState }> {
       }
     }
 
+    this.applyEngagedOverlapForAllPairs(dt);
+
     for (const blob of this.state.blobs.values()) {
       if (engagedBlobIds.has(blob.id)) {
-        blob.vx = 0;
-        blob.vy = 0;
         this.clearBlobPath(blob);
         continue;
       }
