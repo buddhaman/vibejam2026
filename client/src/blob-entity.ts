@@ -961,14 +961,26 @@ export class BlobEntity extends Entity {
       let stepForwardX = forwardX;
       let stepForwardZ = forwardZ;
       const hasEnemyAssignment = state.combatMode !== "formation";
-      if (hasEnemyAssignment) {
-        const engageDx = pairCenterWorldX - worldX;
-        const engageDz = pairCenterWorldZ - worldZ;
-        const engageDist = Math.hypot(engageDx, engageDz);
-        if (engageDist > 1e-4) {
-          stepForwardX = engageDx / engageDist;
-          stepForwardZ = engageDz / engageDist;
+      if (hasEnemyAssignment && combatTarget) {
+        // Per-unit look-at enemy center so wings angle inward; opposite blobs face opposite ways.
+        // When squad centers stack (ec ≈ layout), squad-level direction used to collapse to the same heading for both sides.
+        const ec = combatTarget.getPredictedWorldCenter();
+        let faceDx = ec.x - worldX;
+        let faceDz = ec.z - worldZ;
+        let faceDist = Math.hypot(faceDx, faceDz);
+        if (faceDist < 1e-4) {
+          faceDx = ec.x - layout.x;
+          faceDz = ec.z - layout.y;
+          faceDist = Math.hypot(faceDx, faceDz);
         }
+        if (faceDist < 1e-4) {
+          const flip = this.id < combatTarget.id ? 1 : -1;
+          faceDx = flip;
+          faceDz = 0;
+          faceDist = 1;
+        }
+        stepForwardX = faceDx / faceDist;
+        stepForwardZ = faceDz / faceDist;
       }
       const bodySpeed = Math.hypot(bodyVx, bodyVz);
       if (!hasEnemyAssignment && bodySpeed > FOOT_IDLE_SPEED) {
