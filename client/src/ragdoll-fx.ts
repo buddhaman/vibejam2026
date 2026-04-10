@@ -1,7 +1,11 @@
 import * as THREE from "three";
 import { GAME_RULES, UnitType, type UnitType as UnitTypeValue } from "../../shared/game-rules.js";
 import { createUnitBodyGeometry } from "./render-geom.js";
-import { createPhalanxInstancedMeshes } from "./phalanx-unit-model.js";
+import {
+  applyPhalanxTeamTextureReplacements,
+  createPhalanxInstancedMeshes,
+} from "./phalanx-unit-model.js";
+import { secondaryTeamHexFromPrimary } from "./render-texture-recolor.js";
 import type { TileView } from "./terrain.js";
 import { getTerrainHeightAt } from "./terrain.js";
 
@@ -53,6 +57,7 @@ type RagdollFx = {
   age: number;
   ttl: number;
   torsoScale: number;
+  teamColor: number;
 };
 
 type DebrisFx = {
@@ -73,7 +78,8 @@ export class RagdollFxSystem {
     roughness: 0.85,
     metalness: 0.05,
   });
-  private readonly torsoParts: THREE.InstancedMesh[];
+  private readonly torsoCapacity = 512;
+  private readonly torsoBanks = new Map<number, THREE.InstancedMesh[]>();
   private readonly legMaterial = new THREE.MeshStandardMaterial({
     color: 0x181818,
     roughness: 0.95,
@@ -85,21 +91,7 @@ export class RagdollFxSystem {
     metalness: 0.45,
   });
 
-  public constructor() {
-    const loadedParts = createPhalanxInstancedMeshes(512);
-    this.torsoParts =
-      loadedParts.length > 0
-        ? loadedParts
-        : [new THREE.InstancedMesh(TORSO_GEOM, this.torsoMaterial.clone(), 512)];
-    for (const mesh of this.torsoParts) {
-      mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
-      mesh.frustumCulled = false;
-      mesh.castShadow = true;
-      mesh.receiveShadow = true;
-      mesh.count = 0;
-      this.root.add(mesh);
-    }
-  }
+  public constructor() {}
 
   public spawnDeathFx(params: {
     x: number;
@@ -177,6 +169,7 @@ export class RagdollFxSystem {
       age: 0,
       ttl: TORSO_SETTLE_TIME + Math.random() * 2,
       torsoScale: params.unitType === UnitType.VILLAGER ? 0.82 : 1,
+      teamColor: params.teamColor,
     });
 
     if (params.unitType !== UnitType.VILLAGER) {
@@ -215,12 +208,20 @@ export class RagdollFxSystem {
       this.root.remove(ragdoll.root);
       return false;
     });
-    for (const mesh of this.torsoParts) mesh.count = this.ragdolls.length;
-    for (let i = 0; i < this.ragdolls.length; i++) {
-      this.renderRagdoll(this.ragdolls[i]!, i);
+    for (const meshes of this.torsoBanks.values()) {
+      for (const mesh of meshes) mesh.count = 0;
     }
-    for (const mesh of this.torsoParts) {
-      mesh.instanceMatrix.needsUpdate = true;
+    const torsoCounts = new Map<number, number>();
+    for (const ragdoll of this.ragdolls) {
+      const meshes = this.getTorsoParts(ragdoll.teamColor);
+      const index = torsoCounts.get(ragdoll.teamColor) ?? 0;
+      this.renderRagdoll(ragdoll, meshes, index);
+      torsoCounts.set(ragdoll.teamColor, index + 1);
+    }
+    for (const meshes of this.torsoBanks.values()) {
+      for (const mesh of meshes) {
+        mesh.instanceMatrix.needsUpdate = true;
+      }
     }
 
     for (const debris of this.debris) {
@@ -270,6 +271,34 @@ export class RagdollFxSystem {
     };
   }
 
+  private getTorsoParts(teamColor: number): THREE.InstancedMesh[] {
+    const existing = this.torsoBanks.get(teamColor);
+    if (existing) return existing;
+
+    const loadedParts = createPhalanxInstancedMeshes(this.torsoCapacity);
+    const meshes =
+      loadedParts.length > 0
+        ? loadedParts
+        : [new THREE.InstancedMesh(TORSO_GEOM, this.torsoMaterial.clone(), this.torsoCapacity)];
+    if (loadedParts.length > 0) {
+      applyPhalanxTeamTextureReplacements(
+        meshes,
+        teamColor,
+        secondaryTeamHexFromPrimary(teamColor)
+      );
+    }
+    for (const mesh of meshes) {
+      mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+      mesh.frustumCulled = false;
+      mesh.castShadow = true;
+      mesh.receiveShadow = true;
+      mesh.count = 0;
+      this.root.add(mesh);
+    }
+    this.torsoBanks.set(teamColor, meshes);
+    return meshes;
+  }
+
   private integrateRagdoll(ragdoll: RagdollFx, dt: number, tiles: Map<string, TileView>): void {
     for (const particle of ragdoll.particles) {
       const nextX = particle.pos.x + (particle.pos.x - particle.prev.x) * PARTICLE_DAMPING;
@@ -303,7 +332,7 @@ export class RagdollFxSystem {
     }
   }
 
-  private renderRagdoll(ragdoll: RagdollFx, index: number): void {
+  private renderRagdoll(ragdoll: RagdollFx, torsoParts: THREE.InstancedMesh[], index: number): void {
     const body = ragdoll.particles[0]!;
     const hipL = ragdoll.particles[1]!;
     const hipR = ragdoll.particles[2]!;
@@ -321,8 +350,9 @@ export class RagdollFxSystem {
     TEMP_OBJECT.setRotationFromMatrix(basis);
     TEMP_OBJECT.scale.setScalar(ragdoll.torsoScale);
     TEMP_OBJECT.updateMatrix();
-    for (const mesh of this.torsoParts) {
+    for (const mesh of torsoParts) {
       mesh.setMatrixAt(index, TEMP_OBJECT.matrix);
+      mesh.count = Math.max(mesh.count, index + 1);
     }
 
     this.placeLeg(ragdoll.leftLeg, hipL.pos, footL.pos);
