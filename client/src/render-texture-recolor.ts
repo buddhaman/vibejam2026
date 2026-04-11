@@ -1,12 +1,14 @@
 import * as THREE from "three";
 
 /**
- * CPU texture rewrite: strict red / cyan–blue hues → team hue, keeping each texel’s
- * saturation & lightness so gradients (flames, metal) read correctly.
- * Never use `texture.clone()` then assign `.image` (clones share `source`).
+ * CPU texture rewrite: strict bright red and cyan–blue marker texels → team hue; each texel keeps
+ * its saturation & lightness. Never use `texture.clone()` then assign `.image` (clones share `source`).
  */
 
 export const TEAM_TEX_RECOLOR_APPLIED = "teamTexRecolorApplied" as const;
+
+/** Set on a material’s `userData` when its maps should get `applyTeamColorTexturesToMarkedMeshes`. */
+export const TEAM_FACTION_TEX_MARK = "teamFactionTexRemap" as const;
 
 export type TeamTextureRecolorOptions = {
   /**
@@ -299,4 +301,27 @@ export function applyTeamColorTexturesToObject3D(
       }
     }
   });
+}
+
+/**
+ * Map/emissive hue remap on materials marked with `userData[TEAM_FACTION_TEX_MARK]`.
+ * Defaults like buildings: strict red and strict blue texels both use `primaryHex` (blue does not
+ * use the gold-shifted `secondaryHex`). Pass `{ blueChannelUsesSecondary: true }` for two-tone.
+ */
+export function applyTeamColorTexturesToMarkedMeshes(
+  meshes: readonly THREE.Mesh[],
+  primaryHex: number,
+  secondaryHex: number,
+  options?: TeamTextureRecolorOptions,
+): void {
+  const resolved: TeamTextureRecolorOptions = { blueChannelUsesSecondary: false, ...options };
+  for (const mesh of meshes) {
+    const raw = mesh.material;
+    const mats = Array.isArray(raw) ? raw : [raw];
+    for (const m of mats) {
+      if (!isTintableTexturedMaterial(m)) continue;
+      if (!m.userData[TEAM_FACTION_TEX_MARK]) continue;
+      applyTeamColorTexturesToMaterial(m, primaryHex, secondaryHex, resolved);
+    }
+  }
 }

@@ -84,6 +84,10 @@ World coordinates: server uses `x` / `y` for the 2D ground plane. Three.js uses 
 
 The server only updates numbers. The client interprets those numbers as a living world.
 
+## Visual Direction
+
+The current rendering target is a stylized RTS look: simple shapes, bold colors, and readable lighting instead of realistic PBR detail. The working art-direction notes live in [docs/art-style.md](/Users/tim/Code/vibejam/docs/art-style.md).
+
 ---
 
 ## Direction (not implemented yet)

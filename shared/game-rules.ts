@@ -82,7 +82,7 @@ export const GAME_RULES = {
   START_BIOMASS: 500,
   START_MATERIAL: 300,
   START_COMPUTE: 200,
-  /** Free Phalanx spawned with your first town center — does not affect barracks-trained warbands. */
+  /** Free Hoplite squad spawned with your first town center — does not affect barracks-trained warbands. */
   START_WARBAND_UNIT_COUNT: 800,
   BARRACKS_HEALTH: 200,
   TOWER_HEALTH: 300,
@@ -166,8 +166,8 @@ export const UNIT_RULES = {
     mergeDistance: 18,
   },
   [UnitType.WARBAND]: {
-    label: "Phalanx",
-    detail: "Elite hoplites",
+    label: "Hoplite",
+    detail: "Heavy melee squad",
     cost: { biomass: 80, material: 0, compute: 35 },
     trainTimeMs: 12000,
     health: 10,

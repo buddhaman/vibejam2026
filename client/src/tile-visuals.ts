@@ -3,6 +3,7 @@ import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
 import { TileType, getTileCenter } from "../../shared/game-rules.js";
 import { createInstancedVariantSet, syncInstancedVariantSet, type InstancedTransform, type InstancedVariant } from "./instancing.js";
 import type { Game } from "./game.js";
+import { applyStylizedShading, isStylizedLitMaterial } from "./stylized-shading.js";
 import type { TileView, TreeSlot } from "./terrain.js";
 
 const DATACENTER_GLB = "/models/buildings/datacenter.glb";
@@ -79,9 +80,10 @@ function meshPartsFromObject(root: THREE.Object3D): InstancedVariant["parts"] {
       const geometry = cloneGeometryGroup(obj.geometry, materialIndex);
       if (!geometry) continue;
       geometry.applyMatrix4(obj.matrixWorld);
+      const stylizedMaterial = isStylizedLitMaterial(material) ? applyStylizedShading(material.clone()) : material;
       parts.push({
         geometry,
-        material,
+        material: stylizedMaterial,
         castShadow: true,
         receiveShadow: true,
       });
@@ -92,8 +94,8 @@ function meshPartsFromObject(root: THREE.Object3D): InstancedVariant["parts"] {
 }
 
 function createDatacenterFallbackVariant(): InstancedVariant {
-  const baseMat = new THREE.MeshStandardMaterial({ color: 0xbec7d4, roughness: 0.92, metalness: 0.08 });
-  const accentMat = new THREE.MeshStandardMaterial({ color: 0x50616f, roughness: 0.84, metalness: 0.18 });
+  const baseMat = applyStylizedShading(new THREE.MeshStandardMaterial({ color: 0xbec7d4, roughness: 0.92, metalness: 0.08 }));
+  const accentMat = applyStylizedShading(new THREE.MeshStandardMaterial({ color: 0x50616f, roughness: 0.84, metalness: 0.18 }));
   return {
     parts: [
       {
@@ -117,10 +119,10 @@ function createDatacenterFallbackVariant(): InstancedVariant {
 }
 
 function createTreeVariants(): InstancedVariant[] {
-  const trunkMat = new THREE.MeshStandardMaterial({ color: 0x6d4324, roughness: 1, metalness: 0 });
-  const foliageMatA = new THREE.MeshStandardMaterial({ color: 0x4c7f38, roughness: 0.96, metalness: 0 });
-  const foliageMatB = new THREE.MeshStandardMaterial({ color: 0x5e8f42, roughness: 0.94, metalness: 0 });
-  const foliageMatC = new THREE.MeshStandardMaterial({ color: 0x6c9950, roughness: 0.94, metalness: 0 });
+  const trunkMat = applyStylizedShading(new THREE.MeshStandardMaterial({ color: 0x6d4324, roughness: 1, metalness: 0 }));
+  const foliageMatA = applyStylizedShading(new THREE.MeshStandardMaterial({ color: 0x4c7f38, roughness: 0.96, metalness: 0 }));
+  const foliageMatB = applyStylizedShading(new THREE.MeshStandardMaterial({ color: 0x5e8f42, roughness: 0.94, metalness: 0 }));
+  const foliageMatC = applyStylizedShading(new THREE.MeshStandardMaterial({ color: 0x6c9950, roughness: 0.94, metalness: 0 }));
 
   const trunk = new THREE.CylinderGeometry(0.22, 0.32, 2.5, 6).translate(0, 1.25, 0);
   const branchTrunk = new THREE.CylinderGeometry(0.2, 0.3, 2.9, 6).translate(0, 1.45, 0);

@@ -2,7 +2,7 @@ import { joinBattle, waitForSyncedGameState } from "./network.js";
 import { Game } from "./game.js";
 import { startRender } from "./render.js";
 import { ensureBuildingModelsLoaded } from "./building-model-registry.js";
-import { ensurePhalanxUnitModelLoaded } from "./phalanx-unit-model.js";
+import { ensureHopliteUnitModelLoaded } from "./hoplite-unit-model.js";
 import { ensureTileVisualAssetsLoaded } from "./tile-visuals.js";
 
 async function boot() {
@@ -13,7 +13,7 @@ async function boot() {
   await waitForSyncedGameState(room);
   await ensureBuildingModelsLoaded();
   await ensureTileVisualAssetsLoaded();
-  await ensurePhalanxUnitModelLoaded();
+  await ensureHopliteUnitModelLoaded();
   await game.streamTiles(); // request chunks sequentially until world is fully loaded
   startRender(game);
 }

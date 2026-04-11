@@ -13,19 +13,16 @@ import type { Game } from "./game.js";
 import { Entity, type SelectionInfo } from "./entity.js";
 import { createUnitBodyGeometry } from "./render-geom.js";
 import { getTerrainHeightAt } from "./terrain.js";
-import {
-  applyPhalanxTeamTextureReplacements,
-  createPhalanxInstancedMeshes,
-  hasPhalanxGlbMeshes,
-} from "./phalanx-unit-model.js";
-import { secondaryTeamHexFromPrimary } from "./render-texture-recolor.js";
+import { createHopliteInstancedMeshes, hasHopliteGlbMeshes } from "./hoplite-unit-model.js";
+import { applyTeamColorTexturesToMarkedMeshes, secondaryTeamHexFromPrimary } from "./render-texture-recolor.js";
+import { applyStylizedShading } from "./stylized-shading.js";
 
 const UNIT_GEOM = createUnitBodyGeometry();
-const UNIT_MAT = new THREE.MeshStandardMaterial({
+const UNIT_MAT = applyStylizedShading(new THREE.MeshStandardMaterial({
   color: 0xffffff,
   roughness: 0.82,
   metalness: 0.02,
-});
+}));
 const OVAL_FILL_GEOM = new THREE.CircleGeometry(1, 48);
 const OVAL_FILL_MAT = new THREE.MeshBasicMaterial({
   color: 0xffffff,
@@ -42,7 +39,7 @@ const OVAL_RING_MAT = new THREE.MeshBasicMaterial({
   depthWrite: false,
 });
 const DUMMY = new THREE.Object3D();
-/** Keep ≥ starter Phalanx size — dev server uses a larger START_WARBAND_UNIT_COUNT (see server config). */
+/** Keep ≥ starter Hoplite squad size — dev server uses a larger START_WARBAND_UNIT_COUNT (see server config). */
 const INSTANCE_CAP = import.meta.env.DEV
   ? 8192
   : Math.max(512, GAME_RULES.START_WARBAND_UNIT_COUNT);
@@ -95,7 +92,7 @@ const TEMP_OVAL_RING  = new THREE.Color();
 const TEMP_OVAL_FILL  = new THREE.Color();
 const _ovalHsl = { h: 0, s: 0, l: 0 };
 
-// ── Weapon / shield geometry (phalanx only) ───────────────────────────────────
+// ── Weapon / shield geometry (warband / hoplite only) ─────────────────────────
 /** Fraction of UNIT_HEIGHT where the shoulder joint sits. */
 const SHOULDER_H_FRAC = 0.78;
 /** Lateral shoulder offset as fraction of UNIT_RADIUS. */
@@ -152,10 +149,10 @@ export class BlobEntity extends Entity {
   private unitsVillager!: THREE.InstancedMesh;
   /** Invisible geometry so `Raycaster` can select villagers without pixel-hunting. */
   private villagerPickProxy!: THREE.Mesh;
-  /** One mesh (cylinder fallback) or multiple parts from `phalanx.glb`. */
-  private unitsPhalanx: THREE.InstancedMesh[] = [];
-  private phalanxTeamTexApplied = false;
-  /** Flat disc in the left hand of each phalanx soldier. */
+  /** One mesh (cylinder fallback) or multiple parts from `hoplite.glb`. */
+  private unitsHoplite: THREE.InstancedMesh[] = [];
+  private hopliteTeamTexApplied = false;
+  /** Flat disc in the left hand of each hoplite soldier. */
   private unitShield!: THREE.InstancedMesh;
   private ovalFill!: THREE.Mesh<THREE.CircleGeometry, THREE.MeshBasicMaterial>;
   private ovalRing!: THREE.Mesh<THREE.RingGeometry, THREE.MeshBasicMaterial>;
@@ -239,14 +236,14 @@ export class BlobEntity extends Entity {
     /** InstancedMesh frustum culling uses geometry bounds at origin, not instance positions — whole squad vanishes at some angles. */
     this.unitsVillager.frustumCulled = false;
 
-    this.unitsPhalanx = createPhalanxInstancedMeshes(INSTANCE_CAP);
-    if (this.unitsPhalanx.length === 0) {
+    this.unitsHoplite = createHopliteInstancedMeshes(INSTANCE_CAP);
+    if (this.unitsHoplite.length === 0) {
       const fallback = new THREE.InstancedMesh(UNIT_GEOM, UNIT_MAT.clone(), INSTANCE_CAP);
       fallback.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
       fallback.castShadow = true;
       fallback.receiveShadow = true;
       fallback.frustumCulled = false;
-      this.unitsPhalanx = [fallback];
+      this.unitsHoplite = [fallback];
     }
 
     this.ovalRoot = new THREE.Group();
@@ -274,9 +271,9 @@ export class BlobEntity extends Entity {
     this.villagerPickProxy.visible = false;
     this.villagerPickProxy.frustumCulled = false;
 
-    // Shield disc — flat cylinder in the left hand, one per phalanx unit
+    // Shield disc — flat cylinder in the left hand, one per warband unit
     const shieldGeom = new THREE.CylinderGeometry(SHIELD_RADIUS, SHIELD_RADIUS, SHIELD_THICKNESS, 18);
-    const shieldMat  = new THREE.MeshStandardMaterial({ color: 0xa8b4c0, roughness: 0.55, metalness: 0.38 });
+    const shieldMat  = applyStylizedShading(new THREE.MeshStandardMaterial({ color: 0xa8b4c0, roughness: 0.55, metalness: 0.38 }));
     this.unitShield  = new THREE.InstancedMesh(shieldGeom, shieldMat, INSTANCE_CAP);
     this.unitShield.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
     this.unitShield.castShadow    = true;
@@ -288,7 +285,7 @@ export class BlobEntity extends Entity {
     group.add(this.ovalRoot);
     group.add(this.unitsVillager);
     group.add(this.villagerPickProxy);
-    for (const m of this.unitsPhalanx) group.add(m);
+    for (const m of this.unitsHoplite) group.add(m);
     group.add(this.unitShield);
     return group;
   }
@@ -944,17 +941,17 @@ export class BlobEntity extends Entity {
     villagerMat.transparent = !this.isMine();
     this.villagerPickProxy.visible = isVillager;
 
-    if (!isVillager && this.unitsPhalanx.length > 0 && hasPhalanxGlbMeshes() && !this.phalanxTeamTexApplied) {
+    if (!isVillager && this.unitsHoplite.length > 0 && hasHopliteGlbMeshes() && !this.hopliteTeamTexApplied) {
       const primary = this.game.getPlayerColor(this.blob.ownerId);
-      applyPhalanxTeamTextureReplacements(
-        this.unitsPhalanx,
+      applyTeamColorTexturesToMarkedMeshes(
+        this.unitsHoplite,
         primary,
         secondaryTeamHexFromPrimary(primary)
       );
-      this.phalanxTeamTexApplied = true;
+      this.hopliteTeamTexApplied = true;
     }
 
-    for (const m of this.unitsPhalanx) {
+    for (const m of this.unitsHoplite) {
       m.count = !isVillager ? n : 0;
       m.visible = !isVillager;
       const pm = m.material as THREE.MeshStandardMaterial;
@@ -1130,7 +1127,7 @@ export class BlobEntity extends Entity {
       if (isVillager) {
         this.unitsVillager.setMatrixAt(i, DUMMY.matrix);
       } else {
-        for (const m of this.unitsPhalanx) {
+        for (const m of this.unitsHoplite) {
           m.setMatrixAt(i, DUMMY.matrix);
         }
       }
@@ -1160,7 +1157,7 @@ export class BlobEntity extends Entity {
         COLOR_LEG_BEAM
       );
 
-      // ── Sword (right arm) + Shield (left arm) — phalanx only ──────────────
+      // ── Sword (right arm) + Shield (left arm) — warband only ───────────────
       if (!isVillager) {
         const vs = unitRules.visualScale;
         const shoulderH    = GAME_RULES.UNIT_HEIGHT * SHOULDER_H_FRAC * vs;
@@ -1230,7 +1227,7 @@ export class BlobEntity extends Entity {
     }
     this.unitsVillager.instanceMatrix.needsUpdate = true;
     this.unitShield.instanceMatrix.needsUpdate = true;
-    for (const m of this.unitsPhalanx) m.instanceMatrix.needsUpdate = true;
+    for (const m of this.unitsHoplite) m.instanceMatrix.needsUpdate = true;
 
     this.updatePathLine(teamTint);
     this.updateTargetIndicator(Math.min(0.05, dt), terrainY);

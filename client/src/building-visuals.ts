@@ -1,5 +1,6 @@
 import * as THREE from "three";
 import { BuildingType, getBuildingRules, type BuildingType as BuildingTypeValue } from "../../shared/game-rules.js";
+import { applyStylizedShading } from "./stylized-shading.js";
 
 /** Materials we can player-tint in `BuildingEntity.render`. */
 export type TintableMaterial = THREE.MeshStandardMaterial | THREE.MeshPhysicalMaterial;
@@ -13,7 +14,7 @@ export type BuildingVariant = {
 export type BuildingSet = Record<BuildingTypeValue, BuildingVariant>;
 
 function createMaterial(color: number, roughness: number, metalness: number): THREE.MeshStandardMaterial {
-  return new THREE.MeshStandardMaterial({ color, roughness, metalness });
+  return applyStylizedShading(new THREE.MeshStandardMaterial({ color, roughness, metalness }));
 }
 
 function createBox(

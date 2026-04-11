@@ -1,4 +1,5 @@
 import * as THREE from "three";
+import { applyStylizedShading } from "./stylized-shading.js";
 
 const UP_AXIS = new THREE.Vector3(0, 1, 0);
 const TEMP_DIR = new THREE.Vector3();
@@ -12,11 +13,11 @@ export class BeamDrawer {
   private count = 0;
 
   public constructor(capacity: number) {
-    this.material = new THREE.MeshStandardMaterial({
+    this.material = applyStylizedShading(new THREE.MeshStandardMaterial({
       vertexColors: true,
       roughness: 0.9,
       metalness: 0.01,
-    });
+    }));
     this.root = new THREE.InstancedMesh(new THREE.BoxGeometry(1, 1, 1), this.material, capacity);
     this.root.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
     this.root.castShadow = true;

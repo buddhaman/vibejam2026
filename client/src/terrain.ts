@@ -1,5 +1,6 @@
 import * as THREE from "three";
 import { GAME_RULES, getTileCenter, getTileCoordsFromWorld, getTileKey } from "../../shared/game-rules.js";
+import { applyStylizedShading } from "./stylized-shading.js";
 
 export type TileView = {
   key: string;
@@ -192,11 +193,11 @@ export function createTerrainMesh(tiles: Iterable<TileView>): THREE.Mesh {
   geometry.setAttribute("color", new THREE.Float32BufferAttribute(colors, 3));
   geometry.computeVertexNormals();
 
-  const material = new THREE.MeshStandardMaterial({
+  const material = applyStylizedShading(new THREE.MeshStandardMaterial({
     vertexColors: true,
     roughness: 0.88,
     metalness: 0,
-  });
+  }));
 
   const mesh = new THREE.Mesh(geometry, material);
   mesh.receiveShadow = true;

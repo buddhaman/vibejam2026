@@ -1,11 +1,9 @@
 import * as THREE from "three";
 import { GAME_RULES, UnitType, type UnitType as UnitTypeValue } from "../../shared/game-rules.js";
 import { createUnitBodyGeometry } from "./render-geom.js";
-import {
-  applyPhalanxTeamTextureReplacements,
-  createPhalanxInstancedMeshes,
-} from "./phalanx-unit-model.js";
-import { secondaryTeamHexFromPrimary } from "./render-texture-recolor.js";
+import { createHopliteInstancedMeshes } from "./hoplite-unit-model.js";
+import { applyTeamColorTexturesToMarkedMeshes, secondaryTeamHexFromPrimary } from "./render-texture-recolor.js";
+import { applyStylizedShading } from "./stylized-shading.js";
 import type { TileView } from "./terrain.js";
 import { getTerrainHeightAt } from "./terrain.js";
 
@@ -73,23 +71,23 @@ export class RagdollFxSystem {
   public readonly root = new THREE.Group();
   private ragdolls: RagdollFx[] = [];
   private debris: DebrisFx[] = [];
-  private readonly torsoMaterial = new THREE.MeshStandardMaterial({
+  private readonly torsoMaterial = applyStylizedShading(new THREE.MeshStandardMaterial({
     color: 0xb7a079,
     roughness: 0.85,
     metalness: 0.05,
-  });
+  }));
   private readonly torsoCapacity = 512;
   private readonly torsoBanks = new Map<number, THREE.InstancedMesh[]>();
-  private readonly legMaterial = new THREE.MeshStandardMaterial({
+  private readonly legMaterial = applyStylizedShading(new THREE.MeshStandardMaterial({
     color: 0x181818,
     roughness: 0.95,
     metalness: 0.02,
-  });
-  private readonly swordMaterial = new THREE.MeshStandardMaterial({
+  }));
+  private readonly swordMaterial = applyStylizedShading(new THREE.MeshStandardMaterial({
     color: 0xd0d4dc,
     roughness: 0.5,
     metalness: 0.45,
-  });
+  }));
 
   public constructor() {}
 
@@ -275,13 +273,13 @@ export class RagdollFxSystem {
     const existing = this.torsoBanks.get(teamColor);
     if (existing) return existing;
 
-    const loadedParts = createPhalanxInstancedMeshes(this.torsoCapacity);
+    const loadedParts = createHopliteInstancedMeshes(this.torsoCapacity);
     const meshes =
       loadedParts.length > 0
         ? loadedParts
         : [new THREE.InstancedMesh(TORSO_GEOM, this.torsoMaterial.clone(), this.torsoCapacity)];
     if (loadedParts.length > 0) {
-      applyPhalanxTeamTextureReplacements(
+      applyTeamColorTexturesToMarkedMeshes(
         meshes,
         teamColor,
         secondaryTeamHexFromPrimary(teamColor)
@@ -380,11 +378,11 @@ export class RagdollFxSystem {
     const mesh = new THREE.Mesh(
       type === "shield" ? SHIELD_GEOM : SWORD_GEOM,
       type === "shield"
-        ? new THREE.MeshStandardMaterial({
+        ? applyStylizedShading(new THREE.MeshStandardMaterial({
             color: teamColor,
             roughness: 0.62,
             metalness: 0.18,
-          })
+          }))
         : this.swordMaterial
     );
     mesh.castShadow = true;

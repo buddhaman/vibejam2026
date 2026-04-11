@@ -2,6 +2,7 @@ import * as THREE from "three";
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
 import { BuildingType, getBuildingRules, type BuildingType as BuildingTypeValue } from "../../shared/game-rules.js";
 import { createProceduralBuildingSet, type BuildingSet, type BuildingVariant, type TintableMaterial } from "./building-visuals.js";
+import { applyStylizedShading, isStylizedLitMaterial, stylizeObjectMaterials } from "./stylized-shading.js";
 
 /**
  * Map each building type to a GLB under `client/public/` (served at site root).
@@ -54,9 +55,14 @@ function deepCloneMeshMaterials(root: THREE.Object3D): void {
     if (!(obj instanceof THREE.Mesh)) return;
     const m = obj.material;
     if (Array.isArray(m)) {
-      obj.material = m.map((mat) => (mat && "clone" in mat ? (mat as THREE.Material).clone() : mat!));
+      obj.material = m.map((mat) => {
+        if (!mat || !("clone" in mat)) return mat!;
+        const clone = (mat as THREE.Material).clone();
+        return isStylizedLitMaterial(clone) ? applyStylizedShading(clone) : clone;
+      });
     } else if (m && "clone" in m) {
-      obj.material = (m as THREE.Material).clone();
+      const clone = (m as THREE.Material).clone();
+      obj.material = isStylizedLitMaterial(clone) ? applyStylizedShading(clone) : clone;
     }
   });
 }
@@ -91,6 +97,7 @@ function variantFromGltfScene(source: THREE.Object3D, buildingType: BuildingType
       obj.receiveShadow = true;
     }
   });
+  stylizeObjectMaterials(root);
 
   const rules = getBuildingRules(buildingType);
   fitGroundAndCenterXZ(root, rules.height);
@@ -146,6 +153,7 @@ function cloneBuildingVariant(template: BuildingVariant): BuildingVariant {
       obj.receiveShadow = true;
     }
   });
+  stylizeObjectMaterials(root);
   return { root, ...classifyMaterials(root) };
 }
 

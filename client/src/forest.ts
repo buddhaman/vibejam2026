@@ -1,6 +1,7 @@
 import * as THREE from "three";
 import { TileType, getTileCenter } from "../../shared/game-rules.js";
 import { createInstancedVariantSet, syncInstancedVariantSet, type InstancedTransform, type InstancedVariant } from "./instancing.js";
+import { applyStylizedShading } from "./stylized-shading.js";
 import type { TileView } from "./terrain.js";
 
 function hash(n: number) {
@@ -13,10 +14,10 @@ function treeJitter(seed: number, index: number) {
 }
 
 function createTreeVariants() {
-  const trunkMat = new THREE.MeshStandardMaterial({ color: 0x6d4324, roughness: 1, metalness: 0 });
-  const foliageMatA = new THREE.MeshStandardMaterial({ color: 0x4c7f38, roughness: 0.96, metalness: 0 });
-  const foliageMatB = new THREE.MeshStandardMaterial({ color: 0x5e8f42, roughness: 0.94, metalness: 0 });
-  const foliageMatC = new THREE.MeshStandardMaterial({ color: 0x6c9950, roughness: 0.94, metalness: 0 });
+  const trunkMat = applyStylizedShading(new THREE.MeshStandardMaterial({ color: 0x6d4324, roughness: 1, metalness: 0 }));
+  const foliageMatA = applyStylizedShading(new THREE.MeshStandardMaterial({ color: 0x4c7f38, roughness: 0.96, metalness: 0 }));
+  const foliageMatB = applyStylizedShading(new THREE.MeshStandardMaterial({ color: 0x5e8f42, roughness: 0.94, metalness: 0 }));
+  const foliageMatC = applyStylizedShading(new THREE.MeshStandardMaterial({ color: 0x6c9950, roughness: 0.94, metalness: 0 }));
 
   const trunk = new THREE.CylinderGeometry(0.22, 0.32, 2.5, 6).translate(0, 1.25, 0);
   const branchTrunk = new THREE.CylinderGeometry(0.2, 0.3, 2.9, 6).translate(0, 1.45, 0);
