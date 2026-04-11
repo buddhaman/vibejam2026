@@ -13,7 +13,12 @@ import type { Game } from "./game.js";
 import { Entity, type SelectionInfo } from "./entity.js";
 import { createUnitBodyGeometry } from "./render-geom.js";
 import { getTerrainHeightAt } from "./terrain.js";
-import { createHopliteInstancedMeshes, hasHopliteGlbMeshes } from "./hoplite-unit-model.js";
+import {
+  createVillagerInstancedMeshes,
+  createWarbandInstancedMeshes,
+  hasVillagerInstancedGlb,
+  hasWarbandInstancedGlb,
+} from "./unit-instanced-models.js";
 import { applyTeamColorTexturesToMarkedMeshes, secondaryTeamHexFromPrimary } from "./render-texture-recolor.js";
 import { applyStylizedShading } from "./stylized-shading.js";
 
@@ -146,13 +151,15 @@ type UnitState = {
 export class BlobEntity extends Entity {
   public mesh: THREE.Group;
   private ovalRoot!: THREE.Group;
-  private unitsVillager!: THREE.InstancedMesh;
+  /** Cylinder fallback or instanced parts from `agent.glb`. */
+  private unitsAgent: THREE.InstancedMesh[] = [];
+  private agentTeamTexApplied = false;
   /** Invisible geometry so `Raycaster` can select villagers without pixel-hunting. */
   private villagerPickProxy!: THREE.Mesh;
   /** One mesh (cylinder fallback) or multiple parts from `hoplite.glb`. */
-  private unitsHoplite: THREE.InstancedMesh[] = [];
-  private hopliteTeamTexApplied = false;
-  /** Flat disc in the left hand of each hoplite soldier. */
+  private unitsWarband: THREE.InstancedMesh[] = [];
+  private warbandTeamTexApplied = false;
+  /** Flat disc in the left hand of each warband soldier. */
   private unitShield!: THREE.InstancedMesh;
   private ovalFill!: THREE.Mesh<THREE.CircleGeometry, THREE.MeshBasicMaterial>;
   private ovalRing!: THREE.Mesh<THREE.RingGeometry, THREE.MeshBasicMaterial>;
@@ -229,21 +236,24 @@ export class BlobEntity extends Entity {
   }
 
   protected createMesh(): THREE.Group {
-    this.unitsVillager = new THREE.InstancedMesh(UNIT_GEOM, UNIT_MAT.clone(), INSTANCE_CAP);
-    this.unitsVillager.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
-    this.unitsVillager.castShadow = true;
-    this.unitsVillager.receiveShadow = true;
-    /** InstancedMesh frustum culling uses geometry bounds at origin, not instance positions — whole squad vanishes at some angles. */
-    this.unitsVillager.frustumCulled = false;
-
-    this.unitsHoplite = createHopliteInstancedMeshes(INSTANCE_CAP);
-    if (this.unitsHoplite.length === 0) {
+    this.unitsAgent = createVillagerInstancedMeshes(INSTANCE_CAP);
+    if (this.unitsAgent.length === 0) {
       const fallback = new THREE.InstancedMesh(UNIT_GEOM, UNIT_MAT.clone(), INSTANCE_CAP);
       fallback.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
       fallback.castShadow = true;
       fallback.receiveShadow = true;
       fallback.frustumCulled = false;
-      this.unitsHoplite = [fallback];
+      this.unitsAgent = [fallback];
+    }
+
+    this.unitsWarband = createWarbandInstancedMeshes(INSTANCE_CAP);
+    if (this.unitsWarband.length === 0) {
+      const fallback = new THREE.InstancedMesh(UNIT_GEOM, UNIT_MAT.clone(), INSTANCE_CAP);
+      fallback.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+      fallback.castShadow = true;
+      fallback.receiveShadow = true;
+      fallback.frustumCulled = false;
+      this.unitsWarband = [fallback];
     }
 
     this.ovalRoot = new THREE.Group();
@@ -283,9 +293,9 @@ export class BlobEntity extends Entity {
 
     const group = new THREE.Group();
     group.add(this.ovalRoot);
-    group.add(this.unitsVillager);
+    for (const m of this.unitsAgent) group.add(m);
     group.add(this.villagerPickProxy);
-    for (const m of this.unitsHoplite) group.add(m);
+    for (const m of this.unitsWarband) group.add(m);
     group.add(this.unitShield);
     return group;
   }
@@ -933,25 +943,39 @@ export class BlobEntity extends Entity {
     const isVillager = this.blob.unitType === UnitType.VILLAGER;
     const n = Math.min(this.blob.unitCount, INSTANCE_CAP);
 
-    this.unitsVillager.count = isVillager ? n : 0;
-    this.unitsVillager.visible = isVillager;
-    const villagerMat = this.unitsVillager.material as THREE.MeshStandardMaterial;
-    villagerMat.color.copy(teamTint).offsetHSL(0, 0.02, 0.02);
-    villagerMat.opacity = this.isMine() ? 1 : 0.68;
-    villagerMat.transparent = !this.isMine();
     this.villagerPickProxy.visible = isVillager;
 
-    if (!isVillager && this.unitsHoplite.length > 0 && hasHopliteGlbMeshes() && !this.hopliteTeamTexApplied) {
+    if (isVillager && this.unitsAgent.length > 0 && hasVillagerInstancedGlb() && !this.agentTeamTexApplied) {
       const primary = this.game.getPlayerColor(this.blob.ownerId);
       applyTeamColorTexturesToMarkedMeshes(
-        this.unitsHoplite,
+        this.unitsAgent,
         primary,
         secondaryTeamHexFromPrimary(primary)
       );
-      this.hopliteTeamTexApplied = true;
+      this.agentTeamTexApplied = true;
     }
 
-    for (const m of this.unitsHoplite) {
+    if (!isVillager && this.unitsWarband.length > 0 && hasWarbandInstancedGlb() && !this.warbandTeamTexApplied) {
+      const primary = this.game.getPlayerColor(this.blob.ownerId);
+      applyTeamColorTexturesToMarkedMeshes(
+        this.unitsWarband,
+        primary,
+        secondaryTeamHexFromPrimary(primary)
+      );
+      this.warbandTeamTexApplied = true;
+    }
+
+    const villagerGlb = hasVillagerInstancedGlb();
+    for (const m of this.unitsAgent) {
+      m.count = isVillager ? n : 0;
+      m.visible = isVillager;
+      const pm = m.material as THREE.MeshStandardMaterial;
+      pm.opacity = this.isMine() ? 1 : 0.68;
+      pm.transparent = !this.isMine();
+      if (!villagerGlb) pm.color.copy(teamTint).offsetHSL(0, 0.02, 0.02);
+    }
+
+    for (const m of this.unitsWarband) {
       m.count = !isVillager ? n : 0;
       m.visible = !isVillager;
       const pm = m.material as THREE.MeshStandardMaterial;
@@ -1125,11 +1149,9 @@ export class BlobEntity extends Entity {
       DUMMY.scale.setScalar(unitRules.visualScale);
       DUMMY.updateMatrix();
       if (isVillager) {
-        this.unitsVillager.setMatrixAt(i, DUMMY.matrix);
+        for (const m of this.unitsAgent) m.setMatrixAt(i, DUMMY.matrix);
       } else {
-        for (const m of this.unitsHoplite) {
-          m.setMatrixAt(i, DUMMY.matrix);
-        }
+        for (const m of this.unitsWarband) m.setMatrixAt(i, DUMMY.matrix);
       }
 
       const hipOffsetX = sideX * HIP_WIDTH * unitRules.visualScale;
@@ -1225,9 +1247,9 @@ export class BlobEntity extends Entity {
         this.unitShield.setMatrixAt(i, DUMMY.matrix);
       }
     }
-    this.unitsVillager.instanceMatrix.needsUpdate = true;
+    for (const m of this.unitsAgent) m.instanceMatrix.needsUpdate = true;
     this.unitShield.instanceMatrix.needsUpdate = true;
-    for (const m of this.unitsHoplite) m.instanceMatrix.needsUpdate = true;
+    for (const m of this.unitsWarband) m.instanceMatrix.needsUpdate = true;
 
     this.updatePathLine(teamTint);
     this.updateTargetIndicator(Math.min(0.05, dt), terrainY);
@@ -1409,7 +1431,7 @@ export class BlobEntity extends Entity {
     return {
       title: unitRules.label,
       detail: enemy
-        ? `Enemy${this.blob.engagedTargetBlobId ? " · Engaged" : ""} · ${this.blob.unitType === UnitType.VILLAGER ? "gatherer" : `${this.blob.unitCount} units`}`
+        ? `Enemy${this.blob.engagedTargetBlobId ? " · Engaged" : ""} · ${this.blob.unitType === UnitType.VILLAGER ? "agent" : `${this.blob.unitCount} units`}`
         : this.blob.unitType === UnitType.VILLAGER
           ? this.blob.engagedTargetBlobId ? "Engaged" : "Can gather resources"
           : `${this.blob.unitCount} units${this.blob.engagedTargetBlobId ? " · Engaged" : ""}`,

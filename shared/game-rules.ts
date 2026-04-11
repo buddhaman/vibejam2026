@@ -153,7 +153,7 @@ export const BUILDING_RULES = {
 
 export const UNIT_RULES = {
   [UnitType.VILLAGER]: {
-    label: "Helot",
+    label: "Agent",
     detail: "Resource Gatherer",
     cost: { biomass: 50, material: 0, compute: 0 },
     trainTimeMs: 9000,

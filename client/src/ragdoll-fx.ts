@@ -1,7 +1,7 @@
 import * as THREE from "three";
 import { GAME_RULES, UnitType, type UnitType as UnitTypeValue } from "../../shared/game-rules.js";
 import { createUnitBodyGeometry } from "./render-geom.js";
-import { createHopliteInstancedMeshes } from "./hoplite-unit-model.js";
+import { createVillagerInstancedMeshes, createWarbandInstancedMeshes } from "./unit-instanced-models.js";
 import { applyTeamColorTexturesToMarkedMeshes, secondaryTeamHexFromPrimary } from "./render-texture-recolor.js";
 import { applyStylizedShading } from "./stylized-shading.js";
 import type { TileView } from "./terrain.js";
@@ -56,6 +56,7 @@ type RagdollFx = {
   ttl: number;
   torsoScale: number;
   teamColor: number;
+  unitType: UnitTypeValue;
 };
 
 type DebrisFx = {
@@ -77,7 +78,7 @@ export class RagdollFxSystem {
     metalness: 0.05,
   }));
   private readonly torsoCapacity = 512;
-  private readonly torsoBanks = new Map<number, THREE.InstancedMesh[]>();
+  private readonly torsoBanks = new Map<string, THREE.InstancedMesh[]>();
   private readonly legMaterial = applyStylizedShading(new THREE.MeshStandardMaterial({
     color: 0x181818,
     roughness: 0.95,
@@ -168,6 +169,7 @@ export class RagdollFxSystem {
       ttl: TORSO_SETTLE_TIME + Math.random() * 2,
       torsoScale: params.unitType === UnitType.VILLAGER ? 0.82 : 1,
       teamColor: params.teamColor,
+      unitType: params.unitType,
     });
 
     if (params.unitType !== UnitType.VILLAGER) {
@@ -209,12 +211,13 @@ export class RagdollFxSystem {
     for (const meshes of this.torsoBanks.values()) {
       for (const mesh of meshes) mesh.count = 0;
     }
-    const torsoCounts = new Map<number, number>();
+    const torsoCounts = new Map<string, number>();
     for (const ragdoll of this.ragdolls) {
-      const meshes = this.getTorsoParts(ragdoll.teamColor);
-      const index = torsoCounts.get(ragdoll.teamColor) ?? 0;
+      const bankKey = this.torsoBankKey(ragdoll.teamColor, ragdoll.unitType);
+      const meshes = this.getTorsoParts(ragdoll.teamColor, ragdoll.unitType);
+      const index = torsoCounts.get(bankKey) ?? 0;
       this.renderRagdoll(ragdoll, meshes, index);
-      torsoCounts.set(ragdoll.teamColor, index + 1);
+      torsoCounts.set(bankKey, index + 1);
     }
     for (const meshes of this.torsoBanks.values()) {
       for (const mesh of meshes) {
@@ -269,11 +272,19 @@ export class RagdollFxSystem {
     };
   }
 
-  private getTorsoParts(teamColor: number): THREE.InstancedMesh[] {
-    const existing = this.torsoBanks.get(teamColor);
+  private torsoBankKey(teamColor: number, unitType: UnitTypeValue): string {
+    return `${teamColor}:${unitType}`;
+  }
+
+  private getTorsoParts(teamColor: number, unitType: UnitTypeValue): THREE.InstancedMesh[] {
+    const key = this.torsoBankKey(teamColor, unitType);
+    const existing = this.torsoBanks.get(key);
     if (existing) return existing;
 
-    const loadedParts = createHopliteInstancedMeshes(this.torsoCapacity);
+    const loadedParts =
+      unitType === UnitType.VILLAGER
+        ? createVillagerInstancedMeshes(this.torsoCapacity)
+        : createWarbandInstancedMeshes(this.torsoCapacity);
     const meshes =
       loadedParts.length > 0
         ? loadedParts
@@ -293,7 +304,7 @@ export class RagdollFxSystem {
       mesh.count = 0;
       this.root.add(mesh);
     }
-    this.torsoBanks.set(teamColor, meshes);
+    this.torsoBanks.set(key, meshes);
     return meshes;
   }
 

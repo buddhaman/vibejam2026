@@ -1,17 +1,33 @@
 import * as THREE from "three";
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
-import { GAME_RULES } from "../../shared/game-rules.js";
+import { GAME_RULES, UnitType, getUnitRules } from "../../shared/game-rules.js";
 import { TEAM_FACTION_TEX_MARK, textureLikelyHasBrightFactionColors } from "./render-texture-recolor.js";
 import { applyStylizedShading } from "./stylized-shading.js";
 
-const HOPLITE_GLB = "/models/buildings/hoplite.glb";
-
-export type HoplitePartTemplate = {
+export type UnitPartTemplate = {
   geometry: THREE.BufferGeometry;
   baseMaterial: THREE.MeshStandardMaterial;
 };
 
-let templates: HoplitePartTemplate[] | null = null;
+type UnitSlot = "warband" | "villager";
+
+const GLB_URL: Record<UnitSlot, string> = {
+  warband: "/models/buildings/hoplite.glb",
+  villager: "/models/buildings/agent.glb",
+};
+
+const templates: Record<UnitSlot, UnitPartTemplate[] | null> = {
+  warband: null,
+  villager: null,
+};
+
+let ensurePromise: Promise<void> | null = null;
+
+function targetHeightForSlot(slot: UnitSlot): number {
+  const rules =
+    slot === "villager" ? getUnitRules(UnitType.VILLAGER) : getUnitRules(UnitType.WARBAND);
+  return GAME_RULES.UNIT_HEIGHT * rules.visualScale * 1.08;
+}
 
 function fitGroundCenterScaleY(root: THREE.Object3D, targetHeight: number): void {
   root.updateMatrixWorld(true);
@@ -33,16 +49,17 @@ function fitGroundCenterScaleY(root: THREE.Object3D, targetHeight: number): void
 function toStandardMaterial(m: THREE.Material): THREE.MeshStandardMaterial {
   if (m instanceof THREE.MeshStandardMaterial) return applyStylizedShading(m.clone());
   if (m instanceof THREE.MeshPhysicalMaterial) {
-    const s = applyStylizedShading(new THREE.MeshStandardMaterial({
-      color: m.color,
-      map: m.map,
-      normalMap: m.normalMap,
-      roughness: m.roughness,
-      metalness: m.metalness,
-      emissive: m.emissive,
-      emissiveMap: m.emissiveMap,
-    }));
-    return s;
+    return applyStylizedShading(
+      new THREE.MeshStandardMaterial({
+        color: m.color,
+        map: m.map,
+        normalMap: m.normalMap,
+        roughness: m.roughness,
+        metalness: m.metalness,
+        emissive: m.emissive,
+        emissiveMap: m.emissiveMap,
+      }),
+    );
   }
   return applyStylizedShading(new THREE.MeshStandardMaterial({ color: 0xdddddd, roughness: 0.78, metalness: 0.08 }));
 }
@@ -70,7 +87,6 @@ function isRedFabricColor(color: THREE.Color, loose: boolean): boolean {
 const FABRIC_NAME =
   /cape|cloak|mantle|robe|fabric|cloth|banner|plume|feather|skirt|tabard|sash|trim|lining|undershirt/i;
 
-/** Meshes that are unlikely to be recolorable livery (auto scan only). */
 const SKIP_AUTO_TEX_REMAP =
   /skin|face|hair|scalp|metal|steel|iron|chain|buckler|wood|leather|eye|teeth|mouth|pupil|lash|brow/i;
 
@@ -88,8 +104,8 @@ function markTeamTextureRemap(std: THREE.MeshStandardMaterial, label: string): v
   }
 }
 
-function extractTemplates(root: THREE.Group): HoplitePartTemplate[] {
-  const out: HoplitePartTemplate[] = [];
+function extractTemplates(root: THREE.Group): UnitPartTemplate[] {
+  const out: UnitPartTemplate[] = [];
   root.updateMatrixWorld(true);
   root.traverse((obj) => {
     if (!(obj instanceof THREE.Mesh)) return;
@@ -105,12 +121,13 @@ function extractTemplates(root: THREE.Group): HoplitePartTemplate[] {
   return out;
 }
 
-/** Builds shared geometries + prototype materials (one load for the whole app). */
-export async function ensureHopliteUnitModelLoaded(): Promise<void> {
-  if (templates !== null) return;
+async function loadSlot(slot: UnitSlot): Promise<void> {
+  if (templates[slot] !== null) return;
+  const url = GLB_URL[slot];
+  const logTag = `[unit-model:${slot}]`;
   const loader = new GLTFLoader();
   try {
-    const gltf = await loader.loadAsync(HOPLITE_GLB);
+    const gltf = await loader.loadAsync(url);
     const root = gltf.scene as THREE.Group;
     root.traverse((obj) => {
       if (obj instanceof THREE.Mesh) {
@@ -118,28 +135,33 @@ export async function ensureHopliteUnitModelLoaded(): Promise<void> {
         obj.receiveShadow = true;
       }
     });
-    fitGroundCenterScaleY(root, GAME_RULES.UNIT_HEIGHT * 1.08);
-    templates = extractTemplates(root);
-    if (templates.length === 0) {
-      console.warn(`[hoplite-unit] "${HOPLITE_GLB}" has no meshes — warbands use placeholder.`);
-      templates = [];
+    fitGroundCenterScaleY(root, targetHeightForSlot(slot));
+    const parts = extractTemplates(root);
+    if (parts.length === 0) {
+      console.warn(`${logTag} "${url}" has no meshes — using placeholder.`);
+      templates[slot] = [];
     } else {
-      const remapParts = templates.filter((t) => t.baseMaterial.userData[TEAM_FACTION_TEX_MARK]).length;
-      console.log(
-        `[hoplite-unit] Loaded ${templates.length} mesh part(s) from ${HOPLITE_GLB} (${remapParts} with faction texture remap)`
-      );
+      const remapParts = parts.filter((t) => t.baseMaterial.userData[TEAM_FACTION_TEX_MARK]).length;
+      console.log(`${logTag} Loaded ${parts.length} mesh part(s) from ${url} (${remapParts} with faction texture remap)`);
+      templates[slot] = parts;
     }
   } catch (e) {
-    console.warn(`[hoplite-unit] Failed to load ${HOPLITE_GLB}`, e);
-    templates = [];
+    console.warn(`${logTag} Failed to load ${url}`, e);
+    templates[slot] = [];
   }
 }
 
-/** Geometries are shared; clone `baseMaterial` per squad. */
-export function createHopliteInstancedMeshes(capacity: number): THREE.InstancedMesh[] {
-  if (!templates || templates.length === 0) return [];
-  return templates.map((t) => {
-    const mesh = new THREE.InstancedMesh(t.geometry, applyStylizedShading(t.baseMaterial.clone()), capacity);
+/** Loads warband (`hoplite.glb`) and villager (`agent.glb`) templates once. */
+export async function ensureUnitInstancedModelsLoaded(): Promise<void> {
+  ensurePromise ??= Promise.all([loadSlot("warband"), loadSlot("villager")]).then(() => undefined);
+  await ensurePromise;
+}
+
+function createInstancedMeshesForSlot(slot: UnitSlot, capacity: number): THREE.InstancedMesh[] {
+  const t = templates[slot];
+  if (!t || t.length === 0) return [];
+  return t.map((part) => {
+    const mesh = new THREE.InstancedMesh(part.geometry, applyStylizedShading(part.baseMaterial.clone()), capacity);
     mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
     mesh.count = 0;
     mesh.castShadow = true;
@@ -149,6 +171,18 @@ export function createHopliteInstancedMeshes(capacity: number): THREE.InstancedM
   });
 }
 
-export function hasHopliteGlbMeshes(): boolean {
-  return templates !== null && templates.length > 0;
+export function createWarbandInstancedMeshes(capacity: number): THREE.InstancedMesh[] {
+  return createInstancedMeshesForSlot("warband", capacity);
+}
+
+export function createVillagerInstancedMeshes(capacity: number): THREE.InstancedMesh[] {
+  return createInstancedMeshesForSlot("villager", capacity);
+}
+
+export function hasWarbandInstancedGlb(): boolean {
+  return templates.warband !== null && templates.warband.length > 0;
+}
+
+export function hasVillagerInstancedGlb(): boolean {
+  return templates.villager !== null && templates.villager.length > 0;
 }
