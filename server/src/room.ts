@@ -14,6 +14,7 @@ import {
   getTileCoordsFromWorld,
   getTileKey,
   getBuildingRules,
+  getBlobMoveRules,
   getUnitBalanceRules,
   getUnitRules,
   getSquadRadius,
@@ -96,6 +97,13 @@ export class BattleRoom extends Room<{ state: GameState }> {
       }
       const blob = this.state.blobs.get(msg.blobId);
       if (!blob || blob.ownerId !== client.sessionId) return;
+      const engagedTarget =
+        blob.engagedTargetBlobId.length > 0 ? this.state.blobs.get(blob.engagedTargetBlobId) : null;
+      if (engagedTarget && engagedTarget.ownerId !== blob.ownerId && !this.canBlobInstantlyDisengage(blob, engagedTarget)) {
+        blob.attackTargetBlobId = "";
+        this.setBlobDestination(blob, msg.targetX, msg.targetY, client);
+        return;
+      }
       this.clearBlobCombatState(blob);
       blob.attackTargetBlobId = "";
       this.setBlobDestination(blob, msg.targetX, msg.targetY, client);
@@ -247,6 +255,7 @@ export class BattleRoom extends Room<{ state: GameState }> {
    * If they issued a move (flee) and are not attacking this enemy, stay disengaged even when overlapping.
    */
   private defenderAllowsEngagement(defender: Blob, attacker: Blob): boolean {
+    if (this.blobsCanEngage(defender, attacker)) return true;
     if (defender.attackTargetBlobId === attacker.id) return true;
     const moveSlack = CONFIG.BLOB_STOP_EPSILON * 2.5;
     const hasActiveMove =
@@ -276,6 +285,96 @@ export class BattleRoom extends Room<{ state: GameState }> {
     } satisfies PathMessage);
   }
 
+  private blobHasRetreatIntent(blob: Blob): boolean {
+    if (!this.blobPaths.has(blob.id)) return false;
+    return Math.hypot(blob.targetX - blob.x, blob.targetY - blob.y) > CONFIG.BLOB_STOP_EPSILON * 2.5;
+  }
+
+  private canBlobInstantlyDisengage(blob: Blob, target: Blob): boolean {
+    const rules = getBlobMoveRules(blob.unitType);
+    return rules.canAlwaysDisengage && blob.unitType !== target.unitType;
+  }
+
+  private advanceBlobAlongPath(blob: Blob, dt: number, speedScale = 1): boolean {
+    let pathData = this.blobPaths.get(blob.id);
+    if (pathData && pathData.index < pathData.waypoints.length) {
+      const wp = pathData.waypoints[pathData.index]!;
+      const waypointDist = Math.hypot(blob.x - wp.x, blob.y - wp.y);
+      const reachRadius = pathData.index === pathData.waypoints.length - 1 ? CONFIG.BLOB_STOP_EPSILON : WAYPOINT_REACH;
+      if (waypointDist < reachRadius) pathData.index++;
+    }
+
+    if (!pathData || pathData.index >= pathData.waypoints.length) {
+      this.clearBlobPath(blob);
+      const currentSpeed = Math.hypot(blob.vx, blob.vy);
+      const slowDown = Math.max(0, 1 - dt * 18);
+      blob.vx *= slowDown;
+      blob.vy *= slowDown;
+      if (Math.hypot(blob.vx, blob.vy) < 0.05) {
+        blob.vx = 0;
+        blob.vy = 0;
+      }
+      if (Math.hypot(blob.targetX - blob.x, blob.targetY - blob.y) < CONFIG.BLOB_STOP_EPSILON && currentSpeed < 0.75) {
+        blob.x = blob.targetX;
+        blob.y = blob.targetY;
+      }
+      return false;
+    }
+
+    const next = pathData.waypoints[pathData.index]!;
+    const isFinalWaypoint = pathData.index === pathData.waypoints.length - 1;
+    const dx = next.x - blob.x;
+    const dy = next.y - blob.y;
+    const dist = Math.hypot(dx, dy);
+    const currentSpeed = Math.hypot(blob.vx, blob.vy);
+    const rules = getBlobMoveRules(blob.unitType);
+
+    if (isFinalWaypoint && dist < CONFIG.BLOB_STOP_EPSILON && currentSpeed < 0.75) {
+      blob.x = blob.targetX;
+      blob.y = blob.targetY;
+      blob.vx = 0;
+      blob.vy = 0;
+      this.clearBlobPath(blob);
+      return false;
+    }
+
+    const desiredSpeed = isFinalWaypoint && dist < rules.decelerationRadius
+      ? rules.moveSpeed * speedScale * Math.max(0, dist / rules.decelerationRadius)
+      : rules.moveSpeed * speedScale;
+
+    const nx = dist > 0.0001 ? dx / dist : 0;
+    const ny = dist > 0.0001 ? dy / dist : 0;
+    const desiredVx = nx * desiredSpeed;
+    const desiredVy = ny * desiredSpeed;
+    const deltaVx = desiredVx - blob.vx;
+    const deltaVy = desiredVy - blob.vy;
+    const deltaSpeed = Math.hypot(deltaVx, deltaVy);
+    const accel = desiredSpeed > currentSpeed ? rules.acceleration : rules.acceleration * 1.6;
+    const maxDelta = accel * dt;
+
+    if (deltaSpeed <= maxDelta || deltaSpeed === 0) {
+      blob.vx = desiredVx;
+      blob.vy = desiredVy;
+    } else {
+      blob.vx += (deltaVx / deltaSpeed) * maxDelta;
+      blob.vy += (deltaVy / deltaSpeed) * maxDelta;
+    }
+
+    blob.x += blob.vx * dt;
+    blob.y += blob.vy * dt;
+    blob.x = clamp(blob.x, CONFIG.WORLD_MIN, CONFIG.WORLD_MAX);
+    blob.y = clamp(blob.y, CONFIG.WORLD_MIN, CONFIG.WORLD_MAX);
+
+    if (isFinalWaypoint && Math.hypot(blob.targetX - blob.x, blob.targetY - blob.y) < CONFIG.BLOB_STOP_EPSILON) {
+      blob.x = blob.targetX;
+      blob.y = blob.targetY;
+      blob.vx = 0;
+      blob.vy = 0;
+      this.clearBlobPath(blob);
+    }
+    return true;
+  }
+
   /**
    * Mutually engaged blobs march toward a shared center until centers coincide (stacked fight).
    * Velocity is set each tick for sync; paths stay cleared.
@@ -292,6 +391,42 @@ export class BattleRoom extends Room<{ state: GameState }> {
       const pairKey = `${a.id}:${b.id}`;
       if (seen.has(pairKey)) continue;
       seen.add(pairKey);
+
+      const aRetreating = this.blobHasRetreatIntent(a);
+      const bRetreating = this.blobHasRetreatIntent(b);
+
+      if (aRetreating && bRetreating) {
+        this.clearBlobCombatState(a);
+        this.clearBlobCombatState(b);
+        continue;
+      }
+
+      const retreating = aRetreating ? a : bRetreating ? b : null;
+      const pinned = retreating === a ? b : a;
+      if (retreating && this.canBlobInstantlyDisengage(retreating, pinned)) {
+        this.clearBlobCombatState(retreating);
+        this.clearBlobCombatState(pinned);
+        continue;
+      }
+
+      if (retreating) {
+        const moved = this.advanceBlobAlongPath(
+          retreating,
+          dt,
+          getBlobMoveRules(retreating.unitType).retreatSpeedMultiplier
+        );
+        if (!moved) {
+          retreating.vx = 0;
+          retreating.vy = 0;
+        }
+        pinned.x = retreating.x;
+        pinned.y = retreating.y;
+        pinned.vx = retreating.vx;
+        pinned.vy = retreating.vy;
+        pinned.targetX = retreating.x;
+        pinned.targetY = retreating.y;
+        continue;
+      }
 
       this.clearBlobPath(a);
       this.clearBlobPath(b);
@@ -511,96 +646,10 @@ export class BattleRoom extends Room<{ state: GameState }> {
 
     for (const blob of this.state.blobs.values()) {
       if (engagedBlobIds.has(blob.id)) {
-        this.clearBlobPath(blob);
         continue;
       }
-
-      let pathData = this.blobPaths.get(blob.id);
-      if (pathData && pathData.index < pathData.waypoints.length) {
-        const wp = pathData.waypoints[pathData.index]!;
-        const waypointDist = Math.hypot(blob.x - wp.x, blob.y - wp.y);
-        const reachRadius  = pathData.index === pathData.waypoints.length - 1
-          ? CONFIG.BLOB_STOP_EPSILON
-          : WAYPOINT_REACH;
-
-        if (waypointDist < reachRadius) {
-          pathData.index++;
-        }
-      }
-
-      if (!pathData || pathData.index >= pathData.waypoints.length) {
-        this.clearBlobPath(blob);
-        const currentSpeed = Math.hypot(blob.vx, blob.vy);
-        const slowDown = Math.max(0, 1 - dt * 10);
-        blob.vx *= slowDown;
-        blob.vy *= slowDown;
-        if (Math.hypot(blob.vx, blob.vy) < 0.05) {
-          blob.vx = 0;
-          blob.vy = 0;
-        }
-        if (Math.hypot(blob.targetX - blob.x, blob.targetY - blob.y) < CONFIG.BLOB_STOP_EPSILON && currentSpeed < 0.75) {
-          blob.x = blob.targetX;
-          blob.y = blob.targetY;
-          this.tryVillagerGather(blob, dt);
-        }
-        continue;
-      }
-
-      const next = pathData.waypoints[pathData.index]!;
-      const moveX = next.x;
-      const moveY = next.y;
-      const isFinalWaypoint = pathData.index === pathData.waypoints.length - 1;
-      const dx = moveX - blob.x;
-      const dy = moveY - blob.y;
-      const dist = Math.hypot(dx, dy);
-      const currentSpeed = Math.hypot(blob.vx, blob.vy);
-
-      if (isFinalWaypoint && dist < CONFIG.BLOB_STOP_EPSILON && currentSpeed < 0.75) {
-        blob.x = blob.targetX;
-        blob.y = blob.targetY;
-        blob.vx = 0;
-        blob.vy = 0;
-        this.clearBlobPath(blob);
-        this.tryVillagerGather(blob, dt);
-        continue;
-      }
-
-      // Decelerate only when approaching the final waypoint
-      const desiredSpeed = isFinalWaypoint && dist < CONFIG.BLOB_DECELERATION_RADIUS
-        ? CONFIG.BLOB_MOVE_SPEED * Math.max(0, dist / CONFIG.BLOB_DECELERATION_RADIUS)
-        : CONFIG.BLOB_MOVE_SPEED;
-
-      const nx = dist > 0.0001 ? dx / dist : 0;
-      const ny = dist > 0.0001 ? dy / dist : 0;
-      const desiredVx = nx * desiredSpeed;
-      const desiredVy = ny * desiredSpeed;
-      const deltaVx = desiredVx - blob.vx;
-      const deltaVy = desiredVy - blob.vy;
-      const deltaSpeed = Math.hypot(deltaVx, deltaVy);
-      const accel = desiredSpeed > currentSpeed ? CONFIG.BLOB_ACCELERATION : CONFIG.BLOB_ACCELERATION * 1.2;
-      const maxDelta = accel * dt;
-
-      if (deltaSpeed <= maxDelta || deltaSpeed === 0) {
-        blob.vx = desiredVx;
-        blob.vy = desiredVy;
-      } else {
-        blob.vx += (deltaVx / deltaSpeed) * maxDelta;
-        blob.vy += (deltaVy / deltaSpeed) * maxDelta;
-      }
-
-      blob.x += blob.vx * dt;
-      blob.y += blob.vy * dt;
-      blob.x = clamp(blob.x, CONFIG.WORLD_MIN, CONFIG.WORLD_MAX);
-      blob.y = clamp(blob.y, CONFIG.WORLD_MIN, CONFIG.WORLD_MAX);
-
-      // Snap to final target when within epsilon
-      if (isFinalWaypoint && Math.hypot(blob.targetX - blob.x, blob.targetY - blob.y) < CONFIG.BLOB_STOP_EPSILON) {
-        blob.x = blob.targetX;
-        blob.y = blob.targetY;
-        blob.vx = 0;
-        blob.vy = 0;
-        this.clearBlobPath(blob);
-      }
+      const moved = this.advanceBlobAlongPath(blob, dt);
+      if (!moved) this.tryVillagerGather(blob, dt);
     }
 
     this.resolveBlobCombat(dt);

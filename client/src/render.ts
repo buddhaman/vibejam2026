@@ -42,7 +42,8 @@ const SUN = {
   shadowRadius: 44,
   shadowDepth: 160,
   shadowDistance: 90,
-  mapSize: 4096,
+  /** 2048 keeps PCF shadows much cheaper than 4096; quality is still fine at this ortho scale. */
+  mapSize: 2048,
 } as const;
 
 /**
@@ -61,7 +62,11 @@ export function startRender(game: Game) {
   canvas.style.cssText = "display:block;width:100%;height:100%;";
   document.body.appendChild(canvas);
 
-  const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+  const renderer = new THREE.WebGLRenderer({
+    canvas,
+    antialias: true,
+    powerPreference: "high-performance",
+  });
   renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
   renderer.setSize(window.innerWidth, window.innerHeight);
   renderer.setClearColor(0x62c8ff, 1);

@@ -3,9 +3,8 @@ import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
 import { MeshoptDecoder } from "three/examples/jsm/libs/meshopt_decoder.module.js";
 
 /**
- * Draco + Meshopt are no-ops unless the GLB was exported with those extensions.
- * Recompress assets with e.g. `npx @gltf-transform/cli optimize in.glb out.glb --compress meshopt --texture-compress webp`
- * or Blender glTF export “Compression”.
+ * Draco + Meshopt decode only if the file uses those extensions (game assets from
+ * `npm run models:compress` are WebP textures + uncompressed mesh; third-party GLBs may still be compressed).
  */
 const dracoLoader = new DRACOLoader();
 dracoLoader.setDecoderPath("https://www.gstatic.com/draco/versioned/decoders/1.5.6/");

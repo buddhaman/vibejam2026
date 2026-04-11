@@ -164,6 +164,11 @@ export const UNIT_RULES = {
     targetSize: 3,
     rebalanceThreshold: 1,
     mergeDistance: 18,
+    moveSpeed: 12,
+    acceleration: 34,
+    decelerationRadius: 6,
+    retreatSpeedMultiplier: 0.25,
+    canAlwaysDisengage: false,
   },
   [UnitType.WARBAND]: {
     label: "Hoplite",
@@ -177,6 +182,11 @@ export const UNIT_RULES = {
     targetSize: 40,
     rebalanceThreshold: 5,
     mergeDistance: 32,
+    moveSpeed: 11,
+    acceleration: 30,
+    decelerationRadius: 6,
+    retreatSpeedMultiplier: 0.25,
+    canAlwaysDisengage: false,
   },
 } as const;
 
@@ -194,6 +204,17 @@ export function getUnitBalanceRules(unitType: UnitType) {
     targetSize: rules.targetSize,
     rebalanceThreshold: rules.rebalanceThreshold,
     mergeDistance: rules.mergeDistance,
+  };
+}
+
+export function getBlobMoveRules(unitType: UnitType) {
+  const rules = getUnitRules(unitType);
+  return {
+    moveSpeed: rules.moveSpeed,
+    acceleration: rules.acceleration,
+    decelerationRadius: rules.decelerationRadius,
+    retreatSpeedMultiplier: rules.retreatSpeedMultiplier,
+    canAlwaysDisengage: rules.canAlwaysDisengage,
   };
 }
 

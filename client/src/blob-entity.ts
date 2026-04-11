@@ -73,7 +73,7 @@ const COMBAT_JITTER_ACCEL = GAME_RULES.UNIT_RADIUS * 18;
 const COMBAT_JITTER_DAMPING = 5.5;
 const COMBAT_JITTER_RETURN = 4.2;
 const COMBAT_CENTER_PULL = 2.2;
-const COMBAT_SEPARATION_RADIUS = GAME_RULES.UNIT_RADIUS * 2.1;
+const COMBAT_SEPARATION_RADIUS = GAME_RULES.UNIT_RADIUS * 3.15;
 const COMBAT_SEPARATION_STRENGTH = GAME_RULES.UNIT_RADIUS * 0.95;
 const HIP_WIDTH = GAME_RULES.UNIT_RADIUS * 0.32;
 const HIP_LIFT = GAME_RULES.UNIT_HEIGHT * 0.46;
@@ -1188,7 +1188,6 @@ export class BlobEntity extends Entity {
         const swordLen     = GAME_RULES.UNIT_HEIGHT  * SWORD_LEN_FRAC * vs;
         const shoulderWorldY = unitTerrainY + shoulderH;
 
-        // Arm swing: driven by stride phase. Right arm leads when left foot plants.
         const walkPhase  = state.distanceWalked / (FOOT_STRIDE * vs + 1e-6);
         const swingSign  = state.leftPlanted ? 1 : -1;
         const isAttacking = state.combatMode === "attack";
@@ -1205,24 +1204,18 @@ export class BlobEntity extends Entity {
             ? Math.sin(walkPhase * Math.PI * 2) * (-swingSign) * SHIELD_SWING_MAX
             : 0;
 
-        // Right shoulder → hand → sword tip (all in the forward-up plane)
         const rShX = worldX + sideX * shoulderSide;
         const rShZ = worldZ + sideZ * shoulderSide;
-        const rFwd = Math.cos(rightSwing); // component along stepForward
-        const rUp  = Math.sin(rightSwing); // component along world-up
-
-        // Hand = shoulder + arm along (forward*rFwd, up*rUp)
+        const rFwd = Math.cos(rightSwing);
+        const rUp  = Math.sin(rightSwing);
         const handX = rShX + stepForwardX * rFwd * armLen;
         const handY = shoulderWorldY + rUp * armLen;
         const handZ = rShZ + stepForwardZ * rFwd * armLen;
-
-        // Sword tip continues from hand in same direction
         const tipX = handX + stepForwardX * rFwd * swordLen;
         const tipY = handY + rUp * swordLen;
         const tipZ = handZ + stepForwardZ * rFwd * swordLen;
-
         TEMP_A.set(handX, handY, handZ);
-        TEMP_B.set(tipX,  tipY,  tipZ);
+        TEMP_B.set(tipX, tipY, tipZ);
         this.game.drawBeam(TEMP_A, TEMP_B, SWORD_W * vs, SWORD_W * vs, COLOR_SWORD);
 
         // Left shoulder → hand → shield center

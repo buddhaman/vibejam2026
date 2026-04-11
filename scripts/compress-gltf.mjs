@@ -13,13 +13,18 @@
  *
  * Env:
  *   GLTF_TEXTURE_SIZE — max texture edge (default: 1024)
+ *   GLTF_WEBP_QUALITY — WebP quality 1–100 (default: 82)
  *   GLTF_FORCE=1 or --force — rebuild even if output is newer
+ *
+ * Geometry is not re-encoded: only `resize` + `webp` touch image data. Vertex buffers
+ * stay as in `models-source/` (aside from glTF Transform’s normal buffer layout when writing).
  *
  * Git: track sources with Git LFS (see .gitattributes). Run once: git lfs install
  */
 
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -27,6 +32,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(__dirname, "..");
 
 const TEXTURE_SIZE = Number(process.env.GLTF_TEXTURE_SIZE || "1024") || 1024;
+const WEBP_QUALITY = Number(process.env.GLTF_WEBP_QUALITY || "82") || 82;
 const FORCE = process.env.GLTF_FORCE === "1" || process.argv.includes("--force");
 const WATCH = process.argv.includes("--watch");
 
@@ -61,27 +67,38 @@ function fmtMb(bytes) {
   return (bytes / (1024 * 1024)).toFixed(2);
 }
 
-function runOptimize(input, output) {
+/**
+ * Texture-only pipeline: max-size textures, then WebP. No meshopt/draco/quantize/simplify.
+ */
+function runTextureOnlyPipeline(input, output) {
   const cli = gltfTransformCli();
   if (!fs.existsSync(cli)) {
     console.error("Missing gltf-transform. Run: npm install");
     process.exit(1);
   }
-  const args = [
-    cli,
-    "optimize",
-    input,
-    output,
-    "--compress",
-    "meshopt",
-    "--texture-compress",
-    "webp",
-    "--texture-size",
-    String(TEXTURE_SIZE),
-  ];
-  const r = spawnSync(process.execPath, args, { stdio: "inherit", cwd: REPO_ROOT });
-  if (r.status !== 0) {
-    process.exit(r.status ?? 1);
+
+  const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), "vibejam-gltf-tex-"));
+  const resized = path.join(tmpRoot, "resized.glb");
+
+  try {
+    const resizeArgs = [
+      cli,
+      "resize",
+      input,
+      resized,
+      "--width",
+      String(TEXTURE_SIZE),
+      "--height",
+      String(TEXTURE_SIZE),
+    ];
+    let r = spawnSync(process.execPath, resizeArgs, { stdio: "inherit", cwd: REPO_ROOT });
+    if (r.status !== 0) process.exit(r.status ?? 1);
+
+    const webpArgs = [cli, "webp", resized, output, "--quality", String(WEBP_QUALITY)];
+    r = spawnSync(process.execPath, webpArgs, { stdio: "inherit", cwd: REPO_ROOT });
+    if (r.status !== 0) process.exit(r.status ?? 1);
+  } finally {
+    fs.rmSync(tmpRoot, { recursive: true, force: true });
   }
 }
 
@@ -117,7 +134,7 @@ function compressJob(job) {
       continue;
     }
 
-    runOptimize(input, output);
+    runTextureOnlyPipeline(input, output);
     const after = fs.statSync(output).size;
     rows.push({ name: `${job.label}/${name}`, before, after, skipped: false });
   }
@@ -164,7 +181,9 @@ function runAll() {
     process.exit(1);
   }
 
-  console.log(`gltf-transform | texture max ${TEXTURE_SIZE}px | meshopt + webp | force=${FORCE}`);
+  console.log(
+    `gltf-transform | textures only: max ${TEXTURE_SIZE}px, webp q=${WEBP_QUALITY} | geometry unchanged | force=${FORCE}`,
+  );
 
   const allRows = [];
   for (const job of JOBS) {
