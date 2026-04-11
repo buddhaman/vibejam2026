@@ -1,6 +1,6 @@
 import * as THREE from "three";
-import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
 import { GAME_RULES, UnitType, getUnitRules } from "../../shared/game-rules.js";
+import { createGLTFLoader } from "./gltf-loader.js";
 import { TEAM_FACTION_TEX_MARK, textureLikelyHasBrightFactionColors } from "./render-texture-recolor.js";
 import { applyStylizedShading } from "./stylized-shading.js";
 
@@ -12,8 +12,8 @@ export type UnitPartTemplate = {
 type UnitSlot = "warband" | "villager";
 
 const GLB_URL: Record<UnitSlot, string> = {
-  warband: "/models/buildings/hoplite.glb",
-  villager: "/models/buildings/agent.glb",
+  warband: "/models/units/hoplite.glb",
+  villager: "/models/units/agent.glb",
 };
 
 const templates: Record<UnitSlot, UnitPartTemplate[] | null> = {
@@ -125,7 +125,7 @@ async function loadSlot(slot: UnitSlot): Promise<void> {
   if (templates[slot] !== null) return;
   const url = GLB_URL[slot];
   const logTag = `[unit-model:${slot}]`;
-  const loader = new GLTFLoader();
+  const loader = createGLTFLoader();
   try {
     const gltf = await loader.loadAsync(url);
     const root = gltf.scene as THREE.Group;
@@ -151,7 +151,7 @@ async function loadSlot(slot: UnitSlot): Promise<void> {
   }
 }
 
-/** Loads warband (`hoplite.glb`) and villager (`agent.glb`) templates once. */
+/** Loads warband + villager GLBs from `public/models/units/` (compressed from `models-source/units/`). */
 export async function ensureUnitInstancedModelsLoaded(): Promise<void> {
   ensurePromise ??= Promise.all([loadSlot("warband"), loadSlot("villager")]).then(() => undefined);
   await ensurePromise;

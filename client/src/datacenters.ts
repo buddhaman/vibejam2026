@@ -1,5 +1,5 @@
 import * as THREE from "three";
-import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
+import { createGLTFLoader } from "./gltf-loader.js";
 import { getTileCenter } from "../../shared/game-rules.js";
 import type { TileView } from "./terrain.js";
 
@@ -35,7 +35,7 @@ function fitGroundAndCenterXZ(root: THREE.Object3D, targetHeight: number): void 
 
 export async function ensureDatacenterModelLoaded(): Promise<void> {
   if (template) return;
-  const loader = new GLTFLoader();
+  const loader = createGLTFLoader();
   try {
     const gltf = await loader.loadAsync(DATACENTER_GLB);
     const root = gltf.scene as THREE.Group;

@@ -1,11 +1,11 @@
 import * as THREE from "three";
-import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
 import { BuildingType, getBuildingRules, type BuildingType as BuildingTypeValue } from "../../shared/game-rules.js";
+import { createGLTFLoader } from "./gltf-loader.js";
 import { createProceduralBuildingSet, type BuildingSet, type BuildingVariant, type TintableMaterial } from "./building-visuals.js";
 import { applyStylizedShading, isStylizedLitMaterial, stylizeObjectMaterials } from "./stylized-shading.js";
 
 /**
- * Map each building type to a GLB under `client/public/` (served at site root).
+ * Map each building type to a compressed GLB URL (`client/public/models/buildings/`, from `models-source/buildings/`).
  * Same URL can be reused for multiple types — the file is fetched and decoded only once.
  * Omit a type or leave a path unused to keep the procedural placeholder for that type.
  */
@@ -113,7 +113,7 @@ async function loadAllGltfOnce(): Promise<Partial<Record<BuildingTypeValue, Buil
     .filter((e): e is { type: BuildingTypeValue; url: string } => typeof e.url === "string" && e.url.length > 0);
 
   const uniqueUrls = [...new Set(entries.map((e) => e.url))];
-  const loader = new GLTFLoader();
+  const loader = createGLTFLoader();
   const urlToScene = new Map<string, THREE.Object3D>();
 
   await Promise.all(

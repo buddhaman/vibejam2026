@@ -151,12 +151,12 @@ type UnitState = {
 export class BlobEntity extends Entity {
   public mesh: THREE.Group;
   private ovalRoot!: THREE.Group;
-  /** Cylinder fallback or instanced parts from `agent.glb`. */
+  /** Cylinder fallback or instanced parts from `models/units/agent.glb`. */
   private unitsAgent: THREE.InstancedMesh[] = [];
   private agentTeamTexApplied = false;
   /** Invisible geometry so `Raycaster` can select villagers without pixel-hunting. */
   private villagerPickProxy!: THREE.Mesh;
-  /** One mesh (cylinder fallback) or multiple parts from `hoplite.glb`. */
+  /** One mesh (cylinder fallback) or multiple parts from `models/units/hoplite.glb`. */
   private unitsWarband: THREE.InstancedMesh[] = [];
   private warbandTeamTexApplied = false;
   /** Flat disc in the left hand of each warband soldier. */

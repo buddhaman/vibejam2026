@@ -1,5 +1,5 @@
 import * as THREE from "three";
-import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
+import { createGLTFLoader } from "./gltf-loader.js";
 import { TileType, getTileCenter } from "../../shared/game-rules.js";
 import { createInstancedVariantSet, syncInstancedVariantSet, type InstancedTransform, type InstancedVariant } from "./instancing.js";
 import type { Game } from "./game.js";
@@ -207,7 +207,7 @@ function ensureTreeSlots(tile: TileView): TreeSlot[] {
 }
 
 async function loadDatacenterVariant(): Promise<InstancedVariant> {
-  const loader = new GLTFLoader();
+  const loader = createGLTFLoader();
   try {
     const gltf = await loader.loadAsync(DATACENTER_GLB);
     const root = gltf.scene.clone(true) as THREE.Group;
