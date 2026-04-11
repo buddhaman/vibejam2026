@@ -54,9 +54,25 @@ const MIN_DIRECTION_SPEED = 0.2;
 const UNIT_SPRING = 20;
 const UNIT_DAMPING = 0.24;
 const UNIT_WALK_SPEED = 4.4;
-const UNIT_BODY_MAX_SPEED = 5.2;
+const UNIT_BODY_MAX_SPEED = 10.2;
+const UNIT_BODY_CATCHUP_GAIN = 2.8;
+const UNIT_BODY_COMBAT_MAX_SPEED = 4.8;
+const UNIT_BODY_COMBAT_CATCHUP_GAIN = 1.15;
+const UNIT_FACE_SMOOTHING = 4.2;
 const FOOT_IDLE_SPEED = 0.01;
 const FOOT_STRIDE = GAME_RULES.UNIT_RADIUS * 1.05;
+const COMBAT_TARGET_STANDOFF = GAME_RULES.UNIT_RADIUS * 1.55;
+const COMBAT_ATTACK_ENTER_DISTANCE = GAME_RULES.UNIT_RADIUS * 1.85;
+const COMBAT_ZONE_PADDING = GAME_RULES.UNIT_RADIUS * 1.9;
+const COMBAT_TARGET_SEARCH_RADIUS = 6;
+const COMBAT_TARGET_SIDE_SPACING = GAME_RULES.UNIT_RADIUS * 0.72;
+const COMBAT_JITTER_RADIUS = GAME_RULES.UNIT_RADIUS * 1.1;
+const COMBAT_JITTER_ACCEL = GAME_RULES.UNIT_RADIUS * 18;
+const COMBAT_JITTER_DAMPING = 5.5;
+const COMBAT_JITTER_RETURN = 4.2;
+const COMBAT_CENTER_PULL = 2.2;
+const COMBAT_SEPARATION_RADIUS = GAME_RULES.UNIT_RADIUS * 2.1;
+const COMBAT_SEPARATION_STRENGTH = GAME_RULES.UNIT_RADIUS * 0.95;
 const HIP_WIDTH = GAME_RULES.UNIT_RADIUS * 0.32;
 const HIP_LIFT = GAME_RULES.UNIT_HEIGHT * 0.46;
 const BODY_FLOAT = GAME_RULES.UNIT_HEIGHT * 0.6;
@@ -93,14 +109,6 @@ const SWORD_W = 0.048;
 /** Maximum arm swing angle (radians) while walking. */
 const ARM_SWING_MAX = Math.PI * 0.40;
 const ATTACK_SWING_MAX = Math.PI * 0.95;
-const UNIT_ATTACK_REACH = GAME_RULES.UNIT_RADIUS * 2.25;
-const COMBAT_PAIR_SEPARATION = Math.max(UNIT_ATTACK_REACH * 0.78, GAME_RULES.UNIT_RADIUS * 2.35);
-const COMBAT_PAIR_PADDING = GAME_RULES.UNIT_RADIUS * 2.1;
-const COMBAT_ATTACK_ENTER_DISTANCE = GAME_RULES.UNIT_RADIUS * 0.7;
-const COMBAT_RADIUS_SCALE = 1.45;
-const COMBAT_DRIFT_SCALE = 0.12;
-const COMBAT_ORBIT_RADIUS = GAME_RULES.UNIT_RADIUS * 0.75;
-
 const SHIELD_RADIUS    = 0.44;
 const SHIELD_THICKNESS = 0.055;
 /** Shield barely moves — just a subtle sway, not a full arm swing. */
@@ -108,15 +116,6 @@ const SHIELD_SWING_MAX = Math.PI * 0.06;
 const _shieldFwdVec  = new THREE.Vector3();
 const _shieldQuat    = new THREE.Quaternion();
 const _upAxis        = new THREE.Vector3(0, 1, 0);
-
-function hashString01(value: string): number {
-  let hash = 2166136261;
-  for (let i = 0; i < value.length; i++) {
-    hash ^= value.charCodeAt(i);
-    hash = Math.imul(hash, 16777619);
-  }
-  return ((hash >>> 0) % 1000000) / 1000000;
-}
 
 type UnitCombatMode = "formation" | "chase" | "attack";
 
@@ -138,6 +137,13 @@ type UnitState = {
   bodyReady: boolean;
   feetReady: boolean;
   combatMode: UnitCombatMode;
+  combatTargetIndex: number;
+  faceX: number;
+  faceZ: number;
+  combatJitterX: number;
+  combatJitterZ: number;
+  combatJitterVx: number;
+  combatJitterVz: number;
 };
 
 export class BlobEntity extends Entity {
@@ -310,11 +316,13 @@ export class BlobEntity extends Entity {
     const previousBlob = previousSnapshot;
     const previousTargetX = previousSnapshot?.targetX ?? blob.targetX;
     const previousTargetY = previousSnapshot?.targetY ?? blob.targetY;
+    const wasEngaged = (previousSnapshot?.engagedTargetBlobId ?? "").length > 0;
+    const isEngaged = blob.engagedTargetBlobId.length > 0;
     this.blob = blob;
     if (previousLayout && previousCount > blob.unitCount) {
       this.spawnDeathFxForLostUnits(previousLayout, previousCount, blob.unitCount, previousUnitType, previousOwnerId);
     }
-    if (Math.hypot(blob.targetX - previousTargetX, blob.targetY - previousTargetY) > 0.25) {
+    if (!wasEngaged && !isEngaged && Math.hypot(blob.targetX - previousTargetX, blob.targetY - previousTargetY) > 0.25) {
       const previousAxis = previousBlob
         ? this.getCanonicalFormationAxis(previousBlob.targetX - previousBlob.x, previousBlob.targetY - previousBlob.y)
         : null;
@@ -356,19 +364,15 @@ export class BlobEntity extends Entity {
   }
 
   private getUnitWorldPositionFromLayout(
-    layout: { x: number; y: number; major: number; minor: number; heading: number },
+    _layout: { x: number; y: number; major: number; minor: number; heading: number },
     state: UnitState
   ): { x: number; z: number } {
     if (state.bodyReady) {
-      return { x: layout.x + state.bodyX, z: layout.y + state.bodyZ };
+      return { x: state.bodyX, z: state.bodyZ };
     }
-    const rightX = Math.cos(layout.heading);
-    const rightZ = -Math.sin(layout.heading);
-    const forwardX = Math.sin(layout.heading);
-    const forwardZ = Math.cos(layout.heading);
     return {
-      x: layout.x + rightX * state.x + forwardX * state.z,
-      z: layout.y + rightZ * state.x + forwardZ * state.z,
+      x: state.x,
+      z: state.z,
     };
   }
 
@@ -452,8 +456,8 @@ export class BlobEntity extends Entity {
     });
 
     const orderedStates = this.unitStates.slice(0, count).map((state) => {
-      const px = state.bodyReady ? state.bodyX : rightX * state.x + forwardX * state.z;
-      const pz = state.bodyReady ? state.bodyZ : rightZ * state.x + forwardZ * state.z;
+      const px = state.bodyReady ? state.bodyX - layout.x : state.x - layout.x;
+      const pz = state.bodyReady ? state.bodyZ - layout.y : state.z - layout.y;
       return {
         state,
         front: px * forwardX + pz * forwardZ,
@@ -472,25 +476,33 @@ export class BlobEntity extends Entity {
   }
 
   private ensureUnitStateCount(count: number): void {
+    const center = this.getPredictedCenter();
     while (this.unitStates.length < count) {
       this.unitStates.push({
-        x: 0,
-        z: 0,
+        x: center.x,
+        z: center.y,
         vx: 0,
         vz: 0,
-        bodyX: 0,
-        bodyZ: 0,
-        lastBodyWorldX: 0,
-        lastBodyWorldZ: 0,
-        leftFootX: 0,
-        leftFootZ: 0,
-        rightFootX: 0,
-        rightFootZ: 0,
+        bodyX: center.x,
+        bodyZ: center.y,
+        lastBodyWorldX: center.x,
+        lastBodyWorldZ: center.y,
+        leftFootX: center.x,
+        leftFootZ: center.y,
+        rightFootX: center.x,
+        rightFootZ: center.y,
         leftPlanted: Math.random() >= 0.5,
         distanceWalked: Math.random() * FOOT_STRIDE,
         bodyReady: false,
         feetReady: false,
         combatMode: "formation",
+        combatTargetIndex: -1,
+        faceX: 0,
+        faceZ: 1,
+        combatJitterX: 0,
+        combatJitterZ: 0,
+        combatJitterVx: 0,
+        combatJitterVz: 0,
       });
     }
     if (this.unitStates.length > count) {
@@ -508,31 +520,184 @@ export class BlobEntity extends Entity {
     };
   }
 
-  private stepUnits(dt: number, layout: { major: number; minor: number }): void {
+  private stepUnits(_dt: number, layout: { x: number; y: number; major: number; minor: number; heading: number }): void {
     const count = Math.min(this.blob?.unitCount ?? 0, INSTANCE_CAP);
     this.ensureUnitStateCount(count);
+    const rightX = Math.cos(layout.heading);
+    const rightZ = -Math.sin(layout.heading);
+    const forwardX = Math.sin(layout.heading);
+    const forwardZ = Math.cos(layout.heading);
 
     for (let i = 0; i < count; i++) {
       const state = this.unitStates[i];
       const slot = this.getSlotPosition(i, count, layout.major, layout.minor);
-      const dx = slot.x - state.x;
-      const dz = slot.z - state.z;
-
-      state.vx += dx * UNIT_SPRING * dt;
-      state.vz += dz * UNIT_SPRING * dt;
-      state.vx *= Math.exp(-UNIT_DAMPING * UNIT_SPRING * dt);
-      state.vz *= Math.exp(-UNIT_DAMPING * UNIT_SPRING * dt);
-
-      const speed = Math.hypot(state.vx, state.vz);
-      if (speed > UNIT_WALK_SPEED) {
-        const scale = UNIT_WALK_SPEED / speed;
-        state.vx *= scale;
-        state.vz *= scale;
-      }
-
-      state.x += state.vx * dt;
-      state.z += state.vz * dt;
+      const slotWorldX = layout.x + rightX * slot.x + forwardX * slot.z;
+      const slotWorldZ = layout.y + rightZ * slot.x + forwardZ * slot.z;
+      state.x = slotWorldX;
+      state.z = slotWorldZ;
+      state.vx = 0;
+      state.vz = 0;
     }
+  }
+
+  private getCombatZone(target: BlobEntity, ownCount: number): { centerX: number; centerZ: number; radius: number } {
+    const ownCenter = this.getPredictedWorldCenter();
+    const targetCenter = target.getPredictedWorldCenter();
+    const total = Math.max(2, ownCount + target.getUnitCount());
+    return {
+      centerX: (ownCenter.x + targetCenter.x) * 0.5,
+      centerZ: (ownCenter.z + targetCenter.z) * 0.5,
+      radius: Math.max(GAME_RULES.UNIT_RADIUS * 4, Math.sqrt(total) * COMBAT_ZONE_PADDING),
+    };
+  }
+
+  private getRenderedUnitWorldPosition(index: number): { x: number; z: number } {
+    const state = this.unitStates[Math.max(0, Math.min(index, this.unitStates.length - 1))];
+    if (state) {
+      if (state.bodyReady) return { x: state.bodyX, z: state.bodyZ };
+      return { x: state.x, z: state.z };
+    }
+    return this.getPredictedWorldCenter();
+  }
+
+  private getCombatPlan(
+    unitIndex: number,
+    unitCount: number,
+    state: UnitState,
+    target: BlobEntity,
+    enemyPositions: { x: number; z: number }[],
+    enemyLoads: number[],
+    dt: number,
+    zone: { centerX: number; centerZ: number; radius: number },
+    plannedPositions: { x: number; z: number }[]
+  ): {
+    mode: UnitCombatMode;
+    desiredWorldX: number;
+    desiredWorldZ: number;
+    targetWorldX: number;
+    targetWorldZ: number;
+  } | null {
+    if (enemyPositions.length === 0) return null;
+
+    const currentWorldX = state.bodyReady ? state.bodyX : state.x;
+    const currentWorldZ = state.bodyReady ? state.bodyZ : state.z;
+    const maxAttackersPerEnemy = Math.max(1, Math.ceil(unitCount / enemyPositions.length));
+    const preferredIndex =
+      enemyPositions.length <= 1
+        ? 0
+        : Math.round((unitIndex / Math.max(1, unitCount - 1)) * (enemyPositions.length - 1));
+
+    let bestIndex = -1;
+    let bestScore = Infinity;
+    const consider = (candidate: number) => {
+      if (candidate < 0 || candidate >= enemyPositions.length) return;
+      const targetPos = enemyPositions[candidate]!;
+      const overload = Math.max(0, enemyLoads[candidate]! - maxAttackersPerEnemy + 1);
+      const dx = targetPos.x - currentWorldX;
+      const dz = targetPos.z - currentWorldZ;
+      const score =
+        overload * 1000 +
+        Math.abs(candidate - preferredIndex) * 2.5 +
+        (dx * dx + dz * dz) * 0.03;
+      if (score < bestScore) {
+        bestScore = score;
+        bestIndex = candidate;
+      }
+    };
+
+    if (state.combatTargetIndex >= 0 && state.combatTargetIndex < enemyPositions.length) {
+      consider(state.combatTargetIndex);
+    }
+    for (let delta = 0; delta <= COMBAT_TARGET_SEARCH_RADIUS; delta++) {
+      consider(preferredIndex - delta);
+      if (delta > 0) consider(preferredIndex + delta);
+    }
+    if (bestIndex < 0) bestIndex = Math.max(0, Math.min(preferredIndex, enemyPositions.length - 1));
+    state.combatTargetIndex = bestIndex;
+    const assignedRank = enemyLoads[bestIndex] ?? 0;
+    enemyLoads[bestIndex] = assignedRank + 1;
+
+    const targetPos = enemyPositions[bestIndex]!;
+    let dirX = targetPos.x - currentWorldX;
+    let dirZ = targetPos.z - currentWorldZ;
+    let dirLen = Math.hypot(dirX, dirZ);
+    if (dirLen < 1e-4) {
+      dirX = targetPos.x - zone.centerX;
+      dirZ = targetPos.z - zone.centerZ;
+      dirLen = Math.hypot(dirX, dirZ);
+    }
+    if (dirLen < 1e-4) {
+      dirX = 0;
+      dirZ = 1;
+      dirLen = 1;
+    }
+    dirX /= dirLen;
+    dirZ /= dirLen;
+
+    const sideX = -dirZ;
+    const sideZ = dirX;
+    const sideOffset =
+      (assignedRank - Math.max(0, maxAttackersPerEnemy - 1) * 0.5) * COMBAT_TARGET_SIDE_SPACING;
+
+    // Per-unit Brownian anchor motion inside the combat zone. This keeps fighters
+    // bobbling around instead of orbiting in one obvious direction.
+    state.combatJitterVx += (Math.random() - 0.5) * COMBAT_JITTER_ACCEL * dt;
+    state.combatJitterVz += (Math.random() - 0.5) * COMBAT_JITTER_ACCEL * dt;
+    state.combatJitterVx += -state.combatJitterX * COMBAT_JITTER_RETURN * dt;
+    state.combatJitterVz += -state.combatJitterZ * COMBAT_JITTER_RETURN * dt;
+    state.combatJitterVx *= Math.exp(-COMBAT_JITTER_DAMPING * dt);
+    state.combatJitterVz *= Math.exp(-COMBAT_JITTER_DAMPING * dt);
+    state.combatJitterX += state.combatJitterVx * dt;
+    state.combatJitterZ += state.combatJitterVz * dt;
+    const jitterLen = Math.hypot(state.combatJitterX, state.combatJitterZ);
+    if (jitterLen > COMBAT_JITTER_RADIUS) {
+      const s = COMBAT_JITTER_RADIUS / Math.max(jitterLen, 1e-4);
+      state.combatJitterX *= s;
+      state.combatJitterZ *= s;
+    }
+
+    let desiredWorldX =
+      targetPos.x
+      - dirX * COMBAT_TARGET_STANDOFF
+      + sideX * sideOffset
+      + state.combatJitterX;
+    let desiredWorldZ =
+      targetPos.z
+      - dirZ * COMBAT_TARGET_STANDOFF
+      + sideZ * sideOffset
+      + state.combatJitterZ;
+
+    const centerDx = zone.centerX - desiredWorldX;
+    const centerDz = zone.centerZ - desiredWorldZ;
+    desiredWorldX += centerDx * COMBAT_CENTER_PULL * dt;
+    desiredWorldZ += centerDz * COMBAT_CENTER_PULL * dt;
+
+    for (const other of plannedPositions) {
+      const dx = desiredWorldX - other.x;
+      const dz = desiredWorldZ - other.z;
+      const dist = Math.hypot(dx, dz);
+      if (dist <= 1e-4 || dist >= COMBAT_SEPARATION_RADIUS) continue;
+      const push = ((COMBAT_SEPARATION_RADIUS - dist) / COMBAT_SEPARATION_RADIUS) * COMBAT_SEPARATION_STRENGTH;
+      desiredWorldX += (dx / dist) * push;
+      desiredWorldZ += (dz / dist) * push;
+    }
+
+    const finalDx = desiredWorldX - zone.centerX;
+    const finalDz = desiredWorldZ - zone.centerZ;
+    const finalDist = Math.hypot(finalDx, finalDz);
+    if (finalDist > zone.radius) {
+      const scale = zone.radius / Math.max(finalDist, 1e-4);
+      desiredWorldX = zone.centerX + finalDx * scale;
+      desiredWorldZ = zone.centerZ + finalDz * scale;
+    }
+
+    return {
+      mode: dirLen <= COMBAT_ATTACK_ENTER_DISTANCE ? "attack" : "chase",
+      desiredWorldX,
+      desiredWorldZ,
+      targetWorldX: targetPos.x,
+      targetWorldZ: targetPos.z,
+    };
   }
 
   private resetFeet(state: UnitState, bodyWorldX: number, bodyWorldZ: number, sideX: number, sideZ: number, hipWidth: number) {
@@ -724,98 +889,6 @@ export class BlobEntity extends Entity {
     return { x: layout.x + px, z: layout.y + pz };
   }
 
-  private getCombatPairCenters(
-    layout: { x: number; y: number; major: number; minor: number; heading: number },
-    target: BlobEntity,
-    pairCount: number
-  ): { x: number; z: number }[] {
-    const targetCenter = target.getPredictedWorldCenter();
-    const combatRadius = Math.max(
-      GAME_RULES.UNIT_RADIUS * 3,
-      Math.sqrt(pairCount) * COMBAT_PAIR_PADDING * COMBAT_RADIUS_SCALE
-    );
-    const combatCenterX = (layout.x + targetCenter.x) * 0.5;
-    const combatCenterZ = (layout.y + targetCenter.z) * 0.5;
-    const time = performance.now() / 1000;
-    const pairKeyBase = [this.id, target.id].sort().join(":");
-    const centers = Array.from({ length: pairCount }, (_, index) => {
-      const slot = this.getSlotPosition(index, pairCount, combatRadius, combatRadius);
-      const seedA = hashString01(`${pairKeyBase}:a:${index}`);
-      const seedB = hashString01(`${pairKeyBase}:b:${index}`);
-      const amp = combatRadius * (COMBAT_DRIFT_SCALE + seedA * 0.08);
-      const freqA = 0.7 + seedA * 0.9;
-      const freqB = 0.8 + seedB * 0.85;
-      const driftX = Math.sin(time * freqA + seedB * Math.PI * 2) * amp;
-      const driftZ = Math.cos(time * freqB + seedA * Math.PI * 2) * amp;
-      return {
-        x: combatCenterX + slot.x + driftX,
-        z: combatCenterZ + slot.z + driftZ,
-      };
-    });
-
-    return centers;
-  }
-
-  private getCombatPlan(
-    layout: { x: number; y: number; major: number; minor: number; heading: number },
-    unitIndex: number,
-    unitCount: number,
-    state: UnitState,
-    target: BlobEntity,
-    pairCenters: { x: number; z: number }[]
-  ): {
-    mode: UnitCombatMode;
-    desiredPx: number;
-    desiredPz: number;
-    pairCenterWorldX: number;
-    pairCenterWorldZ: number;
-  } | null {
-    const targetCenter = target.getPredictedWorldCenter();
-    const dx = targetCenter.x - layout.x;
-    const dz = targetCenter.z - layout.y;
-    const distSq = dx * dx + dz * dz;
-    if (this.blob?.engagedTargetBlobId !== target.id) {
-      return null;
-    }
-    // Server stacks squad centers when fully engaged; use facing when separation is ~0.
-    let nx: number;
-    let nz: number;
-    if (distSq > 1e-8) {
-      const inv = 1 / Math.sqrt(distSq);
-      nx = dx * inv;
-      nz = dz * inv;
-    } else {
-      nx = Math.sin(layout.heading);
-      nz = Math.cos(layout.heading);
-    }
-    const sideX = -nz;
-    const sideZ = nx;
-    const pairCount = pairCenters.length;
-    const pairIndex = pairCount <= 1 ? 0 : Math.round((unitIndex / Math.max(1, unitCount - 1)) * (pairCount - 1));
-    const pairCenter = pairCenters[Math.max(0, Math.min(pairIndex, pairCount - 1))]!;
-    const pairCenterX = pairCenter.x;
-    const pairCenterZ = pairCenter.z;
-    const time = performance.now() / 1000;
-    const orbitSeed = hashString01(`${this.id}:${target.id}:orbit:${unitIndex}`);
-    const orbitAngle = time * (0.9 + orbitSeed * 1.35) + orbitSeed * Math.PI * 2;
-    const orbitRadius = COMBAT_ORBIT_RADIUS * (0.7 + orbitSeed * 0.9);
-    const orbitX = sideX * Math.sin(orbitAngle) * orbitRadius + nx * Math.cos(orbitAngle * 0.7) * orbitRadius * 0.25;
-    const orbitZ = sideZ * Math.sin(orbitAngle) * orbitRadius + nz * Math.cos(orbitAngle * 0.7) * orbitRadius * 0.25;
-    const currentPx = state.bodyReady ? state.bodyX : state.x;
-    const currentPz = state.bodyReady ? state.bodyZ : state.z;
-    const ownAnchorX = pairCenterX - nx * (COMBAT_PAIR_SEPARATION * 0.5) + orbitX;
-    const ownAnchorZ = pairCenterZ - nz * (COMBAT_PAIR_SEPARATION * 0.5) + orbitZ;
-    const anchorDist = Math.hypot(layout.x + currentPx - ownAnchorX, layout.y + currentPz - ownAnchorZ);
-
-    return {
-      mode: anchorDist <= COMBAT_ATTACK_ENTER_DISTANCE ? "attack" : "chase",
-      desiredPx: ownAnchorX - layout.x,
-      desiredPz: ownAnchorZ - layout.y,
-      pairCenterWorldX: pairCenterX,
-      pairCenterWorldZ: pairCenterZ,
-    };
-  }
-
   public render(dt: number): void {
     if (!this.blob) return;
     this.combatAnimT += dt;
@@ -904,45 +977,78 @@ export class BlobEntity extends Entity {
 
     const unitRules = getUnitRules(this.blob.unitType);
     const combatTarget = this.getCombatTarget();
-    const combatPairCenters = combatTarget
-      ? this.getCombatPairCenters(layout, combatTarget, Math.max(n, combatTarget.getUnitCount()))
-      : null;
+    const engagedCombatTarget =
+      combatTarget &&
+      this.blob.engagedTargetBlobId.length > 0 &&
+      combatTarget.id === this.blob.engagedTargetBlobId
+        ? combatTarget
+        : null;
     const rightX = Math.cos(layout.heading);
     const rightZ = -Math.sin(layout.heading);
     const forwardX = Math.sin(layout.heading);
     const forwardZ = Math.cos(layout.heading);
     const tiles = this.game.getTiles();
+    const enemyUnitCount = engagedCombatTarget ? engagedCombatTarget.getUnitCount() : 0;
+    const enemyPositions = engagedCombatTarget
+      ? Array.from({ length: enemyUnitCount }, (_, index) => engagedCombatTarget.getRenderedUnitWorldPosition(index))
+      : [];
+    const enemyLoads = enemyUnitCount > 0 ? new Array(enemyUnitCount).fill(0) : [];
+    const plannedCombatPositions: { x: number; z: number }[] = [];
+    const combatZone = engagedCombatTarget ? this.getCombatZone(engagedCombatTarget, n) : null;
     for (let i = 0; i < n; i++) {
       const state = this.unitStates[i];
-      let desiredPx = rightX * state.x + forwardX * state.z;
-      let desiredPz = rightZ * state.x + forwardZ * state.z;
-      let pairCenterWorldX = 0;
-      let pairCenterWorldZ = 0;
+      let desiredWorldX = state.x;
+      let desiredWorldZ = state.z;
+      let targetWorldX = 0;
+      let targetWorldZ = 0;
       const combatPlan =
-        combatTarget && combatPairCenters
-          ? this.getCombatPlan(layout, i, n, state, combatTarget, combatPairCenters)
+        engagedCombatTarget && combatZone
+          ? this.getCombatPlan(
+              i,
+              n,
+              state,
+              engagedCombatTarget,
+              enemyPositions,
+              enemyLoads,
+              stepDt,
+              combatZone,
+              plannedCombatPositions
+            )
           : null;
       if (combatPlan) {
-        desiredPx = combatPlan.desiredPx;
-        desiredPz = combatPlan.desiredPz;
-        pairCenterWorldX = combatPlan.pairCenterWorldX;
-        pairCenterWorldZ = combatPlan.pairCenterWorldZ;
+        desiredWorldX = combatPlan.desiredWorldX;
+        desiredWorldZ = combatPlan.desiredWorldZ;
+        targetWorldX = combatPlan.targetWorldX;
+        targetWorldZ = combatPlan.targetWorldZ;
         state.combatMode = combatPlan.mode;
+        plannedCombatPositions.push({ x: desiredWorldX, z: desiredWorldZ });
       } else {
         state.combatMode = "formation";
+        state.combatTargetIndex = -1;
+        state.combatJitterX = 0;
+        state.combatJitterZ = 0;
+        state.combatJitterVx = 0;
+        state.combatJitterVz = 0;
       }
       if (!state.bodyReady) {
-        state.bodyX = desiredPx;
-        state.bodyZ = desiredPz;
+        state.bodyX = desiredWorldX;
+        state.bodyZ = desiredWorldZ;
         state.bodyReady = true;
       } else {
-        const bodyDx = desiredPx - state.bodyX;
-        const bodyDz = desiredPz - state.bodyZ;
+        const bodyDx = desiredWorldX - state.bodyX;
+        const bodyDz = desiredWorldZ - state.bodyZ;
         const bodyDist = Math.hypot(bodyDx, bodyDz);
-        const maxStep = UNIT_BODY_MAX_SPEED * stepDt;
+        const moveSpeed =
+          state.combatMode === "formation" ? UNIT_BODY_MAX_SPEED : UNIT_BODY_COMBAT_MAX_SPEED;
+        const catchupGain =
+          state.combatMode === "formation" ? UNIT_BODY_CATCHUP_GAIN : UNIT_BODY_COMBAT_CATCHUP_GAIN;
+        const maxStep = Math.max(
+          moveSpeed * stepDt,
+          bodyDist * catchupGain * stepDt
+        );
         if (bodyDist <= maxStep || bodyDist < 1e-5) {
-          state.bodyX = desiredPx;
-          state.bodyZ = desiredPz;
+          state.bodyX = desiredWorldX;
+          state.bodyZ = desiredWorldZ;
         } else {
           const scale = maxStep / bodyDist;
           state.bodyX += bodyDx * scale;
@@ -950,10 +1056,10 @@ export class BlobEntity extends Entity {
         }
       }
 
-      const px = state.bodyX;
-      const pz = state.bodyZ;
-      const worldX = layout.x + px;
-      const worldZ = layout.y + pz;
+      const worldX = state.bodyX;
+      const worldZ = state.bodyZ;
+      const px = worldX - layout.x;
+      const pz = worldZ - layout.y;
       const unitTerrainY = getTerrainHeightAt(worldX, worldZ, tiles);
       const hoverY = unitTerrainY - terrainY + BODY_FLOAT;
       const bodyVx = state.feetReady ? (worldX - state.lastBodyWorldX) / Math.max(stepDt, 1e-4) : this.visualVx;
@@ -961,22 +1067,19 @@ export class BlobEntity extends Entity {
       let stepForwardX = forwardX;
       let stepForwardZ = forwardZ;
       const hasEnemyAssignment = state.combatMode !== "formation";
-      if (hasEnemyAssignment && combatTarget) {
-        // Per-unit look-at enemy center so wings angle inward; opposite blobs face opposite ways.
-        // When squad centers stack (ec ≈ layout), squad-level direction used to collapse to the same heading for both sides.
-        const ec = combatTarget.getPredictedWorldCenter();
-        let faceDx = ec.x - worldX;
-        let faceDz = ec.z - worldZ;
+      if (hasEnemyAssignment && engagedCombatTarget) {
+        let faceDx = targetWorldX - worldX;
+        let faceDz = targetWorldZ - worldZ;
         let faceDist = Math.hypot(faceDx, faceDz);
         if (faceDist < 1e-4) {
-          faceDx = ec.x - layout.x;
-          faceDz = ec.z - layout.y;
+          const ec = engagedCombatTarget.getPredictedWorldCenter();
+          faceDx = ec.x - worldX;
+          faceDz = ec.z - worldZ;
           faceDist = Math.hypot(faceDx, faceDz);
         }
         if (faceDist < 1e-4) {
-          const flip = this.id < combatTarget.id ? 1 : -1;
-          faceDx = flip;
-          faceDz = 0;
+          faceDx = 0;
+          faceDz = 1;
           faceDist = 1;
         }
         stepForwardX = faceDx / faceDist;
@@ -986,6 +1089,21 @@ export class BlobEntity extends Entity {
       if (!hasEnemyAssignment && bodySpeed > FOOT_IDLE_SPEED) {
         stepForwardX = bodyVx / bodySpeed;
         stepForwardZ = bodyVz / bodySpeed;
+      }
+      const faceT = Math.min(1, stepDt * UNIT_FACE_SMOOTHING);
+      state.faceX += (stepForwardX - state.faceX) * faceT;
+      state.faceZ += (stepForwardZ - state.faceZ) * faceT;
+      const faceLen = Math.hypot(state.faceX, state.faceZ);
+      if (faceLen > 1e-4) {
+        stepForwardX = state.faceX / faceLen;
+        stepForwardZ = state.faceZ / faceLen;
+        state.faceX = stepForwardX;
+        state.faceZ = stepForwardZ;
+      } else {
+        stepForwardX = 0;
+        stepForwardZ = 1;
+        state.faceX = 0;
+        state.faceZ = 1;
       }
       const sideX = -stepForwardZ;
       const sideZ = stepForwardX;
@@ -1054,7 +1172,6 @@ export class BlobEntity extends Entity {
         // Arm swing: driven by stride phase. Right arm leads when left foot plants.
         const walkPhase  = state.distanceWalked / (FOOT_STRIDE * vs + 1e-6);
         const swingSign  = state.leftPlanted ? 1 : -1;
-        const enemyDist = hasEnemyAssignment ? Math.hypot(pairCenterWorldX - worldX, pairCenterWorldZ - worldZ) : Infinity;
         const isAttacking = state.combatMode === "attack";
         const isStriding = !isAttacking && bodySpeed > FOOT_IDLE_SPEED * 2;
         const attackPhase = this.combatAnimT * 9 + i * 0.37;
