@@ -1370,6 +1370,8 @@ export class BattleRoom extends Room<{ state: GameState }> {
       if (!target || target.entity.ownerId === blob.ownerId) continue;
       if (rules.attackStyle === "ranged") {
         if (blob.actionState !== BlobActionState.RANGED_ATTACKING) continue;
+      } else if (target.type !== AttackTargetType.BUILDING) {
+        continue;
       } else if (!this.blobIsWithinAttackRange(blob, target, GAME_RULES.UNIT_RADIUS * 0.3)) {
         continue;
       }
