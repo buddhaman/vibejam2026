@@ -123,6 +123,17 @@ export class BuildingEntity extends Entity {
     return Math.hypot(x - this.building.x, z - this.building.y);
   }
 
+  public getWorldCenter(): { x: number; z: number } {
+    if (!this.building) return { x: 0, z: 0 };
+    return { x: this.building.x, z: this.building.y };
+  }
+
+  public getAttackRadius(): number {
+    if (!this.building) return 0;
+    const rules = getBuildingRules(this.building.buildingType);
+    return Math.hypot(rules.selectionWidth * 0.5, rules.selectionDepth * 0.5);
+  }
+
   public getSelectionInfo(): SelectionInfo | null {
     if (!this.building) return null;
     const rules = getBuildingRules(this.building.buildingType);

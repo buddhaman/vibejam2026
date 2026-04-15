@@ -14,6 +14,7 @@ import {
   type UnitType as UnitTypeValue,
 } from "../../shared/game-rules.js";
 import {
+  AttackTargetType,
   type AttackMessage,
   MessageType,
   type BuildMessage,
@@ -28,8 +29,10 @@ import {
 import { BlobEntity } from "./blob-entity.js";
 import { BuildingEntity } from "./building-entity.js";
 import type { BeamDrawer } from "./beam-drawer.js";
+import type { BrightBeamDrawer } from "./bright-beam-drawer.js";
 import type { RagdollFxSystem } from "./ragdoll-fx.js";
 import type { ArrowFxSystem } from "./arrow-fx.js";
+import type { BuildingDestructionFxSystem } from "./building-destruction-fx.js";
 import { type TileView } from "./terrain.js";
 
 export class Game {
@@ -39,8 +42,17 @@ export class Game {
   public selectedEntityId: string | null = null;
   public selectedTileKey: string | null = null;
   private beamDrawer: BeamDrawer | null = null;
+  private brightBeamDrawer: BrightBeamDrawer | null = null;
   private ragdollFx: RagdollFxSystem | null = null;
   private arrowFx: ArrowFxSystem | null = null;
+  private buildingDestructionFx: BuildingDestructionFxSystem | null = null;
+  private _buildingSnapshots = new Map<string, {
+    x: number;
+    y: number;
+    buildingType: BuildingTypeValue;
+    health: number;
+    ownerId: string;
+  }>();
 
   private _tiles = new Map<string, TileView>();
   private _tilesOrdered: TileView[] = [];
@@ -180,8 +192,10 @@ export class Game {
       let entity = this.findBlobEntity(id as string);
       if (!entity) entity = new BlobEntity(this, id as string);
       entity.sync(blob as {
-        attackTargetBlobId: string;
-        engagedTargetBlobId: string;
+        attackTargetType: number;
+        attackTargetId: string;
+        engagedTargetType: number;
+        engagedTargetId: string;
         x: number;
         y: number;
         targetX: number;
@@ -196,7 +210,9 @@ export class Game {
       });
     });
 
+    const seenBuildings = new Set<string>();
     this.room.state.buildings.forEach((building, id) => {
+      seenBuildings.add(id as string);
       let entity = this.findBuildingEntity(id as string);
       if (!entity) entity = new BuildingEntity(this, id as string);
       entity.sync(building as {
@@ -208,7 +224,27 @@ export class Game {
         productionQueue: ArrayLike<UnitTypeValue>;
         productionProgressMs: number;
       });
+      this._buildingSnapshots.set(id as string, {
+        x: building.x,
+        y: building.y,
+        buildingType: building.buildingType as BuildingTypeValue,
+        health: building.health,
+        ownerId: building.ownerId,
+      });
     });
+
+    for (const [id, snapshot] of Array.from(this._buildingSnapshots.entries())) {
+      if (seenBuildings.has(id)) continue;
+      if (this.room.state.players.has(snapshot.ownerId)) {
+        this.spawnBuildingDestructionFx({
+          x: snapshot.x,
+          z: snapshot.y,
+          buildingType: snapshot.buildingType,
+          teamColor: this.getPlayerColor(snapshot.ownerId),
+        });
+      }
+      this._buildingSnapshots.delete(id);
+    }
 
     for (const entity of [...this.entities]) {
       if (entity.isStale()) {
@@ -300,6 +336,48 @@ export class Game {
       if (!(entity instanceof BlobEntity)) continue;
       if (options?.enemyOnly && entity.isMine()) continue;
       if (options?.mineOnly && !entity.isMine()) continue;
+      const hits = raycaster.intersectObject(entity.mesh, true);
+      if (hits.length === 0) continue;
+      const distance = hits[0].distance;
+      if (distance < bestDistance) {
+        bestDistance = distance;
+        best = entity;
+      }
+    }
+    return best;
+  }
+
+  public pickAttackableEntityAtWorldPoint(
+    x: number,
+    z: number,
+    options?: { enemyOnly?: boolean; mineOnly?: boolean }
+  ): BlobEntity | BuildingEntity | null {
+    let best: BlobEntity | BuildingEntity | null = null;
+    let bestDistance = Infinity;
+    for (const entity of this.entities) {
+      if (!(entity instanceof BlobEntity) && !(entity instanceof BuildingEntity)) continue;
+      if (!entity.containsWorldPoint(x, z)) continue;
+      if (options?.enemyOnly && entity.isOwnedByMe()) continue;
+      if (options?.mineOnly && !entity.isOwnedByMe()) continue;
+      const distance = entity.worldDistanceTo(x, z);
+      if (distance < bestDistance) {
+        bestDistance = distance;
+        best = entity;
+      }
+    }
+    return best;
+  }
+
+  public pickAttackableEntityFromRay(
+    raycaster: THREE.Raycaster,
+    options?: { enemyOnly?: boolean; mineOnly?: boolean }
+  ): BlobEntity | BuildingEntity | null {
+    let best: BlobEntity | BuildingEntity | null = null;
+    let bestDistance = Infinity;
+    for (const entity of this.entities) {
+      if (!(entity instanceof BlobEntity) && !(entity instanceof BuildingEntity)) continue;
+      if (options?.enemyOnly && entity.isOwnedByMe()) continue;
+      if (options?.mineOnly && !entity.isOwnedByMe()) continue;
       const hits = raycaster.intersectObject(entity.mesh, true);
       if (hits.length === 0) continue;
       const distance = hits[0].distance;
@@ -421,6 +499,10 @@ export class Game {
     this.beamDrawer = beamDrawer;
   }
 
+  public setBrightBeamDrawer(brightBeamDrawer: BrightBeamDrawer): void {
+    this.brightBeamDrawer = brightBeamDrawer;
+  }
+
   public setRagdollFxSystem(ragdollFx: RagdollFxSystem): void {
     this.ragdollFx = ragdollFx;
   }
@@ -429,16 +511,26 @@ export class Game {
     this.arrowFx = arrowFx;
   }
 
+  public setBuildingDestructionFxSystem(buildingDestructionFx: BuildingDestructionFxSystem): void {
+    this.buildingDestructionFx = buildingDestructionFx;
+  }
+
   public clearBeamDraws(): void {
     this.beamDrawer?.beginFrame();
+    this.brightBeamDrawer?.beginFrame();
   }
 
   public drawBeam(from: THREE.Vector3, to: THREE.Vector3, width: number, depth: number, color: THREE.Color): void {
     this.beamDrawer?.drawBeam(from, to, width, depth, color);
   }
 
+  public drawBrightBeam(from: THREE.Vector3, to: THREE.Vector3, width: number, depth: number, color: THREE.Color): void {
+    (this.brightBeamDrawer ?? this.beamDrawer)?.drawBeam(from, to, width, depth, color);
+  }
+
   public flushBeamDraws(): void {
     this.beamDrawer?.finishFrame();
+    this.brightBeamDrawer?.finishFrame();
   }
 
   public updateRagdollFx(dt: number): void {
@@ -475,14 +567,30 @@ export class Game {
     this.arrowFx?.spawn(params);
   }
 
+  public spawnBuildingDestructionFx(params: {
+    x: number;
+    z: number;
+    buildingType: BuildingTypeValue;
+    teamColor: number;
+  }): void {
+    this.buildingDestructionFx?.spawn({
+      ...params,
+      tiles: this._tiles,
+    });
+  }
+
   public sendMoveIntent(targetX: number, targetY: number): void {
     const blob = this.getSelectedMyBlobEntity();
     if (!blob) return;
     this.room.send(MessageType.INTENT, { blobId: blob.id, targetX, targetY } satisfies IntentMessage);
   }
 
-  public sendAttackIntent(blobId: string, targetBlobId: string): void {
-    this.room.send(MessageType.ATTACK, { blobId, targetBlobId } satisfies AttackMessage);
+  public sendAttackIntent(blobId: string, targetType: number, targetId: string): void {
+    this.room.send(MessageType.ATTACK, {
+      blobId,
+      targetType,
+      targetId,
+    } satisfies AttackMessage);
   }
 
   public sendBuildIntent(type: BuildMessage["type"], worldX: number, worldZ: number): void {
@@ -514,16 +622,35 @@ export class Game {
   }
 
   public getBlobCombatTarget(blobId: string): BlobEntity | null {
-    const blob = this.room.state.blobs.get(blobId) as { engagedTargetBlobId?: string; attackTargetBlobId?: string } | undefined;
-    const targetId = blob?.engagedTargetBlobId || blob?.attackTargetBlobId;
+    const blob = this.room.state.blobs.get(blobId) as {
+      engagedTargetType?: number;
+      engagedTargetId?: string;
+      attackTargetType?: number;
+      attackTargetId?: string;
+    } | undefined;
+    const targetType =
+      (blob?.engagedTargetId ? blob.engagedTargetType : undefined)
+      ?? (blob?.attackTargetId ? blob.attackTargetType : undefined);
+    const targetId = blob?.engagedTargetId || blob?.attackTargetId;
+    if (targetType !== AttackTargetType.BLOB) return null;
     if (typeof targetId === "string" && targetId.length > 0) {
       return this.findBlobEntity(targetId);
     }
 
     let fallback: BlobEntity | null = null;
     this.room.state.blobs.forEach((candidate, id) => {
-      const combatTarget = (candidate as { engagedTargetBlobId?: string; attackTargetBlobId?: string }).engagedTargetBlobId
-        || (candidate as { attackTargetBlobId?: string }).attackTargetBlobId;
+      const snapshot = candidate as {
+        engagedTargetType?: number;
+        engagedTargetId?: string;
+        attackTargetType?: number;
+        attackTargetId?: string;
+      };
+      const combatTarget =
+        snapshot.engagedTargetType === AttackTargetType.BLOB
+          ? snapshot.engagedTargetId
+          : snapshot.attackTargetType === AttackTargetType.BLOB
+            ? snapshot.attackTargetId
+            : "";
       if (combatTarget !== blobId) return;
       const entity = this.findBlobEntity(id as string);
       if (entity) fallback = entity;

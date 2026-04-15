@@ -29,6 +29,7 @@ import {
   type ResourceCost,
 } from "../../shared/game-rules.js";
 import {
+  AttackTargetType,
   type AttackMessage,
   MessageType,
   type IntentMessage,
@@ -54,7 +55,11 @@ const BLOB_REBALANCE_BATTLE_BUFFER = 10;
 /** Distance at which a blob advances to its next path waypoint (intermediate only). */
 const WAYPOINT_REACH = GAME_RULES.TILE_SIZE * 0.45;
 const DISENGAGE_LOCK_RELEASE_BUFFER = GAME_RULES.TILE_SIZE * 0.35;
-const RANGED_ATTACK_HYSTERESIS = GAME_RULES.TILE_SIZE * 0.3;
+const RANGED_ATTACK_HYSTERESIS = GAME_RULES.TILE_SIZE * 1.75;
+
+type AttackableTarget =
+  | { type: typeof AttackTargetType.BLOB; entity: Blob }
+  | { type: typeof AttackTargetType.BUILDING; entity: Building };
 
 /** @see https://docs.colyseus.io/state/ — state is assigned on the class in 0.17+ */
 export class BattleRoom extends Room<{ state: GameState }> {
@@ -101,10 +106,9 @@ export class BattleRoom extends Room<{ state: GameState }> {
       }
       const blob = this.state.blobs.get(msg.blobId);
       if (!blob || blob.ownerId !== client.sessionId) return;
-      const engagedTarget =
-        blob.engagedTargetBlobId.length > 0 ? this.state.blobs.get(blob.engagedTargetBlobId) : null;
+      const engagedTarget = this.getBlobEngagedBlobTarget(blob);
       if (engagedTarget && engagedTarget.ownerId !== blob.ownerId && !this.canBlobInstantlyDisengage(blob, engagedTarget)) {
-        blob.attackTargetBlobId = "";
+        this.clearBlobAttackTarget(blob);
         this.setBlobDestination(blob, msg.targetX, msg.targetY, client);
         return;
       }
@@ -112,18 +116,20 @@ export class BattleRoom extends Room<{ state: GameState }> {
         this.addDisengageLock(blob, engagedTarget);
       }
       this.clearBlobCombatState(blob);
-      blob.attackTargetBlobId = "";
+      this.clearBlobAttackTarget(blob);
       this.setBlobDestination(blob, msg.targetX, msg.targetY, client);
     });
 
     this.onMessage(MessageType.ATTACK, (client, raw) => {
       const msg = raw as AttackMessage;
-      if (typeof msg?.blobId !== "string" || typeof msg.targetBlobId !== "string") return;
+      if (typeof msg?.blobId !== "string" || typeof msg.targetId !== "string") return;
       const blob = this.state.blobs.get(msg.blobId);
-      const target = this.state.blobs.get(msg.targetBlobId);
-      if (!blob || !target || blob.ownerId !== client.sessionId || target.ownerId === client.sessionId) return;
+      if (!blob || blob.ownerId !== client.sessionId) return;
+      const target = this.getAttackableTarget(msg.targetType, msg.targetId);
+      if (!target || target.entity.ownerId === client.sessionId) return;
 
-      blob.attackTargetBlobId = target.id;
+      blob.attackTargetType = msg.targetType;
+      blob.attackTargetId = msg.targetId;
       const approach = this.getBlobAttackApproachPoint(blob, target);
       if (!approach) {
         blob.targetX = blob.x;
@@ -222,10 +228,10 @@ export class BattleRoom extends Room<{ state: GameState }> {
 
     const playerIndex = this.getNextTownCenterIndex();
     const townCenter = this.spawnTownCenter(client.sessionId, playerIndex);
-    this.spawnProducedUnit(townCenter, UnitType.VILLAGER, CONFIG.START_AGENT_UNIT_COUNT);
-    this.spawnProducedUnit(townCenter, UnitType.WARBAND, CONFIG.START_WARBAND_UNIT_COUNT);
-    this.spawnProducedUnit(townCenter, UnitType.ARCHER, CONFIG.START_ARCHER_UNIT_COUNT);
-    this.spawnProducedUnit(townCenter, UnitType.SYNTHAUR, CONFIG.START_SYNTHAUR_UNIT_COUNT);
+    this.spawnStartingBlob(townCenter, UnitType.VILLAGER, CONFIG.START_AGENT_UNIT_COUNT, 0);
+    this.spawnStartingBlob(townCenter, UnitType.WARBAND, CONFIG.START_WARBAND_UNIT_COUNT, 1);
+    this.spawnStartingBlob(townCenter, UnitType.ARCHER, CONFIG.START_ARCHER_UNIT_COUNT, 2);
+    this.spawnStartingBlob(townCenter, UnitType.SYNTHAUR, CONFIG.START_SYNTHAUR_UNIT_COUNT, 3);
   }
 
   onLeave(client: Client, _code: number) {
@@ -256,10 +262,49 @@ export class BattleRoom extends Room<{ state: GameState }> {
     return a.radius + b.radius + CONFIG.BLOB_COMBAT_ENGAGE_PADDING;
   }
 
-  private getBlobAttackRange(blob: Blob, target: Blob): number {
+  private getAttackableTarget(type: number, id: string): AttackableTarget | null {
+    if (type === AttackTargetType.BLOB) {
+      const entity = this.state.blobs.get(id);
+      return entity ? { type: AttackTargetType.BLOB, entity } : null;
+    }
+    if (type === AttackTargetType.BUILDING) {
+      const entity = this.state.buildings.get(id);
+      return entity ? { type: AttackTargetType.BUILDING, entity } : null;
+    }
+    return null;
+  }
+
+  private getBlobAttackTarget(blob: Blob): AttackableTarget | null {
+    if (!blob.attackTargetId) return null;
+    return this.getAttackableTarget(blob.attackTargetType, blob.attackTargetId);
+  }
+
+  private getBlobEngagedBlobTarget(blob: Blob): Blob | null {
+    if (blob.engagedTargetType !== AttackTargetType.BLOB || !blob.engagedTargetId) return null;
+    return this.state.blobs.get(blob.engagedTargetId) ?? null;
+  }
+
+  private clearBlobAttackTarget(blob: Blob): void {
+    blob.attackTargetType = AttackTargetType.NONE;
+    blob.attackTargetId = "";
+  }
+
+  private clearBlobEngagedTarget(blob: Blob): void {
+    blob.engagedTargetType = AttackTargetType.NONE;
+    blob.engagedTargetId = "";
+  }
+
+  private getAttackTargetRadius(target: AttackableTarget): number {
+    if (target.type === AttackTargetType.BLOB) return target.entity.radius;
+    const rules = getBuildingRules(target.entity.buildingType);
+    return Math.hypot(rules.selectionWidth * 0.5, rules.selectionDepth * 0.5);
+  }
+
+  private getBlobAttackRange(blob: Blob, target: AttackableTarget): number {
     const rules = getUnitRules(blob.unitType);
-    if (rules.attackStyle === "ranged") return rules.attackRange + target.radius;
-    return this.getBlobEngageDistance(blob, target);
+    if (rules.attackStyle === "ranged") return rules.attackRange + this.getAttackTargetRadius(target);
+    if (target.type === AttackTargetType.BLOB) return this.getBlobEngageDistance(blob, target.entity);
+    return blob.radius + this.getAttackTargetRadius(target) + GAME_RULES.UNIT_RADIUS * 0.6;
   }
 
   private getBlobPairKey(a: Blob, b: Blob): string {
@@ -290,8 +335,8 @@ export class BattleRoom extends Room<{ state: GameState }> {
     }
   }
 
-  private blobIsWithinAttackRange(blob: Blob, target: Blob, extraRange = 0): boolean {
-    return Math.hypot(blob.x - target.x, blob.y - target.y) <= this.getBlobAttackRange(blob, target) + extraRange;
+  private blobIsWithinAttackRange(blob: Blob, target: AttackableTarget, extraRange = 0): boolean {
+    return Math.hypot(blob.x - target.entity.x, blob.y - target.entity.y) <= this.getBlobAttackRange(blob, target) + extraRange;
   }
 
   private blobsCanEngage(a: Blob, b: Blob): boolean {
@@ -304,7 +349,7 @@ export class BattleRoom extends Room<{ state: GameState }> {
    */
   private defenderAllowsEngagement(defender: Blob, attacker: Blob): boolean {
     if (this.blobsCanEngage(defender, attacker)) return true;
-    if (defender.attackTargetBlobId === attacker.id) return true;
+    if (defender.attackTargetType === AttackTargetType.BLOB && defender.attackTargetId === attacker.id) return true;
     const moveSlack = CONFIG.BLOB_STOP_EPSILON * 2.5;
     const hasActiveMove =
       this.blobPaths.has(defender.id) ||
@@ -313,11 +358,11 @@ export class BattleRoom extends Room<{ state: GameState }> {
   }
 
   private clearBlobCombatState(blob: Blob): void {
-    if (blob.engagedTargetBlobId.length > 0) {
-      const other = this.state.blobs.get(blob.engagedTargetBlobId);
-      if (other?.engagedTargetBlobId === blob.id) other.engagedTargetBlobId = "";
+    const other = this.getBlobEngagedBlobTarget(blob);
+    if (other?.engagedTargetType === AttackTargetType.BLOB && other.engagedTargetId === blob.id) {
+      this.clearBlobEngagedTarget(other);
     }
-    blob.engagedTargetBlobId = "";
+    this.clearBlobEngagedTarget(blob);
   }
 
   private getBlobOwnerClient(blob: Blob): Client | undefined {
@@ -430,10 +475,9 @@ export class BattleRoom extends Room<{ state: GameState }> {
   private applyEngagedOverlapForAllPairs(dt: number): void {
     const seen = new Set<string>();
     for (const blob of this.state.blobs.values()) {
-      if (blob.engagedTargetBlobId.length === 0) continue;
-      const other = this.state.blobs.get(blob.engagedTargetBlobId);
+      const other = this.getBlobEngagedBlobTarget(blob);
       if (!other || other.ownerId === blob.ownerId) continue;
-      if (other.engagedTargetBlobId !== blob.id) continue;
+      if (other.engagedTargetType !== AttackTargetType.BLOB || other.engagedTargetId !== blob.id) continue;
       const a = blob.id < other.id ? blob : other;
       const b = blob.id < other.id ? other : blob;
       const pairKey = `${a.id}:${b.id}`;
@@ -561,19 +605,20 @@ export class BattleRoom extends Room<{ state: GameState }> {
    * Attack move goal: the enemy squad center (nearest walkable point).
    * Engagement triggers as soon as centers are within range — no stop at a ring outside the target.
    */
-  private getBlobAttackApproachPoint(blob: Blob, target: Blob): { x: number; y: number } | null {
+  private getBlobAttackApproachPoint(blob: Blob, target: AttackableTarget): { x: number; y: number } | null {
     const rules = getUnitRules(blob.unitType);
     if (rules.attackStyle !== "ranged") {
-      return this.findNearestWalkablePoint(target.x, target.y, 3);
+      return this.findNearestWalkablePoint(target.entity.x, target.entity.y, 3);
     }
 
-    const dx = blob.x - target.x;
-    const dy = blob.y - target.y;
+    const dx = blob.x - target.entity.x;
+    const dy = blob.y - target.entity.y;
     const dist = Math.hypot(dx, dy);
-    const holdRadius = Math.max(target.radius + rules.attackRange * 0.62, target.radius + GAME_RULES.TILE_SIZE * 0.45);
+    const targetRadius = this.getAttackTargetRadius(target);
+    const holdRadius = Math.max(targetRadius + rules.attackRange * 0.22, targetRadius + GAME_RULES.TILE_SIZE * 0.08);
     const dirX = dist > 1e-4 ? dx / dist : 1;
     const dirY = dist > 1e-4 ? dy / dist : 0;
-    return this.findNearestWalkablePoint(target.x + dirX * holdRadius, target.y + dirY * holdRadius, 3);
+    return this.findNearestWalkablePoint(target.entity.x + dirX * holdRadius, target.entity.y + dirY * holdRadius, 3);
   }
 
   private setBlobDestination(
@@ -646,24 +691,25 @@ export class BattleRoom extends Room<{ state: GameState }> {
 
     const engagedBlobIds = new Set<string>();
     for (const blob of this.state.blobs.values()) {
-      if (blob.engagedTargetBlobId.length > 0) {
-        const engagedTarget = this.state.blobs.get(blob.engagedTargetBlobId);
+      if (blob.engagedTargetId.length > 0) {
+        const engagedTarget = this.getBlobEngagedBlobTarget(blob);
         if (!engagedTarget || engagedTarget.ownerId === blob.ownerId) {
           this.clearBlobCombatState(blob);
         } else {
           engagedBlobIds.add(blob.id);
           engagedBlobIds.add(engagedTarget.id);
-          if (engagedTarget.engagedTargetBlobId !== blob.id) {
-            engagedTarget.engagedTargetBlobId = blob.id;
+          if (engagedTarget.engagedTargetType !== AttackTargetType.BLOB || engagedTarget.engagedTargetId !== blob.id) {
+            engagedTarget.engagedTargetType = AttackTargetType.BLOB;
+            engagedTarget.engagedTargetId = blob.id;
           }
         }
       }
 
-      if (blob.engagedTargetBlobId.length > 0) continue;
-      if (blob.attackTargetBlobId.length > 0) {
-        const target = this.state.blobs.get(blob.attackTargetBlobId);
-        if (!target || target.ownerId === blob.ownerId) {
-          blob.attackTargetBlobId = "";
+      if (blob.engagedTargetId.length > 0) continue;
+      if (blob.attackTargetId.length > 0) {
+        const target = this.getBlobAttackTarget(blob);
+        if (!target || target.entity.ownerId === blob.ownerId) {
+          this.clearBlobAttackTarget(blob);
           blob.targetX = blob.x;
           blob.targetY = blob.y;
           blob.vx = 0;
@@ -672,23 +718,32 @@ export class BattleRoom extends Room<{ state: GameState }> {
         } else {
           const rules = getUnitRules(blob.unitType);
           if (
+            target.type === AttackTargetType.BLOB &&
             rules.attackStyle === "melee" &&
-            !this.hasDisengageLock(blob, target) &&
-            this.blobsCanEngage(blob, target) &&
-            this.defenderAllowsEngagement(target, blob)
+            !this.hasDisengageLock(blob, target.entity) &&
+            this.blobsCanEngage(blob, target.entity) &&
+            this.defenderAllowsEngagement(target.entity, blob)
           ) {
             engagedBlobIds.add(blob.id);
-            engagedBlobIds.add(target.id);
-            blob.engagedTargetBlobId = target.id;
-            target.engagedTargetBlobId = blob.id;
-            target.attackTargetBlobId = blob.id;
+            engagedBlobIds.add(target.entity.id);
+            blob.engagedTargetType = AttackTargetType.BLOB;
+            blob.engagedTargetId = target.entity.id;
+            target.entity.engagedTargetType = AttackTargetType.BLOB;
+            target.entity.engagedTargetId = blob.id;
+            target.entity.attackTargetType = AttackTargetType.BLOB;
+            target.entity.attackTargetId = blob.id;
             this.clearBlobPath(blob);
           } else if (
-            rules.attackStyle === "ranged" &&
-            this.blobIsWithinAttackRange(blob, target, RANGED_ATTACK_HYSTERESIS)
+            this.blobIsWithinAttackRange(
+              blob,
+              target,
+              rules.attackStyle === "ranged" ? RANGED_ATTACK_HYSTERESIS : GAME_RULES.UNIT_RADIUS * 0.3
+            )
           ) {
             blob.targetX = blob.x;
             blob.targetY = blob.y;
+            blob.vx = 0;
+            blob.vy = 0;
             this.clearBlobPath(blob);
           } else {
             const approach = this.getBlobAttackApproachPoint(blob, target);
@@ -1071,8 +1126,8 @@ export class BattleRoom extends Room<{ state: GameState }> {
     const deadIds = new Set<string>();
 
     for (const blob of this.state.blobs.values()) {
-      if (locked.has(blob.id) || blob.engagedTargetBlobId.length === 0) continue;
-      const target = this.state.blobs.get(blob.engagedTargetBlobId);
+      if (locked.has(blob.id)) continue;
+      const target = this.getBlobEngagedBlobTarget(blob);
       if (!target || target.ownerId === blob.ownerId || locked.has(target.id)) continue;
 
       const blobRules = getUnitRules(blob.unitType);
@@ -1095,38 +1150,76 @@ export class BattleRoom extends Room<{ state: GameState }> {
       this.blobPaths.delete(deadId);
       this.state.blobs.delete(deadId);
     }
-    for (const blob of this.state.blobs.values()) {
-      if (deadIds.has(blob.attackTargetBlobId)) blob.attackTargetBlobId = "";
-      if (deadIds.has(blob.engagedTargetBlobId)) blob.engagedTargetBlobId = "";
-    }
+    this.clearDeadBlobTargetRefs(deadIds);
   }
 
   private resolveRangedBlobCombat(dt: number): void {
-    const deadIds = new Set<string>();
+    const deadBlobIds = new Set<string>();
+    const deadBuildingIds = new Set<string>();
 
     for (const blob of this.state.blobs.values()) {
-      if (blob.engagedTargetBlobId.length > 0) continue;
-      if (blob.attackTargetBlobId.length === 0) continue;
+      if (blob.engagedTargetId.length > 0) continue;
+      if (blob.attackTargetId.length === 0) continue;
       const rules = getUnitRules(blob.unitType);
-      if (rules.attackStyle !== "ranged") continue;
-
-      const target = this.state.blobs.get(blob.attackTargetBlobId);
-      if (!target || target.ownerId === blob.ownerId || target.engagedTargetBlobId === blob.id) continue;
+      const target = this.getBlobAttackTarget(blob);
+      if (!target || target.entity.ownerId === blob.ownerId) continue;
       if (!this.blobIsWithinAttackRange(blob, target)) continue;
 
-      target.health -= blob.unitCount * rules.dpsPerUnit * dt;
-      this.syncBlobHealthToUnitCount(target);
-      if (target.unitCount <= 0 || target.health <= 0) deadIds.add(target.id);
+      const damage = blob.unitCount * (rules.attackStyle === "ranged" ? rules.dpsPerUnit : rules.meleeDpsPerUnit) * dt;
+      if (target.type === AttackTargetType.BLOB) {
+        if (target.entity.engagedTargetType === AttackTargetType.BLOB && target.entity.engagedTargetId === blob.id) continue;
+        target.entity.health -= damage;
+        this.syncBlobHealthToUnitCount(target.entity);
+        if (target.entity.unitCount <= 0 || target.entity.health <= 0) deadBlobIds.add(target.entity.id);
+      } else {
+        target.entity.health = Math.max(0, target.entity.health - damage);
+        if (target.entity.health <= 0) deadBuildingIds.add(target.entity.id);
+      }
     }
 
-    if (deadIds.size === 0) return;
-    for (const deadId of deadIds) {
+    if (deadBlobIds.size === 0 && deadBuildingIds.size === 0) return;
+    for (const deadId of deadBlobIds) {
       this.blobPaths.delete(deadId);
       this.state.blobs.delete(deadId);
     }
+    this.clearDeadBlobTargetRefs(deadBlobIds);
+    this.destroyBuildings(deadBuildingIds);
+  }
+
+  private clearDeadBlobTargetRefs(deadIds: Set<string>): void {
+    if (deadIds.size === 0) return;
     for (const blob of this.state.blobs.values()) {
-      if (deadIds.has(blob.attackTargetBlobId)) blob.attackTargetBlobId = "";
-      if (deadIds.has(blob.engagedTargetBlobId)) blob.engagedTargetBlobId = "";
+      if (blob.attackTargetType === AttackTargetType.BLOB && deadIds.has(blob.attackTargetId)) {
+        this.clearBlobAttackTarget(blob);
+        blob.targetX = blob.x;
+        blob.targetY = blob.y;
+        blob.vx = 0;
+        blob.vy = 0;
+        this.clearBlobPath(blob);
+      }
+      if (blob.engagedTargetType === AttackTargetType.BLOB && deadIds.has(blob.engagedTargetId)) {
+        this.clearBlobCombatState(blob);
+      }
+    }
+  }
+
+  private destroyBuildings(deadBuildingIds: Set<string>): void {
+    if (deadBuildingIds.size === 0) return;
+    for (const id of deadBuildingIds) {
+      const building = this.state.buildings.get(id);
+      if (!building) continue;
+      this.removeBuildingFootprint(building);
+      this.state.buildings.delete(id);
+    }
+    for (const blob of this.state.blobs.values()) {
+      if (blob.attackTargetType === AttackTargetType.BUILDING && deadBuildingIds.has(blob.attackTargetId)) {
+        this.clearBlobAttackTarget(blob);
+        blob.targetX = blob.x;
+        blob.targetY = blob.y;
+        blob.vx = 0;
+        blob.vy = 0;
+        this.clearBlobPath(blob);
+      }
     }
   }
 
@@ -1158,6 +1251,29 @@ export class BattleRoom extends Room<{ state: GameState }> {
     blob.spread = unitType === UnitType.VILLAGER ? SquadSpread.TIGHT : SquadSpread.DEFAULT;
     blob.radius = getSquadRadius(blob.unitCount, blob.spread);
     blob.health = getBlobMaxHealth(unitType, producedCount);
+    blob.unitType = unitType;
+    this.state.blobs.set(blob.id, blob);
+  }
+
+  private spawnStartingBlob(building: Building, unitType: UnitType, unitCount: number, slotIndex: number): void {
+    const angle = slotIndex * (Math.PI * 0.5) - Math.PI * 0.75;
+    const radius = GAME_RULES.TILE_SIZE * 1.65;
+    const spawnX = clamp(building.x + Math.cos(angle) * radius, CONFIG.WORLD_MIN, CONFIG.WORLD_MAX);
+    const spawnY = clamp(building.y + Math.sin(angle) * radius, CONFIG.WORLD_MIN, CONFIG.WORLD_MAX);
+
+    const blob = new Blob();
+    blob.id = makeId("blob");
+    blob.ownerId = building.ownerId;
+    blob.x = spawnX;
+    blob.y = spawnY;
+    blob.targetX = spawnX;
+    blob.targetY = spawnY;
+    blob.vx = 0;
+    blob.vy = 0;
+    blob.unitCount = unitCount;
+    blob.spread = unitType === UnitType.VILLAGER ? SquadSpread.TIGHT : SquadSpread.DEFAULT;
+    blob.radius = getSquadRadius(blob.unitCount, blob.spread);
+    blob.health = getBlobMaxHealth(unitType, unitCount);
     blob.unitType = unitType;
     this.state.blobs.set(blob.id, blob);
   }

@@ -9,8 +9,10 @@ import {
   type SquadSpread as SquadSpreadValue,
   type UnitType as UnitTypeValue,
 } from "../../shared/game-rules.js";
+import { AttackTargetType } from "../../shared/protocol.js";
 import type { Game } from "./game.js";
 import { Entity, type SelectionInfo } from "./entity.js";
+import { BuildingEntity } from "./building-entity.js";
 import { createUnitBodyGeometry } from "./render-geom.js";
 import { getTerrainHeightAt } from "./terrain.js";
 import {
@@ -161,8 +163,10 @@ export class BlobEntity extends Entity {
   private ovalRing!: THREE.Mesh<THREE.RingGeometry, THREE.MeshBasicMaterial>;
   private attackRangeRing!: THREE.Mesh<THREE.RingGeometry, THREE.MeshBasicMaterial>;
   private blobSnapshot: {
-    attackTargetBlobId: string;
-    engagedTargetBlobId: string;
+    attackTargetType: number;
+    attackTargetId: string;
+    engagedTargetType: number;
+    engagedTargetId: string;
     x: number;
     y: number;
     targetX: number;
@@ -176,8 +180,10 @@ export class BlobEntity extends Entity {
     unitType: UnitTypeValue;
   } | null = null;
   private blob: {
-    attackTargetBlobId: string;
-    engagedTargetBlobId: string;
+    attackTargetType: number;
+    attackTargetId: string;
+    engagedTargetType: number;
+    engagedTargetId: string;
     x: number;
     y: number;
     targetX: number;
@@ -321,8 +327,10 @@ export class BlobEntity extends Entity {
   }
 
   public sync(blob: {
-    attackTargetBlobId: string;
-    engagedTargetBlobId: string;
+    attackTargetType: number;
+    attackTargetId: string;
+    engagedTargetType: number;
+    engagedTargetId: string;
     x: number;
     y: number;
     targetX: number;
@@ -343,8 +351,8 @@ export class BlobEntity extends Entity {
     const previousBlob = previousSnapshot;
     const previousTargetX = previousSnapshot?.targetX ?? blob.targetX;
     const previousTargetY = previousSnapshot?.targetY ?? blob.targetY;
-    const wasEngaged = (previousSnapshot?.engagedTargetBlobId ?? "").length > 0;
-    const isEngaged = blob.engagedTargetBlobId.length > 0;
+    const wasEngaged = (previousSnapshot?.engagedTargetId ?? "").length > 0;
+    const isEngaged = blob.engagedTargetId.length > 0;
     this.blob = blob;
     if (previousLayout && previousCount > blob.unitCount) {
       this.spawnDeathFxForLostUnits(previousLayout, previousCount, blob.unitCount, previousUnitType, previousOwnerId);
@@ -374,8 +382,10 @@ export class BlobEntity extends Entity {
       }
     }
     this.blobSnapshot = {
-      attackTargetBlobId: blob.attackTargetBlobId,
-      engagedTargetBlobId: blob.engagedTargetBlobId,
+      attackTargetType: blob.attackTargetType,
+      attackTargetId: blob.attackTargetId,
+      engagedTargetType: blob.engagedTargetType,
+      engagedTargetId: blob.engagedTargetId,
       x: blob.x,
       y: blob.y,
       targetX: blob.targetX,
@@ -418,7 +428,7 @@ export class BlobEntity extends Entity {
       const world = this.getUnitWorldPositionFromLayout(layout, state);
       let dirX = 0;
       let dirZ = 1;
-      if (state.combatMode !== "formation" && this.blob?.engagedTargetBlobId) {
+      if (state.combatMode !== "formation" && this.blob?.engagedTargetId) {
         const combatTarget = this.game.getBlobCombatTarget(this.id);
         const targetCenter = combatTarget?.getPredictedWorldCenter() ?? null;
         if (targetCenter) {
@@ -443,21 +453,32 @@ export class BlobEntity extends Entity {
   }
 
   private getCombatTarget() {
+    if (this.blob?.engagedTargetType !== AttackTargetType.BLOB) return null;
     return this.game.getBlobCombatTarget(this.id);
   }
 
-  private getAttackTarget() {
-    if (!this.blob?.attackTargetBlobId) return null;
-    return this.game.findBlobEntity(this.blob.attackTargetBlobId);
+  private getAttackTarget(): BlobEntity | BuildingEntity | null {
+    if (!this.blob?.attackTargetId) return null;
+    if (this.blob.attackTargetType === AttackTargetType.BLOB) {
+      return this.game.findBlobEntity(this.blob.attackTargetId);
+    }
+    if (this.blob.attackTargetType === AttackTargetType.BUILDING) {
+      const entity = this.game.findEntity(this.blob.attackTargetId);
+      return entity instanceof BuildingEntity ? entity : null;
+    }
+    return null;
   }
 
-  private isTargetInRangedAttackRange(target: BlobEntity | null): boolean {
+  private isTargetInRangedAttackRange(target: BlobEntity | BuildingEntity | null): boolean {
     if (!this.blob || !target) return false;
     const rules = getUnitRules(this.blob.unitType);
     if (rules.attackStyle !== "ranged") return false;
     const own = this.getPredictedWorldCenter();
-    const enemy = target.getPredictedWorldCenter();
-    return Math.hypot(own.x - enemy.x, own.z - enemy.z) <= rules.attackRange + target.getRadius();
+    const enemy =
+      target instanceof BlobEntity ? target.getPredictedWorldCenter() : target.getWorldCenter();
+    const radius =
+      target instanceof BlobEntity ? target.getRadius() : target.getAttackRadius();
+    return Math.hypot(own.x - enemy.x, own.z - enemy.z) <= rules.attackRange + radius;
   }
 
   private getCanonicalFormationAxis(dx: number, dy: number): { x: number; y: number } | null {
@@ -590,6 +611,39 @@ export class BlobEntity extends Entity {
       centerX: (ownCenter.x + targetCenter.x) * 0.5,
       centerZ: (ownCenter.z + targetCenter.z) * 0.5,
       radius: Math.max(GAME_RULES.UNIT_RADIUS * 4, Math.sqrt(total) * COMBAT_ZONE_PADDING),
+    };
+  }
+
+  private getBuildingAttackPlan(
+    unitIndex: number,
+    unitCount: number,
+    state: UnitState,
+    target: BuildingEntity
+  ): {
+    mode: UnitCombatMode;
+    desiredWorldX: number;
+    desiredWorldZ: number;
+    targetWorldX: number;
+    targetWorldZ: number;
+  } {
+    const center = target.getWorldCenter();
+    const ownCenter = this.getPredictedWorldCenter();
+    const baseAngle = Math.atan2(ownCenter.z - center.z, ownCenter.x - center.x);
+    const arcSpan = Math.min(Math.PI * 1.15, 0.9 + unitCount * 0.085);
+    const rankT = unitCount <= 1 ? 0.5 : unitIndex / Math.max(1, unitCount - 1);
+    const angle = baseAngle + (rankT - 0.5) * arcSpan;
+    const radius = target.getAttackRadius() + COMBAT_TARGET_STANDOFF * 0.82;
+    const desiredWorldX = center.x + Math.cos(angle) * radius;
+    const desiredWorldZ = center.z + Math.sin(angle) * radius;
+    const currentWorldX = state.bodyReady ? state.bodyX : state.x;
+    const currentWorldZ = state.bodyReady ? state.bodyZ : state.z;
+    const dist = Math.hypot(desiredWorldX - currentWorldX, desiredWorldZ - currentWorldZ);
+    return {
+      mode: dist <= COMBAT_ATTACK_ENTER_DISTANCE ? "attack" : "chase",
+      desiredWorldX,
+      desiredWorldZ,
+      targetWorldX: center.x,
+      targetWorldZ: center.z,
     };
   }
 
@@ -872,10 +926,11 @@ export class BlobEntity extends Entity {
     const combatTarget = this.getCombatTarget();
     const combatTargetCenter = combatTarget?.getPredictedWorldCenter() ?? null;
     const engagedInCombat =
-      this.blob.engagedTargetBlobId.length > 0 &&
+      this.blob.engagedTargetType === AttackTargetType.BLOB &&
+      this.blob.engagedTargetId.length > 0 &&
       !!combatTarget &&
       !!combatTargetCenter &&
-      combatTarget.id === this.blob.engagedTargetBlobId;
+      combatTarget.id === this.blob.engagedTargetId;
 
     if (engagedInCombat && combatTargetCenter) {
       this.setFormationForward(combatTargetCenter.x - center.x, combatTargetCenter.z - center.y);
@@ -982,8 +1037,14 @@ export class BlobEntity extends Entity {
     const usesSynthaurMeshes = visualSpec.modelSlot === "synthaur";
     const usesCentaurBody = visualSpec.animationFamily === "synthaur" && !hasUnitInstancedGlb("synthaur");
     const n = Math.min(this.blob.unitCount, INSTANCE_CAP);
+    const directAttackTarget =
+      this.blob.engagedTargetId.length === 0 ? this.getAttackTarget() : null;
     const rangedAttackTarget =
-      unitRules.attackStyle === "ranged" && this.blob.engagedTargetBlobId.length === 0 ? this.getAttackTarget() : null;
+      unitRules.attackStyle === "ranged" ? directAttackTarget : null;
+    const meleeBuildingTarget =
+      unitRules.attackStyle === "melee" && directAttackTarget instanceof BuildingEntity
+        ? directAttackTarget
+        : null;
     const rangedTargetInRange = this.isTargetInRangedAttackRange(rangedAttackTarget);
 
     this.villagerPickProxy.visible = visualSpec.easyPick;
@@ -1102,8 +1163,9 @@ export class BlobEntity extends Entity {
     const combatTarget = this.getCombatTarget();
     const engagedCombatTarget =
       combatTarget &&
-      this.blob.engagedTargetBlobId.length > 0 &&
-      combatTarget.id === this.blob.engagedTargetBlobId
+      this.blob.engagedTargetType === AttackTargetType.BLOB &&
+      this.blob.engagedTargetId.length > 0 &&
+      combatTarget.id === this.blob.engagedTargetId
         ? combatTarget
         : null;
     const rightX = Math.cos(layout.heading);
@@ -1115,19 +1177,29 @@ export class BlobEntity extends Entity {
     const enemyPositions = engagedCombatTarget
       ? Array.from({ length: enemyUnitCount }, (_, index) => engagedCombatTarget.getRenderedUnitWorldPosition(index))
       : [];
-    const rangedEnemyCount = rangedAttackTarget ? rangedAttackTarget.getUnitCount() : 0;
-    const rangedEnemyPositions = rangedAttackTarget
-      ? Array.from({ length: rangedEnemyCount }, (_, index) => rangedAttackTarget.getRenderedUnitWorldPosition(index))
-      : [];
+    const rangedEnemyPositions =
+      rangedAttackTarget instanceof BlobEntity
+        ? Array.from(
+            { length: rangedAttackTarget.getUnitCount() },
+            (_, index) => rangedAttackTarget.getRenderedUnitWorldPosition(index)
+          )
+        : rangedAttackTarget instanceof BuildingEntity
+          ? [rangedAttackTarget.getWorldCenter()]
+          : [];
     const enemyLoads = enemyUnitCount > 0 ? new Array(enemyUnitCount).fill(0) : [];
     const plannedCombatPositions: { x: number; z: number }[] = [];
     const combatZone = engagedCombatTarget ? this.getCombatZone(engagedCombatTarget, n) : null;
+    const drawBeam = this.game.drawBeam.bind(this.game);
+    const drawBrightBeam = this.game.drawBrightBeam.bind(this.game);
     for (let i = 0; i < n; i++) {
       const state = this.unitStates[i];
       let desiredWorldX = state.x;
       let desiredWorldZ = state.z;
       let targetWorldX = 0;
       let targetWorldZ = 0;
+      const buildingAttackPlan = meleeBuildingTarget
+        ? this.getBuildingAttackPlan(i, n, state, meleeBuildingTarget)
+        : null;
       const combatPlan =
         engagedCombatTarget && combatZone
           ? this.getCombatPlan(
@@ -1149,6 +1221,12 @@ export class BlobEntity extends Entity {
         targetWorldZ = combatPlan.targetWorldZ;
         state.combatMode = combatPlan.mode;
         plannedCombatPositions.push({ x: desiredWorldX, z: desiredWorldZ });
+      } else if (buildingAttackPlan) {
+        desiredWorldX = buildingAttackPlan.desiredWorldX;
+        desiredWorldZ = buildingAttackPlan.desiredWorldZ;
+        targetWorldX = buildingAttackPlan.targetWorldX;
+        targetWorldZ = buildingAttackPlan.targetWorldZ;
+        state.combatMode = buildingAttackPlan.mode;
       } else {
         state.combatMode = "formation";
         state.combatTargetIndex = -1;
@@ -1195,11 +1273,11 @@ export class BlobEntity extends Entity {
       let stepForwardZ = forwardZ;
       const hasEnemyAssignment = state.combatMode !== "formation";
       const hasRangedAim = !hasEnemyAssignment && !!rangedAttackTarget && rangedTargetInRange;
-      if (hasEnemyAssignment && engagedCombatTarget) {
+      if (hasEnemyAssignment && (engagedCombatTarget || meleeBuildingTarget)) {
         let faceDx = targetWorldX - worldX;
         let faceDz = targetWorldZ - worldZ;
         let faceDist = Math.hypot(faceDx, faceDz);
-        if (faceDist < 1e-4) {
+        if (faceDist < 1e-4 && engagedCombatTarget) {
           const ec = engagedCombatTarget.getPredictedWorldCenter();
           faceDx = ec.x - worldX;
           faceDz = ec.z - worldZ;
@@ -1293,7 +1371,7 @@ export class BlobEntity extends Entity {
         unitType: this.blob.unitType,
         state,
         tiles,
-        drawBeam: this.game.drawBeam.bind(this.game),
+        drawBeam,
       });
 
       state.attackCooldown = Math.max(0, state.attackCooldown - stepDt);
@@ -1325,13 +1403,15 @@ export class BlobEntity extends Entity {
         unitType: this.blob.unitType,
         state,
         attackAnimT: this.combatAnimT,
+        attackPose: state.combatMode === "attack" || hasRangedAim,
         unitIndex: i,
         layoutX: layout.x,
         layoutZ: layout.y,
         terrainY,
         unitShield: this.unitShield,
         shieldIndex: i,
-        drawBeam: this.game.drawBeam.bind(this.game),
+        drawBeam,
+        drawBrightBeam,
       });
     }
     for (const m of this.unitsAgent) m.instanceMatrix.needsUpdate = true;
@@ -1521,8 +1601,8 @@ export class BlobEntity extends Entity {
     return {
       title: unitRules.label,
       detail: enemy
-        ? `Enemy${this.blob.engagedTargetBlobId ? " · Engaged" : ""} · ${this.blob.unitCount} ${visualSpec.enemyDetailNoun}${unitRules.attackStyle === "ranged" ? ` · Range ${Math.round(unitRules.attackRange)}` : ""}`
-        : `${visualSpec.idleDetail}${this.blob.engagedTargetBlobId ? " · Engaged" : ""}${unitRules.attackStyle === "ranged" ? ` · Range ${Math.round(unitRules.attackRange)}` : ""}`,
+        ? `Enemy${this.blob.engagedTargetId ? " · Engaged" : ""} · ${this.blob.unitCount} ${visualSpec.enemyDetailNoun}${unitRules.attackStyle === "ranged" ? ` · Range ${Math.round(unitRules.attackRange)}` : ""}`
+        : `${visualSpec.idleDetail}${this.blob.engagedTargetId ? " · Engaged" : ""}${unitRules.attackStyle === "ranged" ? ` · Range ${Math.round(unitRules.attackRange)}` : ""}`,
       health: this.blob.health,
       maxHealth: getBlobMaxHealth(this.blob.unitType, this.blob.unitCount),
       color: this.game.getPlayerColor(this.blob.ownerId),

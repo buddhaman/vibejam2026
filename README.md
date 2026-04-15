@@ -192,7 +192,6 @@ No deep `systems/` tree — add files only when they earn their place.
 Keep the architecture **boring on the wire**, **expressive on the GPU**.
 
 ### TODO:
- - Give health to buildings
  - Villagers gather resources
  - Farms
  - Behavior trees (behavior of all units)
@@ -212,6 +211,7 @@ Keep the architecture **boring on the wire**, **expressive on the GPU**.
 
  Stretch:
   - Ships
+  - Show building damage by deteriorating
 
  Mabye:
  - Map editor
@@ -219,6 +219,7 @@ Keep the architecture **boring on the wire**, **expressive on the GPU**.
  - Sync map
 
 ### Done
+ - Give health to buildings
  - Buildings produce units that auto join in blobs
  - Design attack mechanics
  - Villagers join in blobs

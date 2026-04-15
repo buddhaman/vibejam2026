@@ -1,5 +1,6 @@
 import { Schema, type, MapSchema, ArraySchema } from "@colyseus/schema";
 import type { BuildingType, SquadSpread, UnitType } from "../../shared/game-rules.js";
+import type { AttackTargetType } from "../../shared/protocol.js";
 
 /** Identity + ownership bookkeeping (blobs/buildings reference ownerId). */
 export class Player extends Schema {
@@ -14,8 +15,10 @@ export class Player extends Schema {
 export class Blob extends Schema {
   @type("string") id: string = "";
   @type("string") ownerId: string = "";
-  @type("string") attackTargetBlobId: string = "";
-  @type("string") engagedTargetBlobId: string = "";
+  @type("uint8") attackTargetType: AttackTargetType = 0 as AttackTargetType;
+  @type("string") attackTargetId: string = "";
+  @type("uint8") engagedTargetType: AttackTargetType = 0 as AttackTargetType;
+  @type("string") engagedTargetId: string = "";
   @type("number") x: number = 0;
   @type("number") y: number = 0;
   @type("number") targetX: number = 0;

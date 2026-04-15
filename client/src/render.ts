@@ -1,9 +1,12 @@
 import * as THREE from "three";
 import { RoomEnvironment } from "three/examples/jsm/environments/RoomEnvironment.js";
 import { GAME_RULES, getTileCenter, snapWorldToTileCenter } from "../../shared/game-rules.js";
+import { AttackTargetType } from "../../shared/protocol.js";
 import type { Game } from "./game.js";
 import { BeamDrawer } from "./beam-drawer.js";
+import { BrightBeamDrawer } from "./bright-beam-drawer.js";
 import { BlobEntity } from "./blob-entity.js";
+import { BuildingEntity } from "./building-entity.js";
 import {
   addMoveMarker,
   createHudCanvas,
@@ -19,8 +22,10 @@ import { createTerrainMesh, getTerrainHeightAt, type TileView } from "./terrain.
 import { attachDevNetworkPerf } from "./network-perf.js";
 import { RagdollFxSystem } from "./ragdoll-fx.js";
 import { ArrowFxSystem } from "./arrow-fx.js";
+import { BuildingDestructionFxSystem } from "./building-destruction-fx.js";
 import { TileVisualManager } from "./tile-visuals.js";
 import { TileDebugOverlay, drawTileDebugPanel } from "./tile-debug.js";
+import { drawDevOverlay } from "./dev-overlay.js";
 
 const CAM = {
   polarFromDownDeg: 55,
@@ -54,7 +59,8 @@ const SUN = {
 // IBL only for metal/specular highlights on glTF models — keep tiny so it doesn't fill shadows.
 const SCENE_ENVIRONMENT_INTENSITY = 0.08;
 const WALKABILITY_DEBUG_KEY = "KeyV";
-const TILE_DEBUG_KEY = "Backquote"; // ` key toggles tile debug mode
+const TILE_DEBUG_KEY = "Backquote"; // ` key toggles developer mode too
+const DEV_MODE_KEY = "KeyG";
 
 export function startRender(game: Game) {
   const netPerf = attachDevNetworkPerf(game.room);
@@ -125,6 +131,23 @@ export function startRender(game: Game) {
   const tileDebug = new TileDebugOverlay(game.getTilesOrdered(), game.getTiles());
   scene.add(tileDebug.root);
   let tileDebugInspected: TileView | null = null;
+  let devModeVisible = false;
+  let frameStats = {
+    fps: 0,
+    ms: 0,
+    syncMs: 0,
+    tileVisualsMs: 0,
+    entityRenderMs: 0,
+    beamFlushMs: 0,
+    sceneRenderMs: 0,
+    drawCalls: 0,
+    triangles: 0,
+    geometries: 0,
+    textures: 0,
+    programs: 0,
+    entities: 0,
+    beamBuckets: 0,
+  };
 
   const tileVisuals = new TileVisualManager();
   scene.add(tileVisuals.root);
@@ -134,9 +157,15 @@ export function startRender(game: Game) {
   const arrowFx = new ArrowFxSystem();
   scene.add(arrowFx.root);
   game.setArrowFxSystem(arrowFx);
+  const buildingDestructionFx = new BuildingDestructionFxSystem();
+  scene.add(buildingDestructionFx.root);
+  game.setBuildingDestructionFxSystem(buildingDestructionFx);
   const beamDrawer = new BeamDrawer(12_288);
   scene.add(beamDrawer.root);
   game.setBeamDrawer(beamDrawer);
+  const brightBeamDrawer = new BrightBeamDrawer(6_144);
+  scene.add(brightBeamDrawer.root);
+  game.setBrightBeamDrawer(brightBeamDrawer);
 
   const camera = new THREE.PerspectiveCamera(CAM.fov, window.innerWidth / Math.max(window.innerHeight, 1), 0.5, 5200);
   camera.up.set(0, 1, 0);
@@ -169,13 +198,20 @@ export function startRender(game: Game) {
   placeCamera();
 
   function onCameraKeyDown(e: KeyboardEvent) {
-    if (e.code === TILE_DEBUG_KEY) {
-      tileDebug.toggle(game.getTilesOrdered(), game.getTiles());
-      if (!tileDebug.visible) tileDebugInspected = null;
+    if (e.code === TILE_DEBUG_KEY || (e.shiftKey && e.code === DEV_MODE_KEY)) {
+      devModeVisible = !devModeVisible;
+      tileDebug.root.visible = devModeVisible;
+      if (!devModeVisible) {
+        tileDebugInspected = null;
+        tileDebug.clearInspect();
+      }
+      walkabilityOverlayVisible = devModeVisible;
+      walkabilityOverlay.visible = walkabilityOverlayVisible;
+      syncWalkabilityOverlay(true);
       e.preventDefault();
       return;
     }
-    if (e.code === WALKABILITY_DEBUG_KEY) {
+    if (e.code === WALKABILITY_DEBUG_KEY && devModeVisible) {
       walkabilityOverlayVisible = !walkabilityOverlayVisible;
       walkabilityOverlay.visible = walkabilityOverlayVisible;
       syncWalkabilityOverlay(true);
@@ -314,7 +350,7 @@ export function startRender(game: Game) {
 
   function handleClick(clientX: number, clientY: number) {
     // In tile debug mode, clicks select a tile for inspection instead of normal game actions.
-    if (tileDebug.visible) {
+    if (devModeVisible) {
       const point = groundHit(clientX, clientY);
       if (point) {
         const tile = game.getTileAtWorld(point.x, point.z) ?? null;
@@ -365,11 +401,15 @@ export function startRender(game: Game) {
     const pointPicked = point ? game.pickEntityAtWorldPoint(point.x, point.z) : null;
     const selectedBlob = game.getSelectedMyBlobEntity();
     const attackPicked =
-      game.pickBlobFromRay(raycaster, { enemyOnly: true }) ??
-      (point ? game.pickBlobAtWorldPoint(point.x, point.z, { enemyOnly: true }) : null);
+      game.pickAttackableEntityFromRay(raycaster, { enemyOnly: true }) ??
+      (point ? game.pickAttackableEntityAtWorldPoint(point.x, point.z, { enemyOnly: true }) : null);
     if (selectedBlob && attackPicked) {
       cancelPendingMove();
-      game.sendAttackIntent(selectedBlob.id, attackPicked.id);
+      game.sendAttackIntent(
+        selectedBlob.id,
+        attackPicked instanceof BlobEntity ? AttackTargetType.BLOB : AttackTargetType.BUILDING,
+        attackPicked.id
+      );
       lastGroundTap.t = 0;
       return;
     }
@@ -381,8 +421,12 @@ export function startRender(game: Game) {
       pointPicked;
     if (picked) {
       cancelPendingMove();
-      if (selectedBlob && picked instanceof BlobEntity && !picked.isMine()) {
-        game.sendAttackIntent(selectedBlob.id, picked.id);
+      if (selectedBlob && !picked.isOwnedByMe() && (picked instanceof BlobEntity || picked instanceof BuildingEntity)) {
+        game.sendAttackIntent(
+          selectedBlob.id,
+          picked instanceof BlobEntity ? AttackTargetType.BLOB : AttackTargetType.BUILDING,
+          picked.id
+        );
         lastGroundTap.t = 0;
         return;
       }
@@ -455,11 +499,15 @@ export function startRender(game: Game) {
     if (!selectedBlob) return;
 
     const attackPicked =
-      game.pickBlobFromRay(raycaster, { enemyOnly: true }) ??
-      (point ? game.pickBlobAtWorldPoint(point.x, point.z, { enemyOnly: true }) : null);
+      game.pickAttackableEntityFromRay(raycaster, { enemyOnly: true }) ??
+      (point ? game.pickAttackableEntityAtWorldPoint(point.x, point.z, { enemyOnly: true }) : null);
     if (!attackPicked) return;
 
-    game.sendAttackIntent(selectedBlob.id, attackPicked.id);
+    game.sendAttackIntent(
+      selectedBlob.id,
+      attackPicked instanceof BlobEntity ? AttackTargetType.BLOB : AttackTargetType.BUILDING,
+      attackPicked.id
+    );
     lastGroundTap.t = 0;
   }
 
@@ -527,17 +575,44 @@ export function startRender(game: Game) {
     const dt = (now - lastFrameTime) / 1000;
     lastFrameTime = now;
     applyCameraArrowKeys(dt);
+    const perfSync0 = performance.now();
     game.sync();
+    const perfSync1 = performance.now();
     game.clearBeamDraws();
+    const perfTile0 = performance.now();
     tileVisuals.sync(game);
+    const perfTile1 = performance.now();
+    if (devModeVisible) tileDebug.refresh(game.getTilesOrdered(), game.getTiles());
+    const perf0 = performance.now();
     syncWalkabilityOverlay();
     game.setOrbitCameraForFrame(distance, CAM.distanceMin, CAM.distanceMax);
     game.updateRagdollFx(dt);
     game.updateArrowFx(dt);
+    buildingDestructionFx.update(dt, game.getTiles());
+    const perf1 = performance.now();
     for (const entity of game.entities) entity.render(dt);
+    const perf2 = performance.now();
     game.flushBeamDraws();
+    const perf3 = performance.now();
     dir.shadow.camera.updateProjectionMatrix();
     renderer.render(scene, camera);
+    const perf4 = performance.now();
+    frameStats = {
+      fps: dt > 0 ? 1 / dt : 0,
+      ms: dt * 1000,
+      syncMs: perfSync1 - perfSync0,
+      tileVisualsMs: perfTile1 - perfTile0,
+      entityRenderMs: perf2 - perf1,
+      beamFlushMs: perf3 - perf2,
+      sceneRenderMs: perf4 - perf3,
+      drawCalls: renderer.info.render.calls,
+      triangles: renderer.info.render.triangles,
+      geometries: renderer.info.memory.geometries,
+      textures: renderer.info.memory.textures,
+      programs: renderer.info.programs?.length ?? 0,
+      entities: game.entities.length,
+      beamBuckets: beamDrawer.getBucketCount() + brightBeamDrawer.getBucketCount(),
+    };
 
     const myColor = game.getPlayerColor(game.room.sessionId);
     const mySquadCount = game.getMySquadCount();
@@ -547,9 +622,15 @@ export function startRender(game: Game) {
 
     drawHUD(hudCanvas, hud, myColor, mySquadCount, myResources, selectedInfo, selectedTile, now / 1000);
 
-    if (tileDebug.visible && tileDebugInspected) {
+    if (devModeVisible) {
       const ctx = hudCanvas.getContext("2d")!;
-      drawTileDebugPanel(ctx, tileDebugInspected, hudCanvas.width, hudCanvas.height);
+      drawDevOverlay(ctx, renderer, frameStats, netPerf.getSnapshot(), {
+        tileDebug: tileDebugInspected !== null,
+        walkability: walkabilityOverlayVisible,
+      });
+      if (tileDebugInspected) {
+        drawTileDebugPanel(ctx, tileDebugInspected, hudCanvas.width, hudCanvas.height);
+      }
     }
 
     netPerf.tick(now);

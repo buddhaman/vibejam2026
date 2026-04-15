@@ -42,16 +42,49 @@ function topContributors(counts: Counts, limit: number): string {
   return entries.map((e) => `${protocolLabel(e.code)}:${(e.bytes / 1024).toFixed(1)}KB`).join("  ");
 }
 
+export type NetworkPerfSnapshot = {
+  enabled: boolean;
+  downKbps: number;
+  upKbps: number;
+  rttMs: number | null;
+  stateCallbacksPerSec: number;
+  patchPerSec: number;
+  fullStatePerSec: number;
+  roomDataPerSec: number;
+  blobs: number;
+  buildings: number;
+  players: number;
+  topIn: string;
+  topOut: string;
+};
+
 /**
  * Dev-only: toggle Colyseus WebSocket byte stats + RTT logging with Shift+G.
  * No-ops in production builds.
  */
-export function attachDevNetworkPerf(room: Room): { tick: (now: number) => void } {
+export function attachDevNetworkPerf(room: Room): { tick: (now: number) => void; getSnapshot: () => NetworkPerfSnapshot } {
   if (!import.meta.env.DEV) {
-    return { tick: () => {} };
+    return {
+      tick: () => {},
+      getSnapshot: () => ({
+        enabled: false,
+        downKbps: 0,
+        upKbps: 0,
+        rttMs: null,
+        stateCallbacksPerSec: 0,
+        patchPerSec: 0,
+        fullStatePerSec: 0,
+        roomDataPerSec: 0,
+        blobs: 0,
+        buildings: 0,
+        players: 0,
+        topIn: "—",
+        topOut: "—",
+      }),
+    };
   }
 
-  let enabled = false;
+  let enabled = true;
   let wrapped = false;
   let lastLogTime = 0;
 
@@ -67,47 +100,21 @@ export function attachDevNetworkPerf(room: Room): { tick: (now: number) => void 
 
   let lastRttMs: number | null = null;
   let pingInterval: ReturnType<typeof setInterval> | null = null;
-
-  const onKeyDown = (e: KeyboardEvent) => {
-    if (!e.shiftKey || e.key.toLowerCase() !== "g") return;
-    const t = e.target as HTMLElement | null;
-    if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable)) return;
-
-    e.preventDefault();
-    enabled = !enabled;
-    if (enabled) {
-      ensureWrapped();
-      lastLogTime = performance.now();
-      bytesInWindow = 0;
-      bytesOutWindow = 0;
-      inByCode = {};
-      outByCode = {};
-      patchFrames = 0;
-      fullStateFrames = 0;
-      roomDataInFrames = 0;
-      stateCallbacks = 0;
-      console.info("[net-perf] Logging ON  (Shift+G to toggle) — Colyseus WS bytes + RTT");
-      if (pingInterval !== null) clearInterval(pingInterval);
-      pingInterval = setInterval(() => {
-        if (!enabled || !room.connection?.isOpen) return;
-        room.ping((ms) => {
-          lastRttMs = ms;
-        });
-      }, 2000);
-      room.ping((ms) => {
-        lastRttMs = ms;
-      });
-    } else {
-      if (pingInterval !== null) {
-        clearInterval(pingInterval);
-        pingInterval = null;
-      }
-      detachStateCounter();
-      console.info("[net-perf] Logging OFF");
-    }
+  let snapshot: NetworkPerfSnapshot = {
+    enabled: true,
+    downKbps: 0,
+    upKbps: 0,
+    rttMs: null,
+    stateCallbacksPerSec: 0,
+    patchPerSec: 0,
+    fullStatePerSec: 0,
+    roomDataPerSec: 0,
+    blobs: 0,
+    buildings: 0,
+    players: 0,
+    topIn: "—",
+    topOut: "—",
   };
-
-  window.addEventListener("keydown", onKeyDown);
 
   let stateUnsub: (() => void) | null = null;
 
@@ -166,11 +173,22 @@ export function attachDevNetworkPerf(room: Room): { tick: (now: number) => void 
     stateUnsub = null;
   }
 
+  ensureWrapped();
+  attachStateCounter();
+  lastLogTime = performance.now();
+  pingInterval = setInterval(() => {
+    if (!enabled || !room.connection?.isOpen) return;
+    room.ping((ms) => {
+      lastRttMs = ms;
+    });
+  }, 2000);
+  room.ping((ms) => {
+    lastRttMs = ms;
+  });
+
   return {
     tick(now: number) {
       if (!enabled) return;
-      attachStateCounter();
-
       if (now - lastLogTime < 1000) return;
       const dtSec = (now - lastLogTime) / 1000;
       lastLogTime = now;
@@ -186,17 +204,21 @@ export function attachDevNetworkPerf(room: Room): { tick: (now: number) => void 
       const blobs = st.blobs?.size ?? 0;
       const buildings = st.buildings?.size ?? 0;
       const players = st.players?.size ?? 0;
-
-      console.info(
-        `[net-perf] ↓ ${downKbps.toFixed(1)} KB/s  ↑ ${upKbps.toFixed(1)} KB/s` +
-          `  RTT ${lastRttMs != null ? `${lastRttMs}ms` : "—"}` +
-          `  stateΔ/s ${(stateCallbacks / dtSec).toFixed(0)}` +
-          `  patch ${(patchFrames / dtSec).toFixed(0)}/s  fullState ${(fullStateFrames / dtSec).toFixed(0)}/s` +
-          `  roomData↓ ${(roomDataInFrames / dtSec).toFixed(1)}/s` +
-          `  blobs ${blobs}  bld ${buildings}  ply ${players}`
-      );
-      console.info(`[net-perf] in by type: ${topContributors(inByCode, 4)}`);
-      console.info(`[net-perf] out by type: ${topContributors(outByCode, 4)}`);
+      snapshot = {
+        enabled: true,
+        downKbps,
+        upKbps,
+        rttMs: lastRttMs,
+        stateCallbacksPerSec: stateCallbacks / dtSec,
+        patchPerSec: patchFrames / dtSec,
+        fullStatePerSec: fullStateFrames / dtSec,
+        roomDataPerSec: roomDataInFrames / dtSec,
+        blobs,
+        buildings,
+        players,
+        topIn: topContributors(inByCode, 4),
+        topOut: topContributors(outByCode, 4),
+      };
 
       bytesInWindow = 0;
       bytesOutWindow = 0;
@@ -206,6 +228,9 @@ export function attachDevNetworkPerf(room: Room): { tick: (now: number) => void 
       fullStateFrames = 0;
       roomDataInFrames = 0;
       stateCallbacks = 0;
+    },
+    getSnapshot() {
+      return snapshot;
     },
   };
 }

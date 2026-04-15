@@ -14,6 +14,14 @@ export const MessageType = {
   PATH:          "path",
 } as const;
 
+export const AttackTargetType = {
+  NONE: 0,
+  BLOB: 1,
+  BUILDING: 2,
+} as const;
+
+export type AttackTargetType = (typeof AttackTargetType)[keyof typeof AttackTargetType];
+
 export type IntentMessage = {
   blobId: string;
   targetX: number;
@@ -22,7 +30,8 @@ export type IntentMessage = {
 
 export type AttackMessage = {
   blobId: string;
-  targetBlobId: string;
+  targetType: AttackTargetType;
+  targetId: string;
 };
 
 export type BuildMessage = {
