@@ -37,10 +37,10 @@ const UNIT_VISUAL_SPECS: Record<UnitTypeValue, UnitVisualSpec> = {
     animationFamily: "hoplite",
   },
   [UnitType.ARCHER]: {
-    modelSlot: "agent",
+    modelSlot: "archer",
     usesShield: false,
     usesMeleeWeapon: false,
-    easyPick: true,
+    easyPick: false,
     containsEllipseMult: 1.18,
     idleDetail: "Ranged skirmisher line",
     enemyDetailNoun: "archers",

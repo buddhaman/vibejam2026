@@ -151,6 +151,9 @@ export class BlobEntity extends Entity {
   private warbandTeamTexApplied = false;
   private unitsSynthaur: THREE.InstancedMesh[] = [];
   private synthaurTeamTexApplied = false;
+  /** Instanced parts from `models/units/archer.glb`. */
+  private unitsArcher: THREE.InstancedMesh[] = [];
+  private archerTeamTexApplied = false;
   private unitsCentaur!: THREE.InstancedMesh;
   /** Flat disc in the left hand of each warband soldier. */
   private unitShield!: THREE.InstancedMesh;
@@ -252,6 +255,16 @@ export class BlobEntity extends Entity {
 
     this.unitsSynthaur = createUnitInstancedMeshes("synthaur", INSTANCE_CAP);
 
+    this.unitsArcher = createUnitInstancedMeshes("archer", INSTANCE_CAP);
+    if (this.unitsArcher.length === 0) {
+      const fallback = new THREE.InstancedMesh(UNIT_GEOM, UNIT_MAT.clone(), INSTANCE_CAP);
+      fallback.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+      fallback.castShadow = true;
+      fallback.receiveShadow = true;
+      fallback.frustumCulled = false;
+      this.unitsArcher = [fallback];
+    }
+
     this.ovalRoot = new THREE.Group();
 
     this.ovalFill = new THREE.Mesh(OVAL_FILL_GEOM, OVAL_FILL_MAT.clone());
@@ -299,6 +312,7 @@ export class BlobEntity extends Entity {
     group.add(this.ovalRoot);
     for (const m of this.unitsAgent) group.add(m);
     group.add(this.villagerPickProxy);
+    for (const m of this.unitsArcher) group.add(m);
     for (const m of this.unitsWarband) group.add(m);
     for (const m of this.unitsSynthaur) group.add(m);
     group.add(this.unitsCentaur);
@@ -964,6 +978,7 @@ export class BlobEntity extends Entity {
     const visualSpec = getUnitVisualSpec(this.blob.unitType);
     const unitRules = getUnitRules(this.blob.unitType);
     const usesAgentMeshes = visualSpec.modelSlot === "agent";
+    const usesArcherMeshes = visualSpec.modelSlot === "archer";
     const usesSynthaurMeshes = visualSpec.modelSlot === "synthaur";
     const usesCentaurBody = visualSpec.animationFamily === "synthaur" && !hasUnitInstancedGlb("synthaur");
     const n = Math.min(this.blob.unitCount, INSTANCE_CAP);
@@ -989,7 +1004,14 @@ export class BlobEntity extends Entity {
       this.agentTeamTexApplied = true;
     }
 
-    if (!usesAgentMeshes && !usesSynthaurMeshes && this.unitsWarband.length > 0 && hasUnitInstancedGlb("hoplite") && !this.warbandTeamTexApplied) {
+    if (
+      !usesAgentMeshes &&
+      !usesArcherMeshes &&
+      !usesSynthaurMeshes &&
+      this.unitsWarband.length > 0 &&
+      hasUnitInstancedGlb("hoplite") &&
+      !this.warbandTeamTexApplied
+    ) {
       const primary = this.game.getPlayerColor(this.blob.ownerId);
       applyTeamColorTexturesToMarkedMeshes(
         this.unitsWarband,
@@ -997,6 +1019,16 @@ export class BlobEntity extends Entity {
         secondaryTeamHexFromPrimary(primary)
       );
       this.warbandTeamTexApplied = true;
+    }
+
+    if (usesArcherMeshes && this.unitsArcher.length > 0 && hasUnitInstancedGlb("archer") && !this.archerTeamTexApplied) {
+      const primary = this.game.getPlayerColor(this.blob.ownerId);
+      applyTeamColorTexturesToMarkedMeshes(
+        this.unitsArcher,
+        primary,
+        secondaryTeamHexFromPrimary(primary)
+      );
+      this.archerTeamTexApplied = true;
     }
 
     if (usesSynthaurMeshes && this.unitsSynthaur.length > 0 && hasUnitInstancedGlb("synthaur") && !this.synthaurTeamTexApplied) {
@@ -1010,37 +1042,49 @@ export class BlobEntity extends Entity {
     }
 
     const agentGlb = hasUnitInstancedGlb("agent");
+    const archerGlb = hasUnitInstancedGlb("archer");
     for (const m of this.unitsAgent) {
       m.count = usesAgentMeshes ? n : 0;
       m.visible = usesAgentMeshes;
       const pm = m.material as THREE.MeshStandardMaterial;
-      pm.opacity = this.isMine() ? 1 : 0.68;
-      pm.transparent = !this.isMine();
+      pm.opacity = 1;
+      pm.transparent = false;
       if (!agentGlb) pm.color.copy(teamTint).offsetHSL(0, 0.02, 0.02);
     }
 
-    for (const m of this.unitsWarband) {
-      m.count = !usesAgentMeshes && !usesSynthaurMeshes ? n : 0;
-      m.visible = !usesAgentMeshes && !usesSynthaurMeshes;
+    for (const m of this.unitsArcher) {
+      m.count = usesArcherMeshes ? n : 0;
+      m.visible = usesArcherMeshes;
       const pm = m.material as THREE.MeshStandardMaterial;
-      pm.opacity = this.isMine() ? 1 : 0.68;
-      pm.transparent = !this.isMine();
+      pm.opacity = 1;
+      pm.transparent = false;
+      if (!archerGlb) pm.color.copy(teamTint).offsetHSL(0, 0.02, 0.02);
+    }
+
+    for (const m of this.unitsWarband) {
+      m.count =
+        !usesAgentMeshes && !usesArcherMeshes && !usesSynthaurMeshes ? n : 0;
+      m.visible =
+        !usesAgentMeshes && !usesArcherMeshes && !usesSynthaurMeshes;
+      const pm = m.material as THREE.MeshStandardMaterial;
+      pm.opacity = 1;
+      pm.transparent = false;
     }
 
     for (const m of this.unitsSynthaur) {
       m.count = usesSynthaurMeshes && !usesCentaurBody ? n : 0;
       m.visible = usesSynthaurMeshes && !usesCentaurBody;
       const pm = m.material as THREE.MeshStandardMaterial;
-      pm.opacity = this.isMine() ? 1 : 0.72;
-      pm.transparent = !this.isMine();
+      pm.opacity = 1;
+      pm.transparent = false;
     }
 
     this.unitsCentaur.count = usesCentaurBody ? n : 0;
     this.unitsCentaur.visible = usesCentaurBody;
     const centaurMat = this.unitsCentaur.material as THREE.MeshStandardMaterial;
     centaurMat.color.copy(teamTint).offsetHSL(0, 0.02, 0.04);
-    centaurMat.opacity = this.isMine() ? 1 : 0.72;
-    centaurMat.transparent = !this.isMine();
+    centaurMat.opacity = 1;
+    centaurMat.transparent = false;
 
     this.unitShield.count = visualSpec.usesShield ? n : 0;
     this.unitShield.visible = visualSpec.usesShield;
@@ -1219,6 +1263,7 @@ export class BlobEntity extends Entity {
       applyFamilyBodyMatrices({
         family: visualSpec.animationFamily,
         usesAgentMeshes,
+        usesArcherMeshes,
         usesSynthaurMeshes,
         usesSynthaurFallback: usesCentaurBody,
         index: i,
@@ -1229,6 +1274,7 @@ export class BlobEntity extends Entity {
         forwardZ: stepForwardZ,
         unitScale: unitRules.visualScale,
         unitsAgent: this.unitsAgent,
+        unitsArcher: this.unitsArcher,
         unitsWarband: this.unitsWarband,
         unitsSynthaur: this.unitsSynthaur,
         unitsSynthaurFallback: this.unitsCentaur,
@@ -1289,6 +1335,7 @@ export class BlobEntity extends Entity {
       });
     }
     for (const m of this.unitsAgent) m.instanceMatrix.needsUpdate = true;
+    for (const m of this.unitsArcher) m.instanceMatrix.needsUpdate = true;
     for (const m of this.unitsSynthaur) m.instanceMatrix.needsUpdate = true;
     this.unitsCentaur.instanceMatrix.needsUpdate = true;
     this.unitShield.instanceMatrix.needsUpdate = true;

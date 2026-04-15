@@ -13,6 +13,8 @@ const SHIELD_QUAT = new THREE.Quaternion();
 
 const COLOR_LEG_BEAM = new THREE.Color(0x4a433a);
 const COLOR_SWORD = new THREE.Color(0xd0d4dc);
+const COLOR_BOW = new THREE.Color(0x5a3d24);
+const COLOR_BOWSTRING = new THREE.Color(0xd8cfbe);
 
 const BODY_FLOAT = GAME_RULES.UNIT_HEIGHT * 0.6;
 const FOOT_GROUND_LIFT = 0.03;
@@ -37,6 +39,9 @@ const SWORD_W = 0.048;
 const ARM_SWING_MAX = Math.PI * 0.4;
 const ATTACK_SWING_MAX = Math.PI * 0.95;
 const SHIELD_SWING_MAX = Math.PI * 0.06;
+const BOW_HALF_HEIGHT = GAME_RULES.UNIT_HEIGHT * 0.48;
+const BOW_HALF_WIDTH = GAME_RULES.UNIT_RADIUS * 0.4;
+const BOW_THICKNESS = 0.1;
 
 export type UnitPoseState = {
   leftFootX: number;
@@ -71,6 +76,7 @@ export function createSynthaurFallbackMesh(capacity: number): THREE.InstancedMes
 export function applyFamilyBodyMatrices(params: {
   family: UnitVisualSpec["animationFamily"];
   usesAgentMeshes: boolean;
+  usesArcherMeshes: boolean;
   usesSynthaurMeshes: boolean;
   usesSynthaurFallback: boolean;
   index: number;
@@ -81,6 +87,7 @@ export function applyFamilyBodyMatrices(params: {
   forwardZ: number;
   unitScale: number;
   unitsAgent: THREE.InstancedMesh[];
+  unitsArcher: THREE.InstancedMesh[];
   unitsWarband: THREE.InstancedMesh[];
   unitsSynthaur: THREE.InstancedMesh[];
   unitsSynthaurFallback: THREE.InstancedMesh;
@@ -98,6 +105,10 @@ export function applyFamilyBodyMatrices(params: {
   }
   if (params.usesSynthaurMeshes) {
     for (const mesh of params.unitsSynthaur) mesh.setMatrixAt(params.index, DUMMY.matrix);
+    return;
+  }
+  if (params.usesArcherMeshes) {
+    for (const mesh of params.unitsArcher) mesh.setMatrixAt(params.index, DUMMY.matrix);
     return;
   }
   if (params.usesAgentMeshes) {
@@ -189,10 +200,71 @@ export function drawFamilyEquipment(params: {
   shieldIndex: number;
   drawBeam: (from: THREE.Vector3, to: THREE.Vector3, width: number, depth: number, color: THREE.Color) => void;
 }): void {
-  if (!params.visualSpec.usesMeleeWeapon && !params.visualSpec.usesShield) return;
-
+  if (
+    params.visualSpec.animationFamily !== "archer" &&
+    !params.visualSpec.usesMeleeWeapon &&
+    !params.visualSpec.usesShield
+  ) return;
   const unitRules = getUnitRules(params.unitType);
   const vs = unitRules.visualScale;
+
+  if (params.visualSpec.animationFamily === "archer") {
+    const shoulderH = GAME_RULES.UNIT_HEIGHT * SHOULDER_H_FRAC * vs;
+    const shoulderSide = GAME_RULES.UNIT_RADIUS * SHOULDER_SIDE_FRAC * vs;
+    const armLen = GAME_RULES.UNIT_HEIGHT * ARM_LEN_FRAC * vs;
+    const shoulderWorldY = params.unitTerrainY + shoulderH;
+    const walkPhase = params.state.distanceWalked / (FOOT_STRIDE * vs + 1e-6);
+    const isAttacking = params.state.combatMode === "attack";
+    const isStriding = !isAttacking && params.bodySpeed > FOOT_IDLE_SPEED * 2;
+    const attackPhase = params.attackAnimT * 9 + params.unitIndex * 0.37;
+    const bowSwing = isAttacking
+      ? -0.52 + Math.max(0, Math.sin(attackPhase)) * 1.15
+      : isStriding
+        ? Math.sin(walkPhase * Math.PI * 2) * 0.24
+        : 0;
+
+    const gripX =
+      params.worldX - params.sideX * shoulderSide * 2.5 + params.forwardX * Math.cos(bowSwing) * armLen * 1.28;
+    const gripY = shoulderWorldY + Math.sin(bowSwing) * armLen * 1.05;
+    const gripZ =
+      params.worldZ - params.sideZ * shoulderSide * 2.5 + params.forwardZ * Math.cos(bowSwing) * armLen * 1.28;
+    const bowUp = isAttacking ? 0.24 : 0.14;
+
+    const topX = gripX + params.sideX * BOW_HALF_WIDTH * vs;
+    const topY = gripY + BOW_HALF_HEIGHT * vs + bowUp * vs;
+    const topZ = gripZ + params.sideZ * BOW_HALF_WIDTH * vs;
+    const midX = gripX + params.forwardX * BOW_HALF_WIDTH * 1.05 * vs;
+    const midY = gripY;
+    const midZ = gripZ + params.forwardZ * BOW_HALF_WIDTH * 1.05 * vs;
+    const botX = gripX - params.sideX * BOW_HALF_WIDTH * vs;
+    const botY = gripY - BOW_HALF_HEIGHT * vs + bowUp * vs;
+    const botZ = gripZ - params.sideZ * BOW_HALF_WIDTH * vs;
+
+    TEMP_A.set(topX, topY, topZ);
+    TEMP_B.set(midX, midY, midZ);
+    params.drawBeam(TEMP_A, TEMP_B, BOW_THICKNESS * vs, BOW_THICKNESS * 0.7 * vs, COLOR_BOW);
+    TEMP_A.set(midX, midY, midZ);
+    TEMP_B.set(botX, botY, botZ);
+    params.drawBeam(TEMP_A, TEMP_B, BOW_THICKNESS * vs, BOW_THICKNESS * 0.7 * vs, COLOR_BOW);
+    TEMP_A.set(topX, topY, topZ);
+    TEMP_B.set(botX, botY, botZ);
+    params.drawBeam(TEMP_A, TEMP_B, BOW_THICKNESS * 0.28 * vs, BOW_THICKNESS * 0.18 * vs, COLOR_BOWSTRING);
+
+    if (isAttacking) {
+      const drawT = Math.max(0, Math.sin(attackPhase));
+      const arrowTailX = gripX + params.forwardX * BOW_HALF_WIDTH * 0.3 * vs;
+      const arrowTailY = gripY + drawT * 0.05;
+      const arrowTailZ = gripZ + params.forwardZ * BOW_HALF_WIDTH * 0.3 * vs;
+      const arrowTipX = arrowTailX + params.forwardX * GAME_RULES.UNIT_HEIGHT * 0.62 * vs;
+      const arrowTipY = arrowTailY + drawT * 0.02;
+      const arrowTipZ = arrowTailZ + params.forwardZ * GAME_RULES.UNIT_HEIGHT * 0.62 * vs;
+      TEMP_A.set(arrowTailX, arrowTailY, arrowTailZ);
+      TEMP_B.set(arrowTipX, arrowTipY, arrowTipZ);
+      params.drawBeam(TEMP_A, TEMP_B, BOW_THICKNESS * 0.22 * vs, BOW_THICKNESS * 0.22 * vs, COLOR_BOWSTRING);
+    }
+    return;
+  }
+
   const shoulderH = GAME_RULES.UNIT_HEIGHT * SHOULDER_H_FRAC * vs;
   const shoulderSide = GAME_RULES.UNIT_RADIUS * SHOULDER_SIDE_FRAC * vs;
   const armLen = GAME_RULES.UNIT_HEIGHT * ARM_LEN_FRAC * vs;

@@ -192,11 +192,13 @@ No deep `systems/` tree — add files only when they earn their place.
 Keep the architecture **boring on the wire**, **expressive on the GPU**.
 
 ### TODO:
+ - Give health to buildings
  - Villagers gather resources
  - Farms
  - Behavior trees (behavior of all units)
  - Villagers build buildings
- - Give health to buildings
+ - Buildings can be demolished
+
  - Build walls.
  - Make trees cuttable and collectable
  - Bows
@@ -206,6 +208,7 @@ Keep the architecture **boring on the wire**, **expressive on the GPU**.
  - Sounds and voiceover
  - User chat
  - Score per user, realtime leaderboards
+ - Nice icons for everything
 
  Stretch:
   - Ships

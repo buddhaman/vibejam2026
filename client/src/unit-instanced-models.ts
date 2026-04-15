@@ -9,17 +9,19 @@ export type UnitPartTemplate = {
   baseMaterial: THREE.MeshStandardMaterial;
 };
 
-export type UnitModelSlot = "hoplite" | "agent" | "synthaur";
+export type UnitModelSlot = "hoplite" | "agent" | "archer" | "synthaur";
 
 const GLB_URL: Record<UnitModelSlot, string> = {
   hoplite: "/models/units/hoplite.glb",
   agent: "/models/units/agent.glb",
+  archer: "/models/units/archer.glb",
   synthaur: "/models/units/synthaur.glb",
 };
 
 const templates: Record<UnitModelSlot, UnitPartTemplate[] | null> = {
   hoplite: null,
   agent: null,
+  archer: null,
   synthaur: null,
 };
 
@@ -29,9 +31,11 @@ function targetHeightForSlot(slot: UnitModelSlot): number {
   const rules =
     slot === "agent"
       ? getUnitRules(UnitType.VILLAGER)
-      : slot === "synthaur"
-        ? getUnitRules(UnitType.CENTAUR)
-        : getUnitRules(UnitType.WARBAND);
+      : slot === "archer"
+        ? getUnitRules(UnitType.ARCHER)
+        : slot === "synthaur"
+          ? getUnitRules(UnitType.CENTAUR)
+          : getUnitRules(UnitType.WARBAND);
   return GAME_RULES.UNIT_HEIGHT * rules.visualScale * 1.08;
 }
 
@@ -157,9 +161,14 @@ async function loadSlot(slot: UnitModelSlot): Promise<void> {
   }
 }
 
-/** Loads warband + villager GLBs from `public/models/units/` (compressed from `models-source/units/`). */
+/** Loads unit GLBs from `public/models/units/` (compressed from `models-source/units/`). */
 export async function ensureUnitInstancedModelsLoaded(): Promise<void> {
-  ensurePromise ??= Promise.all([loadSlot("hoplite"), loadSlot("agent"), loadSlot("synthaur")]).then(() => undefined);
+  ensurePromise ??= Promise.all([
+    loadSlot("hoplite"),
+    loadSlot("agent"),
+    loadSlot("archer"),
+    loadSlot("synthaur"),
+  ]).then(() => undefined);
   await ensurePromise;
 }
 
@@ -167,7 +176,7 @@ export function createUnitInstancedMeshes(slot: UnitModelSlot, capacity: number)
   const t = templates[slot];
   if (!t || t.length === 0) return [];
   return t.map((part) => {
-    const mesh = new THREE.InstancedMesh(part.geometry, applyStylizedShading(part.baseMaterial.clone()), capacity);
+    const mesh = new THREE.InstancedMesh(part.geometry, part.baseMaterial.clone(), capacity);
     mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
     mesh.count = 0;
     mesh.castShadow = true;

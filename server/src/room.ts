@@ -54,6 +54,7 @@ const BLOB_REBALANCE_BATTLE_BUFFER = 10;
 /** Distance at which a blob advances to its next path waypoint (intermediate only). */
 const WAYPOINT_REACH = GAME_RULES.TILE_SIZE * 0.45;
 const DISENGAGE_LOCK_RELEASE_BUFFER = GAME_RULES.TILE_SIZE * 0.35;
+const RANGED_ATTACK_HYSTERESIS = GAME_RULES.TILE_SIZE * 0.3;
 
 /** @see https://docs.colyseus.io/state/ — state is assigned on the class in 0.17+ */
 export class BattleRoom extends Room<{ state: GameState }> {
@@ -289,8 +290,8 @@ export class BattleRoom extends Room<{ state: GameState }> {
     }
   }
 
-  private blobIsWithinAttackRange(blob: Blob, target: Blob): boolean {
-    return Math.hypot(blob.x - target.x, blob.y - target.y) <= this.getBlobAttackRange(blob, target);
+  private blobIsWithinAttackRange(blob: Blob, target: Blob, extraRange = 0): boolean {
+    return Math.hypot(blob.x - target.x, blob.y - target.y) <= this.getBlobAttackRange(blob, target) + extraRange;
   }
 
   private blobsCanEngage(a: Blob, b: Blob): boolean {
@@ -569,7 +570,7 @@ export class BattleRoom extends Room<{ state: GameState }> {
     const dx = blob.x - target.x;
     const dy = blob.y - target.y;
     const dist = Math.hypot(dx, dy);
-    const holdRadius = Math.max(target.radius + rules.attackRange * 0.78, target.radius + GAME_RULES.TILE_SIZE * 0.6);
+    const holdRadius = Math.max(target.radius + rules.attackRange * 0.62, target.radius + GAME_RULES.TILE_SIZE * 0.45);
     const dirX = dist > 1e-4 ? dx / dist : 1;
     const dirY = dist > 1e-4 ? dy / dist : 0;
     return this.findNearestWalkablePoint(target.x + dirX * holdRadius, target.y + dirY * holdRadius, 3);
@@ -682,7 +683,10 @@ export class BattleRoom extends Room<{ state: GameState }> {
             target.engagedTargetBlobId = blob.id;
             target.attackTargetBlobId = blob.id;
             this.clearBlobPath(blob);
-          } else if (rules.attackStyle === "ranged" && this.blobIsWithinAttackRange(blob, target)) {
+          } else if (
+            rules.attackStyle === "ranged" &&
+            this.blobIsWithinAttackRange(blob, target, RANGED_ATTACK_HYSTERESIS)
+          ) {
             blob.targetX = blob.x;
             blob.targetY = blob.y;
             this.clearBlobPath(blob);
@@ -1073,8 +1077,8 @@ export class BattleRoom extends Room<{ state: GameState }> {
 
       const blobRules = getUnitRules(blob.unitType);
       const targetRules = getUnitRules(target.unitType);
-      blob.health -= target.unitCount * targetRules.dpsPerUnit * dt;
-      target.health -= blob.unitCount * blobRules.dpsPerUnit * dt;
+      blob.health -= target.unitCount * targetRules.meleeDpsPerUnit * dt;
+      target.health -= blob.unitCount * blobRules.meleeDpsPerUnit * dt;
 
       this.syncBlobHealthToUnitCount(blob);
       this.syncBlobHealthToUnitCount(target);
