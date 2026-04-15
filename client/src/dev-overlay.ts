@@ -39,8 +39,36 @@ export function drawDevOverlay(
   const w = 430;
   const pad = 14;
   const lh = 18;
-  const rows = 23;
-  const h = 48 + rows * lh + 18;
+  const sections = [
+    { label: "FPS", value: `${stats.fps.toFixed(0)}  (${stats.ms.toFixed(2)} ms)`, color: "#6ff0a4" },
+    { label: "frame work", value: `${stats.totalWorkMs.toFixed(2)} ms`, color: "#f3ead7" },
+    { label: "frame slack", value: `${stats.idleBudgetMs.toFixed(2)} ms`, color: stats.idleBudgetMs >= 0 ? "#6ff0a4" : "#ff9a8a" },
+    { label: "sync()", value: `${stats.syncMs.toFixed(2)} ms`, color: "#f3ead7" },
+    { label: "tileVisuals", value: `${stats.tileVisualsMs.toFixed(2)} ms`, color: "#f3ead7" },
+    { label: "entity render", value: `${stats.entityRenderMs.toFixed(2)} ms`, color: "#f3ead7" },
+    { label: "beam flush", value: `${stats.beamFlushMs.toFixed(2)} ms`, color: "#f3ead7" },
+    { label: "renderer.render", value: `${stats.sceneRenderMs.toFixed(2)} ms`, color: "#f3ead7" },
+    null,
+    { label: "draw calls", value: `${stats.drawCalls}`, color: "#f3ead7" },
+    { label: "triangles", value: `${stats.triangles}`, color: "#f3ead7" },
+    { label: "geometries", value: `${stats.geometries}`, color: "#f3ead7" },
+    { label: "textures", value: `${stats.textures}`, color: "#f3ead7" },
+    { label: "programs", value: `${stats.programs}`, color: "#f3ead7" },
+    { label: "entities", value: `${stats.entities}`, color: "#f3ead7" },
+    { label: "beam buckets", value: `${stats.beamBuckets}`, color: "#f3ead7" },
+    null,
+    { label: "down", value: `${net.downKbps.toFixed(1)} KB/s`, color: "#f3ead7" },
+    { label: "up", value: `${net.upKbps.toFixed(1)} KB/s`, color: "#f3ead7" },
+    { label: "RTT", value: `${net.rttMs != null ? `${net.rttMs} ms` : "—"}`, color: "#f3ead7" },
+    { label: "state cb/s", value: `${net.stateCallbacksPerSec.toFixed(0)}`, color: "#f3ead7" },
+    { label: "patch/full", value: `${net.patchPerSec.toFixed(0)} / ${net.fullStatePerSec.toFixed(0)}`, color: "#f3ead7" },
+    { label: "roomData/s", value: `${net.roomDataPerSec.toFixed(1)}`, color: "#f3ead7" },
+    { label: "world", value: `b:${net.blobs}  bld:${net.buildings}  p:${net.players}`, color: "#f3ead7" },
+  ] as const;
+  const footerLines = 3;
+  const spacerCount = sections.filter((entry) => entry === null).length;
+  const contentLines = sections.length - spacerCount + footerLines;
+  const h = 58 + contentLines * lh + spacerCount * 6 + 14;
 
   ctx.save();
   ctx.globalAlpha = 0.9;
@@ -61,31 +89,15 @@ export function drawDevOverlay(
   ctx.font = "12px monospace";
 
   let row = y + 48;
-  line(ctx, "FPS", `${stats.fps.toFixed(0)}  (${stats.ms.toFixed(2)} ms)`, x + pad, row, "#6ff0a4"); row += lh;
-  line(ctx, "frame work", `${stats.totalWorkMs.toFixed(2)} ms`, x + pad, row); row += lh;
-  line(ctx, "frame slack", `${stats.idleBudgetMs.toFixed(2)} ms`, x + pad, row, stats.idleBudgetMs >= 0 ? "#6ff0a4" : "#ff9a8a"); row += lh;
-  line(ctx, "sync()", `${stats.syncMs.toFixed(2)} ms`, x + pad, row); row += lh;
-  line(ctx, "tileVisuals", `${stats.tileVisualsMs.toFixed(2)} ms`, x + pad, row); row += lh;
-  line(ctx, "entity render", `${stats.entityRenderMs.toFixed(2)} ms`, x + pad, row); row += lh;
-  line(ctx, "beam flush", `${stats.beamFlushMs.toFixed(2)} ms`, x + pad, row); row += lh;
-  line(ctx, "renderer.render", `${stats.sceneRenderMs.toFixed(2)} ms`, x + pad, row); row += lh + 6;
-
-  const info = renderer.info;
-  line(ctx, "draw calls", `${stats.drawCalls}`, x + pad, row); row += lh;
-  line(ctx, "triangles", `${stats.triangles}`, x + pad, row); row += lh;
-  line(ctx, "geometries", `${stats.geometries}`, x + pad, row); row += lh;
-  line(ctx, "textures", `${stats.textures}`, x + pad, row); row += lh;
-  line(ctx, "programs", `${stats.programs}`, x + pad, row); row += lh;
-  line(ctx, "entities", `${stats.entities}`, x + pad, row); row += lh;
-  line(ctx, "beam buckets", `${stats.beamBuckets}`, x + pad, row); row += lh + 6;
-
-  line(ctx, "down", `${net.downKbps.toFixed(1)} KB/s`, x + pad, row); row += lh;
-  line(ctx, "up", `${net.upKbps.toFixed(1)} KB/s`, x + pad, row); row += lh;
-  line(ctx, "RTT", `${net.rttMs != null ? `${net.rttMs} ms` : "—"}`, x + pad, row); row += lh;
-  line(ctx, "state cb/s", `${net.stateCallbacksPerSec.toFixed(0)}`, x + pad, row); row += lh;
-  line(ctx, "patch/full", `${net.patchPerSec.toFixed(0)} / ${net.fullStatePerSec.toFixed(0)}`, x + pad, row); row += lh;
-  line(ctx, "roomData/s", `${net.roomDataPerSec.toFixed(1)}`, x + pad, row); row += lh;
-  line(ctx, "world", `b:${net.blobs}  bld:${net.buildings}  p:${net.players}`, x + pad, row); row += lh + 8;
+  for (const entry of sections) {
+    if (entry === null) {
+      row += 6;
+      continue;
+    }
+    line(ctx, entry.label, entry.value, x + pad, row, entry.color);
+    row += lh;
+  }
+  row += 8;
 
   ctx.fillStyle = "#8aaccc";
   ctx.fillText(`walkability overlay: ${opts.walkability ? "on" : "off"}   tile inspect: ${opts.tileDebug ? "on" : "off"}`, x + pad, row);

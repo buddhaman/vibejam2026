@@ -13,6 +13,7 @@ const SHIELD_QUAT = new THREE.Quaternion();
 
 const COLOR_LEG_BEAM = new THREE.Color(0x4a433a);
 const COLOR_SWORD = new THREE.Color(0xd0d4dc);
+const COLOR_SYNTHAUR_SWORD = new THREE.Color(0xe6e9f1);
 const COLOR_BOW = new THREE.Color(0xa67642);
 const COLOR_BOWSTRING = new THREE.Color(0xf3ead2);
 const COLOR_BOW_ARROW = new THREE.Color(0xd9c8a1);
@@ -40,6 +41,12 @@ const SWORD_W = 0.048;
 const ARM_SWING_MAX = Math.PI * 0.4;
 const ATTACK_SWING_MAX = Math.PI * 0.95;
 const SHIELD_SWING_MAX = Math.PI * 0.06;
+const SYNTHAUR_ARM_SWING_MAX = Math.PI * 0.52;
+const SYNTHAUR_ATTACK_SWING_MAX = Math.PI * 1.18;
+const SYNTHAUR_SWORD_LEN_FRAC = 1.02;
+const SYNTHAUR_SWORD_WIDTH = 0.068;
+const SYNTHAUR_SHOULDER_SIDE_FRAC = 0.36;
+const SYNTHAUR_ARM_LEN_FRAC = 0.34;
 const BOW_HALF_HEIGHT = GAME_RULES.UNIT_HEIGHT * 0.64;
 const BOW_HALF_WIDTH = GAME_RULES.UNIT_RADIUS * 0.46;
 const BOW_THICKNESS = 0.1;
@@ -269,9 +276,11 @@ export function drawFamilyEquipment(params: {
   }
 
   const shoulderH = GAME_RULES.UNIT_HEIGHT * SHOULDER_H_FRAC * vs;
-  const shoulderSide = GAME_RULES.UNIT_RADIUS * SHOULDER_SIDE_FRAC * vs;
-  const armLen = GAME_RULES.UNIT_HEIGHT * ARM_LEN_FRAC * vs;
-  const swordLen = GAME_RULES.UNIT_HEIGHT * SWORD_LEN_FRAC * vs;
+  const isSynthaur = params.visualSpec.animationFamily === "synthaur";
+  const shoulderSide = GAME_RULES.UNIT_RADIUS * (isSynthaur ? SYNTHAUR_SHOULDER_SIDE_FRAC : SHOULDER_SIDE_FRAC) * vs;
+  const armLen = GAME_RULES.UNIT_HEIGHT * (isSynthaur ? SYNTHAUR_ARM_LEN_FRAC : ARM_LEN_FRAC) * vs;
+  const swordLen = GAME_RULES.UNIT_HEIGHT * (isSynthaur ? SYNTHAUR_SWORD_LEN_FRAC : SWORD_LEN_FRAC) * vs;
+  const swordWidth = (isSynthaur ? SYNTHAUR_SWORD_WIDTH : SWORD_W) * vs;
   const shoulderWorldY = params.unitTerrainY + shoulderH;
 
   const walkPhase = params.state.distanceWalked / (FOOT_STRIDE * vs + 1e-6);
@@ -282,9 +291,9 @@ export function drawFamilyEquipment(params: {
   const rightSwing = !params.visualSpec.usesMeleeWeapon
     ? 0
     : isAttacking
-      ? -0.24 + Math.max(0, Math.sin(attackPhase)) * ATTACK_SWING_MAX
+      ? -0.3 + Math.max(0, Math.sin(attackPhase)) * (isSynthaur ? SYNTHAUR_ATTACK_SWING_MAX : ATTACK_SWING_MAX)
       : isStriding
-        ? Math.sin(walkPhase * Math.PI * 2) * swingSign * ARM_SWING_MAX
+        ? Math.sin(walkPhase * Math.PI * 2) * swingSign * (isSynthaur ? SYNTHAUR_ARM_SWING_MAX : ARM_SWING_MAX)
         : 0;
   const leftSwing = !params.visualSpec.usesShield
     ? 0
@@ -307,7 +316,7 @@ export function drawFamilyEquipment(params: {
   if (params.visualSpec.usesMeleeWeapon) {
     TEMP_A.set(handX, handY, handZ);
     TEMP_B.set(tipX, tipY, tipZ);
-    params.drawBeam(TEMP_A, TEMP_B, SWORD_W * vs, SWORD_W * vs, COLOR_SWORD);
+    params.drawBrightBeam(TEMP_A, TEMP_B, swordWidth, swordWidth, isSynthaur ? COLOR_SYNTHAUR_SWORD : COLOR_SWORD);
   }
 
   const lShX = params.worldX - params.sideX * shoulderSide;

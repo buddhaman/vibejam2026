@@ -50,7 +50,7 @@ const UNIT_VISUAL_SPECS: Record<UnitTypeValue, UnitVisualSpec> = {
   [UnitType.SYNTHAUR]: {
     modelSlot: "synthaur",
     usesShield: false,
-    usesMeleeWeapon: false,
+    usesMeleeWeapon: true,
     easyPick: false,
     containsEllipseMult: 1.08,
     idleDetail: "Fast shock cavalry",

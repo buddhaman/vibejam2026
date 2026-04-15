@@ -9,7 +9,7 @@ import {
   type SquadSpread as SquadSpreadValue,
   type UnitType as UnitTypeValue,
 } from "../../shared/game-rules.js";
-import { AttackTargetType } from "../../shared/protocol.js";
+import { AttackTargetType, BlobActionState, type BlobActionState as BlobActionStateValue } from "../../shared/protocol.js";
 import type { Game } from "./game.js";
 import { Entity, type SelectionInfo } from "./entity.js";
 import { BuildingEntity } from "./building-entity.js";
@@ -75,8 +75,7 @@ const UNIT_WALK_SPEED = 4.4;
 const UNIT_BODY_MAX_SPEED = 10.2;
 const UNIT_BODY_CATCHUP_GAIN = 2.8;
 const UNIT_BODY_COMBAT_MAX_SPEED = 4.8;
-const UNIT_BODY_COMBAT_CATCHUP_GAIN = 1.15;
-const UNIT_FACE_SMOOTHING = 4.2;
+const UNIT_BODY_COMBAT_CATCHUP_GAIN = 0;
 const FOOT_IDLE_SPEED = 0.01;
 const FOOT_STRIDE = GAME_RULES.UNIT_RADIUS * 1.05;
 const COMBAT_TARGET_STANDOFF = GAME_RULES.UNIT_RADIUS * 1.55;
@@ -140,6 +139,25 @@ type UnitState = {
   attackCooldown: number;
 };
 
+type BlobRenderView = {
+  actionState: BlobActionStateValue;
+  attackTargetType: number;
+  attackTargetId: string;
+  engagedTargetType: number;
+  engagedTargetId: string;
+  x: number;
+  y: number;
+  targetX: number;
+  targetY: number;
+  vx: number;
+  vy: number;
+  ownerId: string;
+  unitCount: number;
+  health: number;
+  spread: SquadSpreadValue;
+  unitType: UnitTypeValue;
+};
+
 export class BlobEntity extends Entity {
   public mesh: THREE.Group;
   private ovalRoot!: THREE.Group;
@@ -162,40 +180,8 @@ export class BlobEntity extends Entity {
   private ovalFill!: THREE.Mesh<THREE.CircleGeometry, THREE.MeshBasicMaterial>;
   private ovalRing!: THREE.Mesh<THREE.RingGeometry, THREE.MeshBasicMaterial>;
   private attackRangeRing!: THREE.Mesh<THREE.RingGeometry, THREE.MeshBasicMaterial>;
-  private blobSnapshot: {
-    attackTargetType: number;
-    attackTargetId: string;
-    engagedTargetType: number;
-    engagedTargetId: string;
-    x: number;
-    y: number;
-    targetX: number;
-    targetY: number;
-    vx: number;
-    vy: number;
-    ownerId: string;
-    unitCount: number;
-    health: number;
-    spread: SquadSpreadValue;
-    unitType: UnitTypeValue;
-  } | null = null;
-  private blob: {
-    attackTargetType: number;
-    attackTargetId: string;
-    engagedTargetType: number;
-    engagedTargetId: string;
-    x: number;
-    y: number;
-    targetX: number;
-    targetY: number;
-    vx: number;
-    vy: number;
-    ownerId: string;
-    unitCount: number;
-    health: number;
-    spread: SquadSpreadValue;
-    unitType: UnitTypeValue;
-  } | null = null;
+  private blobSnapshot: BlobRenderView | null = null;
+  private blob: BlobRenderView | null = null;
   private heading = 0;
   private visualX: number | null = null;
   private visualY: number | null = null;
@@ -326,23 +312,7 @@ export class BlobEntity extends Entity {
     return group;
   }
 
-  public sync(blob: {
-    attackTargetType: number;
-    attackTargetId: string;
-    engagedTargetType: number;
-    engagedTargetId: string;
-    x: number;
-    y: number;
-    targetX: number;
-    targetY: number;
-    vx: number;
-    vy: number;
-    ownerId: string;
-    unitCount: number;
-    health: number;
-    spread: SquadSpreadValue;
-    unitType: UnitTypeValue;
-  }): void {
+  public sync(blob: BlobRenderView): void {
     const previousSnapshot = this.blobSnapshot;
     const previousLayout = this.blob ? this.getLayout() : null;
     const previousCount = previousSnapshot?.unitCount ?? 0;
@@ -382,6 +352,7 @@ export class BlobEntity extends Entity {
       }
     }
     this.blobSnapshot = {
+      actionState: blob.actionState,
       attackTargetType: blob.attackTargetType,
       attackTargetId: blob.attackTargetId,
       engagedTargetType: blob.engagedTargetType,
@@ -479,6 +450,10 @@ export class BlobEntity extends Entity {
     const radius =
       target instanceof BlobEntity ? target.getRadius() : target.getAttackRadius();
     return Math.hypot(own.x - enemy.x, own.z - enemy.z) <= rules.attackRange + radius;
+  }
+
+  private isServerRangedAttacking(): boolean {
+    return this.blob?.actionState === BlobActionState.RANGED_ATTACKING;
   }
 
   private getCanonicalFormationAxis(dx: number, dy: number): { x: number; y: number } | null {
@@ -645,6 +620,16 @@ export class BlobEntity extends Entity {
       targetWorldX: center.x,
       targetWorldZ: center.z,
     };
+  }
+
+  private isBuildingAttackActive(target: BuildingEntity): boolean {
+    if (!this.blob) return false;
+    const center = this.getPredictedWorldCenter();
+    const distance = Math.hypot(center.x - target.getWorldCenter().x, center.z - target.getWorldCenter().z);
+    const enterDistance = this.getRadius() + target.getAttackRadius() + GAME_RULES.UNIT_RADIUS * 0.9;
+    const keepDistance = enterDistance + GAME_RULES.UNIT_RADIUS * 1.25;
+    const wasActive = this.unitStates.some((state) => state.combatMode !== "formation");
+    return distance <= (wasActive ? keepDistance : enterDistance);
   }
 
   private getRenderedUnitWorldPosition(index: number): { x: number; z: number } {
@@ -1043,16 +1028,17 @@ export class BlobEntity extends Entity {
       unitRules.attackStyle === "ranged" ? directAttackTarget : null;
     const meleeBuildingTarget =
       unitRules.attackStyle === "melee" && directAttackTarget instanceof BuildingEntity
-        ? directAttackTarget
+        ? (this.isBuildingAttackActive(directAttackTarget) ? directAttackTarget : null)
         : null;
     const rangedTargetInRange = this.isTargetInRangedAttackRange(rangedAttackTarget);
+    const serverRangedAttacking = this.isServerRangedAttacking();
 
     this.villagerPickProxy.visible = visualSpec.easyPick;
     this.attackRangeRing.visible = this.isSelected() && unitRules.attackStyle === "ranged";
     if (this.attackRangeRing.visible) {
       this.attackRangeRing.scale.setScalar(unitRules.attackRange);
       this.attackRangeRing.material.color.copy(teamTint).offsetHSL(0, -0.08, 0.16);
-      this.attackRangeRing.material.opacity = rangedTargetInRange ? 0.32 : 0.18;
+      this.attackRangeRing.material.opacity = serverRangedAttacking || rangedTargetInRange ? 0.32 : 0.18;
     }
 
     if (usesAgentMeshes && this.unitsAgent.length > 0 && hasUnitInstancedGlb("agent") && !this.agentTeamTexApplied) {
@@ -1247,10 +1233,9 @@ export class BlobEntity extends Entity {
           state.combatMode === "formation" ? UNIT_BODY_MAX_SPEED : UNIT_BODY_COMBAT_MAX_SPEED;
         const catchupGain =
           state.combatMode === "formation" ? UNIT_BODY_CATCHUP_GAIN : UNIT_BODY_COMBAT_CATCHUP_GAIN;
-        const maxStep = Math.max(
-          moveSpeed * stepDt,
-          bodyDist * catchupGain * stepDt
-        );
+        const maxStep = catchupGain > 0
+          ? Math.max(moveSpeed * stepDt, bodyDist * catchupGain * stepDt)
+          : moveSpeed * stepDt;
         if (bodyDist <= maxStep || bodyDist < 1e-5) {
           state.bodyX = desiredWorldX;
           state.bodyZ = desiredWorldZ;
@@ -1272,7 +1257,7 @@ export class BlobEntity extends Entity {
       let stepForwardX = forwardX;
       let stepForwardZ = forwardZ;
       const hasEnemyAssignment = state.combatMode !== "formation";
-      const hasRangedAim = !hasEnemyAssignment && !!rangedAttackTarget && rangedTargetInRange;
+      const hasRangedAim = !hasEnemyAssignment && !!rangedAttackTarget && serverRangedAttacking;
       if (hasEnemyAssignment && (engagedCombatTarget || meleeBuildingTarget)) {
         let faceDx = targetWorldX - worldX;
         let faceDz = targetWorldZ - worldZ;
@@ -1301,24 +1286,32 @@ export class BlobEntity extends Entity {
         }
       }
       const bodySpeed = Math.hypot(bodyVx, bodyVz);
-      if (!hasEnemyAssignment && bodySpeed > FOOT_IDLE_SPEED) {
+      if (bodySpeed > FOOT_IDLE_SPEED) {
         stepForwardX = bodyVx / bodySpeed;
         stepForwardZ = bodyVz / bodySpeed;
-      }
-      const faceT = Math.min(1, stepDt * UNIT_FACE_SMOOTHING);
-      state.faceX += (stepForwardX - state.faceX) * faceT;
-      state.faceZ += (stepForwardZ - state.faceZ) * faceT;
-      const faceLen = Math.hypot(state.faceX, state.faceZ);
-      if (faceLen > 1e-4) {
-        stepForwardX = state.faceX / faceLen;
-        stepForwardZ = state.faceZ / faceLen;
         state.faceX = stepForwardX;
         state.faceZ = stepForwardZ;
       } else {
-        stepForwardX = 0;
-        stepForwardZ = 1;
-        state.faceX = 0;
-        state.faceZ = 1;
+        const faceLen = Math.hypot(stepForwardX, stepForwardZ);
+        if (faceLen > 1e-4) {
+          stepForwardX /= faceLen;
+          stepForwardZ /= faceLen;
+          state.faceX = stepForwardX;
+          state.faceZ = stepForwardZ;
+        } else {
+          stepForwardX = state.faceX || 0;
+          stepForwardZ = state.faceZ || 1;
+          const cachedLen = Math.hypot(stepForwardX, stepForwardZ);
+          if (cachedLen > 1e-4) {
+            stepForwardX /= cachedLen;
+            stepForwardZ /= cachedLen;
+          } else {
+            stepForwardX = 0;
+            stepForwardZ = 1;
+            state.faceX = 0;
+            state.faceZ = 1;
+          }
+        }
       }
       const sideX = -stepForwardZ;
       const sideZ = stepForwardX;

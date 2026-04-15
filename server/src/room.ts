@@ -30,6 +30,7 @@ import {
 } from "../../shared/game-rules.js";
 import {
   AttackTargetType,
+  BlobActionState,
   type AttackMessage,
   MessageType,
   type IntentMessage,
@@ -55,7 +56,8 @@ const BLOB_REBALANCE_BATTLE_BUFFER = 10;
 /** Distance at which a blob advances to its next path waypoint (intermediate only). */
 const WAYPOINT_REACH = GAME_RULES.TILE_SIZE * 0.45;
 const DISENGAGE_LOCK_RELEASE_BUFFER = GAME_RULES.TILE_SIZE * 0.35;
-const RANGED_ATTACK_HYSTERESIS = GAME_RULES.TILE_SIZE * 1.75;
+const RANGED_ATTACK_HYSTERESIS = GAME_RULES.TILE_SIZE * 1.1;
+const RANGED_ATTACK_COMMIT_INSET = GAME_RULES.TILE_SIZE * 0.55;
 
 type AttackableTarget =
   | { type: typeof AttackTargetType.BLOB; entity: Blob }
@@ -305,6 +307,42 @@ export class BattleRoom extends Room<{ state: GameState }> {
     if (rules.attackStyle === "ranged") return rules.attackRange + this.getAttackTargetRadius(target);
     if (target.type === AttackTargetType.BLOB) return this.getBlobEngageDistance(blob, target.entity);
     return blob.radius + this.getAttackTargetRadius(target) + GAME_RULES.UNIT_RADIUS * 0.6;
+  }
+
+  private isBlobRangedAttackActive(blob: Blob, target: AttackableTarget): boolean {
+    const rules = getUnitRules(blob.unitType);
+    if (rules.attackStyle !== "ranged") return false;
+    const distance = Math.hypot(blob.x - target.entity.x, blob.y - target.entity.y);
+    const attackRange = this.getBlobAttackRange(blob, target);
+    const commitRange = Math.max(0, attackRange - RANGED_ATTACK_COMMIT_INSET);
+    const keepRange = attackRange + RANGED_ATTACK_HYSTERESIS;
+    const wasActive = blob.actionState === BlobActionState.RANGED_ATTACKING;
+    return distance <= (wasActive ? keepRange : commitRange);
+  }
+
+  private refreshBlobActionState(blob: Blob): void {
+    const rules = getUnitRules(blob.unitType);
+    if (blob.engagedTargetType === AttackTargetType.BLOB && blob.engagedTargetId.length > 0) {
+      blob.actionState = this.blobHasRetreatIntent(blob)
+        ? BlobActionState.RETREATING
+        : BlobActionState.ENGAGED;
+      return;
+    }
+
+    const target = this.getBlobAttackTarget(blob);
+    if (target && target.entity.ownerId !== blob.ownerId) {
+      blob.actionState =
+        rules.attackStyle === "ranged" && this.isBlobRangedAttackActive(blob, target)
+          ? BlobActionState.RANGED_ATTACKING
+          : BlobActionState.PURSUING;
+      return;
+    }
+
+    const isMoving =
+      this.blobPaths.has(blob.id) ||
+      Math.hypot(blob.targetX - blob.x, blob.targetY - blob.y) > CONFIG.BLOB_STOP_EPSILON * 1.5 ||
+      Math.hypot(blob.vx, blob.vy) > 0.1;
+    blob.actionState = isMoving ? BlobActionState.MOVING : BlobActionState.IDLE;
   }
 
   private getBlobPairKey(a: Blob, b: Blob): string {
@@ -615,7 +653,10 @@ export class BattleRoom extends Room<{ state: GameState }> {
     const dy = blob.y - target.entity.y;
     const dist = Math.hypot(dx, dy);
     const targetRadius = this.getAttackTargetRadius(target);
-    const holdRadius = Math.max(targetRadius + rules.attackRange * 0.22, targetRadius + GAME_RULES.TILE_SIZE * 0.08);
+    const holdRadius = Math.max(
+      targetRadius + Math.max(0, rules.attackRange - RANGED_ATTACK_COMMIT_INSET),
+      targetRadius + GAME_RULES.TILE_SIZE * 0.18
+    );
     const dirX = dist > 1e-4 ? dx / dist : 1;
     const dirY = dist > 1e-4 ? dy / dist : 0;
     return this.findNearestWalkablePoint(target.entity.x + dirX * holdRadius, target.entity.y + dirY * holdRadius, 3);
@@ -734,11 +775,9 @@ export class BattleRoom extends Room<{ state: GameState }> {
             target.entity.attackTargetId = blob.id;
             this.clearBlobPath(blob);
           } else if (
-            this.blobIsWithinAttackRange(
-              blob,
-              target,
-              rules.attackStyle === "ranged" ? RANGED_ATTACK_HYSTERESIS : GAME_RULES.UNIT_RADIUS * 0.3
-            )
+            rules.attackStyle === "ranged"
+              ? this.isBlobRangedAttackActive(blob, target)
+              : this.blobIsWithinAttackRange(blob, target, GAME_RULES.UNIT_RADIUS * 0.3)
           ) {
             blob.targetX = blob.x;
             blob.targetY = blob.y;
@@ -781,9 +820,17 @@ export class BattleRoom extends Room<{ state: GameState }> {
       if (!moved) this.tryVillagerGather(blob, dt);
     }
 
+    for (const blob of this.state.blobs.values()) {
+      this.refreshBlobActionState(blob);
+    }
+
     this.resolveRangedBlobCombat(dt);
     this.resolveBlobCombat(dt);
     this.rebalanceFriendlyBlobs();
+
+    for (const blob of this.state.blobs.values()) {
+      this.refreshBlobActionState(blob);
+    }
   }
 
   private spawnTownCenter(ownerId: string, playerIndex: number): Building {
@@ -1163,7 +1210,11 @@ export class BattleRoom extends Room<{ state: GameState }> {
       const rules = getUnitRules(blob.unitType);
       const target = this.getBlobAttackTarget(blob);
       if (!target || target.entity.ownerId === blob.ownerId) continue;
-      if (!this.blobIsWithinAttackRange(blob, target, RANGED_ATTACK_HYSTERESIS)) continue;
+      if (rules.attackStyle === "ranged") {
+        if (blob.actionState !== BlobActionState.RANGED_ATTACKING) continue;
+      } else if (!this.blobIsWithinAttackRange(blob, target, GAME_RULES.UNIT_RADIUS * 0.3)) {
+        continue;
+      }
 
       const damage = blob.unitCount * (rules.attackStyle === "ranged" ? rules.dpsPerUnit : rules.meleeDpsPerUnit) * dt;
       if (target.type === AttackTargetType.BLOB) {

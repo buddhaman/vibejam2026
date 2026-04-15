@@ -61,6 +61,8 @@ const SCENE_ENVIRONMENT_INTENSITY = 0.08;
 const WALKABILITY_DEBUG_KEY = "KeyV";
 const TILE_DEBUG_KEY = "Backquote"; // ` key toggles developer mode too
 const DEV_MODE_KEY = "KeyG";
+const DESKTOP_RENDER_HZ = 60;
+const MOBILE_RENDER_HZ = 30;
 
 export function startRender(game: Game) {
   const netPerf = attachDevNetworkPerf(game.room);
@@ -569,13 +571,21 @@ export function startRender(game: Game) {
     renderer.setSize(window.innerWidth, window.innerHeight);
   });
 
+  const prefersCoarsePointer = window.matchMedia?.("(pointer: coarse)").matches ?? false;
+  const isTouchDevice = typeof navigator !== "undefined" && navigator.maxTouchPoints > 0;
+  const isMobileLike = prefersCoarsePointer || isTouchDevice;
+  const targetRenderHz = isMobileLike ? MOBILE_RENDER_HZ : DESKTOP_RENDER_HZ;
+  const targetFrameMs = 1000 / targetRenderHz;
   let lastFrameTime = performance.now();
+  let lastRenderTime = lastFrameTime;
 
   function tick() {
     requestAnimationFrame(tick);
     const now = performance.now();
+    if (now - lastRenderTime < targetFrameMs) return;
     const dt = (now - lastFrameTime) / 1000;
     lastFrameTime = now;
+    lastRenderTime = now;
     applyCameraArrowKeys(dt);
     const perfSync0 = performance.now();
     game.sync();

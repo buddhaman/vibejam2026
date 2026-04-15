@@ -22,6 +22,17 @@ export const AttackTargetType = {
 
 export type AttackTargetType = (typeof AttackTargetType)[keyof typeof AttackTargetType];
 
+export const BlobActionState = {
+  IDLE: 0,
+  MOVING: 1,
+  PURSUING: 2,
+  RANGED_ATTACKING: 3,
+  ENGAGED: 4,
+  RETREATING: 5,
+} as const;
+
+export type BlobActionState = (typeof BlobActionState)[keyof typeof BlobActionState];
+
 export type IntentMessage = {
   blobId: string;
   targetX: number;

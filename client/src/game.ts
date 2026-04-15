@@ -192,6 +192,7 @@ export class Game {
       let entity = this.findBlobEntity(id as string);
       if (!entity) entity = new BlobEntity(this, id as string);
       entity.sync(blob as {
+        actionState: number;
         attackTargetType: number;
         attackTargetId: string;
         engagedTargetType: number;
