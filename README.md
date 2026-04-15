@@ -196,19 +196,10 @@ Keep the architecture **boring on the wire**, **expressive on the GPU**.
  - Farms
  - Behavior trees (behavior of all units)
  - Villagers build buildings
- - Villagers join in blobs
- - Buildings produce units that auto join in blobs
- - Design attack mechanics
  - Give health to buildings
  - Build walls.
  - Make trees cuttable and collectable
- - Make weapons
- - Swing animation
  - Bows
- - Arrows and shooting animation
- - Give proper colors to all buildings and units in an efficient way
- - Health per unit
- - Make terrain more pretty
  - Add water
  - In game text 
  - Music
@@ -223,3 +214,14 @@ Keep the architecture **boring on the wire**, **expressive on the GPU**.
  - Map editor
  - Map savefile design
  - Sync map
+
+### Done
+ - Buildings produce units that auto join in blobs
+ - Design attack mechanics
+ - Villagers join in blobs
+ - Make weapons
+ - Swing animation
+ - Arrows and shooting animation
+ - Give proper colors to all buildings and units in an efficient way
+ - Health per unit
+ - Make terrain more pretty

@@ -6,6 +6,8 @@ export const BuildingType = {
   BARRACKS: 1,
   TOWER: 2,
   TOWN_CENTER: 3,
+  ARCHERY_RANGE: 4,
+  STABLE: 5,
 } as const;
 
 export type BuildingType = (typeof BuildingType)[keyof typeof BuildingType];
@@ -13,6 +15,10 @@ export type BuildingType = (typeof BuildingType)[keyof typeof BuildingType];
 export const UnitType = {
   VILLAGER: 1,
   WARBAND: 2,
+  ARCHER: 3,
+  SYNTHAUR: 4,
+  /** Legacy alias kept so older references keep working while the project moves to the correct name. */
+  CENTAUR: 4,
 } as const;
 
 export type UnitType = (typeof UnitType)[keyof typeof UnitType];
@@ -39,11 +45,23 @@ export const SquadSpread = {
 export type SquadSpread = (typeof SquadSpread)[keyof typeof SquadSpread];
 
 export function isBuildingType(value: unknown): value is BuildingType {
-  return value === BuildingType.BARRACKS || value === BuildingType.TOWER || value === BuildingType.TOWN_CENTER;
+  return (
+    value === BuildingType.BARRACKS ||
+    value === BuildingType.TOWER ||
+    value === BuildingType.TOWN_CENTER ||
+    value === BuildingType.ARCHERY_RANGE ||
+    value === BuildingType.STABLE
+  );
 }
 
 export function isUnitType(value: unknown): value is UnitType {
-  return value === UnitType.VILLAGER || value === UnitType.WARBAND;
+  return (
+    value === UnitType.VILLAGER ||
+    value === UnitType.WARBAND ||
+    value === UnitType.ARCHER ||
+    value === UnitType.SYNTHAUR ||
+    value === UnitType.CENTAUR
+  );
 }
 
 export function isTileType(value: unknown): value is TileType {
@@ -82,9 +100,15 @@ export const GAME_RULES = {
   START_BIOMASS: 500,
   START_MATERIAL: 300,
   START_COMPUTE: 200,
-  /** Free Hoplite squad spawned with your first town center — does not affect barracks-trained warbands. */
+  /** Free starting squads spawned with your first town center. */
+  START_AGENT_UNIT_COUNT: 3,
   START_WARBAND_UNIT_COUNT: 800,
+  START_ARCHER_UNIT_COUNT: 60,
+  START_SYNTHAUR_UNIT_COUNT: 24,
+  START_CENTAUR_UNIT_COUNT: 24,
   BARRACKS_HEALTH: 200,
+  ARCHERY_RANGE_HEALTH: 190,
+  STABLE_HEALTH: 240,
   TOWER_HEALTH: 300,
   TOWN_CENTER_HEALTH: 950,
   MAX_BUILDINGS_PER_PLAYER: 8,
@@ -112,6 +136,7 @@ const TILE_CENTER_MAX = GAME_RULES.WORLD_MAX - TILE_HALF;
 export const BUILDING_RULES = {
   [BuildingType.BARRACKS]: {
     label: "Stratégion",
+    detail: "Produces hoplites",
     health: GAME_RULES.BARRACKS_HEALTH,
     buildable: true,
     cost: { biomass: 0, material: 175, compute: 0 },
@@ -125,6 +150,7 @@ export const BUILDING_RULES = {
   },
   [BuildingType.TOWER]: {
     label: "Pyrgos",
+    detail: "Defensive structure",
     health: GAME_RULES.TOWER_HEALTH,
     buildable: true,
     cost: { biomass: 0, material: 125, compute: 50 },
@@ -138,6 +164,7 @@ export const BUILDING_RULES = {
   },
   [BuildingType.TOWN_CENTER]: {
     label: "Agora",
+    detail: "Produces agents",
     health: GAME_RULES.TOWN_CENTER_HEALTH,
     buildable: false,
     cost: { biomass: 0, material: 0, compute: 0 },
@@ -148,6 +175,34 @@ export const BUILDING_RULES = {
     height: 8.8,
     trainSpawnOffsetX: GAME_RULES.TILE_SIZE,
     producibleUnits: [UnitType.VILLAGER],
+  },
+  [BuildingType.ARCHERY_RANGE]: {
+    label: "Toxotikon",
+    detail: "Produces archers",
+    health: GAME_RULES.ARCHERY_RANGE_HEALTH,
+    buildable: true,
+    cost: { biomass: 0, material: 150, compute: 30 },
+    footprintWidth: GAME_RULES.TILE_SIZE,
+    footprintDepth: GAME_RULES.TILE_SIZE,
+    selectionWidth: GAME_RULES.TILE_SIZE,
+    selectionDepth: GAME_RULES.TILE_SIZE,
+    height: 5.9,
+    trainSpawnOffsetX: GAME_RULES.TILE_SIZE,
+    producibleUnits: [UnitType.ARCHER],
+  },
+  [BuildingType.STABLE]: {
+    label: "Synthaurion",
+    detail: "Produces synthaurs",
+    health: GAME_RULES.STABLE_HEALTH,
+    buildable: true,
+    cost: { biomass: 0, material: 210, compute: 80 },
+    footprintWidth: GAME_RULES.TILE_SIZE * 1.15,
+    footprintDepth: GAME_RULES.TILE_SIZE * 1.05,
+    selectionWidth: GAME_RULES.TILE_SIZE * 1.15,
+    selectionDepth: GAME_RULES.TILE_SIZE * 1.05,
+    height: 6.8,
+    trainSpawnOffsetX: GAME_RULES.TILE_SIZE * 1.15,
+    producibleUnits: [UnitType.SYNTHAUR],
   },
 } as const;
 
@@ -163,12 +218,15 @@ export const UNIT_RULES = {
     dpsPerUnit: 0.35,
     targetSize: 3,
     rebalanceThreshold: 1,
-    mergeDistance: 18,
+    mergeDistance: 28,
     moveSpeed: 12,
     acceleration: 34,
     decelerationRadius: 6,
     retreatSpeedMultiplier: 0.25,
     canAlwaysDisengage: false,
+    attackStyle: "melee",
+    attackRange: 0,
+    projectileSpeed: 0,
   },
   [UnitType.WARBAND]: {
     label: "Hoplite",
@@ -187,6 +245,51 @@ export const UNIT_RULES = {
     decelerationRadius: 6,
     retreatSpeedMultiplier: 0.25,
     canAlwaysDisengage: false,
+    attackStyle: "melee",
+    attackRange: 0,
+    projectileSpeed: 0,
+  },
+  [UnitType.ARCHER]: {
+    label: "Archer",
+    detail: "Ranged skirmisher squad",
+    cost: { biomass: 70, material: 0, compute: 45 },
+    trainTimeMs: 11000,
+    health: 8,
+    unitCount: 10,
+    visualScale: 0.96,
+    dpsPerUnit: 0.4,
+    targetSize: 32,
+    rebalanceThreshold: 4,
+    mergeDistance: 30,
+    moveSpeed: 11.5,
+    acceleration: 32,
+    decelerationRadius: 6,
+    retreatSpeedMultiplier: 0.25,
+    canAlwaysDisengage: false,
+    attackStyle: "ranged",
+    attackRange: 34,
+    projectileSpeed: 28,
+  },
+  [UnitType.SYNTHAUR]: {
+    label: "Synthaur",
+    detail: "Fast shock cavalry",
+    cost: { biomass: 110, material: 0, compute: 90 },
+    trainTimeMs: 14500,
+    health: 18,
+    unitCount: 6,
+    visualScale: 1.18,
+    dpsPerUnit: 0.9,
+    targetSize: 18,
+    rebalanceThreshold: 2,
+    mergeDistance: 34,
+    moveSpeed: 16.5,
+    acceleration: 42,
+    decelerationRadius: 7,
+    retreatSpeedMultiplier: 0.25,
+    canAlwaysDisengage: true,
+    attackStyle: "melee",
+    attackRange: 0,
+    projectileSpeed: 0,
   },
 } as const;
 

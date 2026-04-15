@@ -13,26 +13,27 @@ import type { TileView } from "./terrain.js";
 
 type Rect = { x: number; y: number; w: number; h: number };
 
-const BUILD_ITEMS = [
-  {
-    label: getBuildingRules(BuildingType.BARRACKS).label,
-    icon: "⚔",
-    type: BuildingType.BARRACKS,
-    color: "#7A1A1A",
-    colorLight: "#B82626",
-    glow: "#FF4040",
-    cost: getBuildingRules(BuildingType.BARRACKS).cost,
-  },
-  {
-    label: getBuildingRules(BuildingType.TOWER).label,
-    icon: "🏛",
-    type: BuildingType.TOWER,
-    color: "#0F2E5A",
-    colorLight: "#1B6CA8",
-    glow: "#3AA8FF",
-    cost: getBuildingRules(BuildingType.TOWER).cost,
-  },
+const BUILD_ITEM_THEME: Record<BuildingType, { icon: string; color: string; colorLight: string; glow: string }> = {
+  [BuildingType.BARRACKS]: { icon: "⚔", color: "#7A1A1A", colorLight: "#B82626", glow: "#FF4040" },
+  [BuildingType.TOWER]: { icon: "🏛", color: "#0F2E5A", colorLight: "#1B6CA8", glow: "#3AA8FF" },
+  [BuildingType.TOWN_CENTER]: { icon: "⌂", color: "#6D4D1D", colorLight: "#D5A04A", glow: "#FFD27A" },
+  [BuildingType.ARCHERY_RANGE]: { icon: "🏹", color: "#5C3B15", colorLight: "#B7752E", glow: "#FFC16A" },
+  [BuildingType.STABLE]: { icon: "♞", color: "#3D244F", colorLight: "#7B51A6", glow: "#D0A6FF" },
+};
+
+const BUILD_MENU_TYPES = [
+  BuildingType.BARRACKS,
+  BuildingType.ARCHERY_RANGE,
+  BuildingType.STABLE,
+  BuildingType.TOWER,
 ] as const;
+
+const BUILD_ITEMS = BUILD_MENU_TYPES.map((type) => ({
+  label: getBuildingRules(type).label,
+  type,
+  cost: getBuildingRules(type).cost,
+  ...BUILD_ITEM_THEME[type],
+})) as const;
 
 export type BuildAction = (typeof BUILD_ITEMS)[number]["type"];
 

@@ -1,11 +1,12 @@
 import * as THREE from "three";
 import { GAME_RULES, UnitType, type UnitType as UnitTypeValue } from "../../shared/game-rules.js";
 import { createUnitBodyGeometry } from "./render-geom.js";
-import { createVillagerInstancedMeshes, createWarbandInstancedMeshes } from "./unit-instanced-models.js";
+import { createUnitInstancedMeshes } from "./unit-instanced-models.js";
 import { applyTeamColorTexturesToMarkedMeshes, secondaryTeamHexFromPrimary } from "./render-texture-recolor.js";
 import { applyStylizedShading } from "./stylized-shading.js";
 import type { TileView } from "./terrain.js";
 import { getTerrainHeightAt } from "./terrain.js";
+import { getUnitVisualSpec } from "./unit-visual-config.js";
 
 const GRAVITY = 18;
 const PARTICLE_DAMPING = 0.992;
@@ -167,12 +168,12 @@ export class RagdollFxSystem {
       ],
       age: 0,
       ttl: TORSO_SETTLE_TIME + Math.random() * 2,
-      torsoScale: params.unitType === UnitType.VILLAGER ? 0.82 : 1,
+      torsoScale: getUnitVisualSpec(params.unitType).modelSlot === "agent" ? 0.82 : 1,
       teamColor: params.teamColor,
       unitType: params.unitType,
     });
 
-    if (params.unitType !== UnitType.VILLAGER) {
+    if (getUnitVisualSpec(params.unitType).usesShield) {
       this.spawnDebris(
         params.x,
         baseY + GAME_RULES.UNIT_HEIGHT * 0.85,
@@ -281,10 +282,8 @@ export class RagdollFxSystem {
     const existing = this.torsoBanks.get(key);
     if (existing) return existing;
 
-    const loadedParts =
-      unitType === UnitType.VILLAGER
-        ? createVillagerInstancedMeshes(this.torsoCapacity)
-        : createWarbandInstancedMeshes(this.torsoCapacity);
+    const visualSpec = getUnitVisualSpec(unitType);
+    const loadedParts = createUnitInstancedMeshes(visualSpec.modelSlot, this.torsoCapacity);
     const meshes =
       loadedParts.length > 0
         ? loadedParts

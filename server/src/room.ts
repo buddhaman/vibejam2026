@@ -53,6 +53,7 @@ const CHUNK_SIZE = 50; // tiles per chunk — keeps each message well under 5 KB
 const BLOB_REBALANCE_BATTLE_BUFFER = 10;
 /** Distance at which a blob advances to its next path waypoint (intermediate only). */
 const WAYPOINT_REACH = GAME_RULES.TILE_SIZE * 0.45;
+const DISENGAGE_LOCK_RELEASE_BUFFER = GAME_RULES.TILE_SIZE * 0.35;
 
 /** @see https://docs.colyseus.io/state/ — state is assigned on the class in 0.17+ */
 export class BattleRoom extends Room<{ state: GameState }> {
@@ -66,6 +67,8 @@ export class BattleRoom extends Room<{ state: GameState }> {
   private buildingTileOcc = new Map<string, number>();
   /** Active A* paths per blob — server-side only, not part of schema. */
   private blobPaths = new Map<string, { waypoints: Waypoint[]; index: number }>();
+  /** Pairwise "do not instantly re-engage" locks, used when fast units break contact. */
+  private disengageLocks = new Set<string>();
 
   onCreate() {
     this.state.terrainSeed = Math.floor(Math.random() * 0xffffffff);
@@ -103,6 +106,9 @@ export class BattleRoom extends Room<{ state: GameState }> {
         blob.attackTargetBlobId = "";
         this.setBlobDestination(blob, msg.targetX, msg.targetY, client);
         return;
+      }
+      if (engagedTarget && engagedTarget.ownerId !== blob.ownerId) {
+        this.addDisengageLock(blob, engagedTarget);
       }
       this.clearBlobCombatState(blob);
       blob.attackTargetBlobId = "";
@@ -215,7 +221,10 @@ export class BattleRoom extends Room<{ state: GameState }> {
 
     const playerIndex = this.getNextTownCenterIndex();
     const townCenter = this.spawnTownCenter(client.sessionId, playerIndex);
+    this.spawnProducedUnit(townCenter, UnitType.VILLAGER, CONFIG.START_AGENT_UNIT_COUNT);
     this.spawnProducedUnit(townCenter, UnitType.WARBAND, CONFIG.START_WARBAND_UNIT_COUNT);
+    this.spawnProducedUnit(townCenter, UnitType.ARCHER, CONFIG.START_ARCHER_UNIT_COUNT);
+    this.spawnProducedUnit(townCenter, UnitType.SYNTHAUR, CONFIG.START_SYNTHAUR_UNIT_COUNT);
   }
 
   onLeave(client: Client, _code: number) {
@@ -244,6 +253,44 @@ export class BattleRoom extends Room<{ state: GameState }> {
 
   private getBlobEngageDistance(a: Blob, b: Blob): number {
     return a.radius + b.radius + CONFIG.BLOB_COMBAT_ENGAGE_PADDING;
+  }
+
+  private getBlobAttackRange(blob: Blob, target: Blob): number {
+    const rules = getUnitRules(blob.unitType);
+    if (rules.attackStyle === "ranged") return rules.attackRange + target.radius;
+    return this.getBlobEngageDistance(blob, target);
+  }
+
+  private getBlobPairKey(a: Blob, b: Blob): string {
+    return a.id < b.id ? `${a.id}:${b.id}` : `${b.id}:${a.id}`;
+  }
+
+  private addDisengageLock(a: Blob, b: Blob): void {
+    this.disengageLocks.add(this.getBlobPairKey(a, b));
+  }
+
+  private hasDisengageLock(a: Blob, b: Blob): boolean {
+    return this.disengageLocks.has(this.getBlobPairKey(a, b));
+  }
+
+  private pruneDisengageLocks(): void {
+    for (const key of Array.from(this.disengageLocks)) {
+      const [aId, bId] = key.split(":");
+      const a = aId ? this.state.blobs.get(aId) : null;
+      const b = bId ? this.state.blobs.get(bId) : null;
+      if (!a || !b) {
+        this.disengageLocks.delete(key);
+        continue;
+      }
+      const releaseDistance = this.getBlobEngageDistance(a, b) + DISENGAGE_LOCK_RELEASE_BUFFER;
+      if (Math.hypot(a.x - b.x, a.y - b.y) > releaseDistance) {
+        this.disengageLocks.delete(key);
+      }
+    }
+  }
+
+  private blobIsWithinAttackRange(blob: Blob, target: Blob): boolean {
+    return Math.hypot(blob.x - target.x, blob.y - target.y) <= this.getBlobAttackRange(blob, target);
   }
 
   private blobsCanEngage(a: Blob, b: Blob): boolean {
@@ -404,6 +451,7 @@ export class BattleRoom extends Room<{ state: GameState }> {
       const retreating = aRetreating ? a : bRetreating ? b : null;
       const pinned = retreating === a ? b : a;
       if (retreating && this.canBlobInstantlyDisengage(retreating, pinned)) {
+        this.addDisengageLock(retreating, pinned);
         this.clearBlobCombatState(retreating);
         this.clearBlobCombatState(pinned);
         continue;
@@ -512,8 +560,19 @@ export class BattleRoom extends Room<{ state: GameState }> {
    * Attack move goal: the enemy squad center (nearest walkable point).
    * Engagement triggers as soon as centers are within range — no stop at a ring outside the target.
    */
-  private getBlobAttackApproachPoint(_blob: Blob, target: Blob): { x: number; y: number } | null {
-    return this.findNearestWalkablePoint(target.x, target.y, 3);
+  private getBlobAttackApproachPoint(blob: Blob, target: Blob): { x: number; y: number } | null {
+    const rules = getUnitRules(blob.unitType);
+    if (rules.attackStyle !== "ranged") {
+      return this.findNearestWalkablePoint(target.x, target.y, 3);
+    }
+
+    const dx = blob.x - target.x;
+    const dy = blob.y - target.y;
+    const dist = Math.hypot(dx, dy);
+    const holdRadius = Math.max(target.radius + rules.attackRange * 0.78, target.radius + GAME_RULES.TILE_SIZE * 0.6);
+    const dirX = dist > 1e-4 ? dx / dist : 1;
+    const dirY = dist > 1e-4 ? dy / dist : 0;
+    return this.findNearestWalkablePoint(target.x + dirX * holdRadius, target.y + dirY * holdRadius, 3);
   }
 
   private setBlobDestination(
@@ -574,6 +633,7 @@ export class BattleRoom extends Room<{ state: GameState }> {
 
   private tick(dtMs: number) {
     const dt = dtMs / 1000;
+    this.pruneDisengageLocks();
 
     for (const building of this.state.buildings.values()) {
       this.stepBuildingProduction(building, dtMs);
@@ -609,12 +669,22 @@ export class BattleRoom extends Room<{ state: GameState }> {
           blob.vy = 0;
           this.clearBlobPath(blob);
         } else {
-          if (this.blobsCanEngage(blob, target) && this.defenderAllowsEngagement(target, blob)) {
+          const rules = getUnitRules(blob.unitType);
+          if (
+            rules.attackStyle === "melee" &&
+            !this.hasDisengageLock(blob, target) &&
+            this.blobsCanEngage(blob, target) &&
+            this.defenderAllowsEngagement(target, blob)
+          ) {
             engagedBlobIds.add(blob.id);
             engagedBlobIds.add(target.id);
             blob.engagedTargetBlobId = target.id;
             target.engagedTargetBlobId = blob.id;
             target.attackTargetBlobId = blob.id;
+            this.clearBlobPath(blob);
+          } else if (rules.attackStyle === "ranged" && this.blobIsWithinAttackRange(blob, target)) {
+            blob.targetX = blob.x;
+            blob.targetY = blob.y;
             this.clearBlobPath(blob);
           } else {
             const approach = this.getBlobAttackApproachPoint(blob, target);
@@ -652,6 +722,7 @@ export class BattleRoom extends Room<{ state: GameState }> {
       if (!moved) this.tryVillagerGather(blob, dt);
     }
 
+    this.resolveRangedBlobCombat(dt);
     this.resolveBlobCombat(dt);
     this.rebalanceFriendlyBlobs();
   }
@@ -1013,6 +1084,35 @@ export class BattleRoom extends Room<{ state: GameState }> {
 
       locked.add(blob.id);
       locked.add(target.id);
+    }
+
+    if (deadIds.size === 0) return;
+    for (const deadId of deadIds) {
+      this.blobPaths.delete(deadId);
+      this.state.blobs.delete(deadId);
+    }
+    for (const blob of this.state.blobs.values()) {
+      if (deadIds.has(blob.attackTargetBlobId)) blob.attackTargetBlobId = "";
+      if (deadIds.has(blob.engagedTargetBlobId)) blob.engagedTargetBlobId = "";
+    }
+  }
+
+  private resolveRangedBlobCombat(dt: number): void {
+    const deadIds = new Set<string>();
+
+    for (const blob of this.state.blobs.values()) {
+      if (blob.engagedTargetBlobId.length > 0) continue;
+      if (blob.attackTargetBlobId.length === 0) continue;
+      const rules = getUnitRules(blob.unitType);
+      if (rules.attackStyle !== "ranged") continue;
+
+      const target = this.state.blobs.get(blob.attackTargetBlobId);
+      if (!target || target.ownerId === blob.ownerId || target.engagedTargetBlobId === blob.id) continue;
+      if (!this.blobIsWithinAttackRange(blob, target)) continue;
+
+      target.health -= blob.unitCount * rules.dpsPerUnit * dt;
+      this.syncBlobHealthToUnitCount(target);
+      if (target.unitCount <= 0 || target.health <= 0) deadIds.add(target.id);
     }
 
     if (deadIds.size === 0) return;

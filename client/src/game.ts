@@ -29,6 +29,7 @@ import { BlobEntity } from "./blob-entity.js";
 import { BuildingEntity } from "./building-entity.js";
 import type { BeamDrawer } from "./beam-drawer.js";
 import type { RagdollFxSystem } from "./ragdoll-fx.js";
+import type { ArrowFxSystem } from "./arrow-fx.js";
 import { type TileView } from "./terrain.js";
 
 export class Game {
@@ -39,6 +40,7 @@ export class Game {
   public selectedTileKey: string | null = null;
   private beamDrawer: BeamDrawer | null = null;
   private ragdollFx: RagdollFxSystem | null = null;
+  private arrowFx: ArrowFxSystem | null = null;
 
   private _tiles = new Map<string, TileView>();
   private _tilesOrdered: TileView[] = [];
@@ -423,6 +425,10 @@ export class Game {
     this.ragdollFx = ragdollFx;
   }
 
+  public setArrowFxSystem(arrowFx: ArrowFxSystem): void {
+    this.arrowFx = arrowFx;
+  }
+
   public clearBeamDraws(): void {
     this.beamDrawer?.beginFrame();
   }
@@ -439,6 +445,10 @@ export class Game {
     this.ragdollFx?.update(dt, this._tiles);
   }
 
+  public updateArrowFx(dt: number): void {
+    this.arrowFx?.update(dt, this._tiles);
+  }
+
   public spawnUnitDeathFx(params: {
     x: number;
     z: number;
@@ -451,6 +461,18 @@ export class Game {
       ...params,
       tiles: this._tiles,
     });
+  }
+
+  public spawnArrowFx(params: {
+    fromX: number;
+    fromY: number;
+    fromZ: number;
+    toX: number;
+    toY: number;
+    toZ: number;
+    speed: number;
+  }): void {
+    this.arrowFx?.spawn(params);
   }
 
   public sendMoveIntent(targetX: number, targetY: number): void {

@@ -9,23 +9,29 @@ export type UnitPartTemplate = {
   baseMaterial: THREE.MeshStandardMaterial;
 };
 
-type UnitSlot = "warband" | "villager";
+export type UnitModelSlot = "hoplite" | "agent" | "synthaur";
 
-const GLB_URL: Record<UnitSlot, string> = {
-  warband: "/models/units/hoplite.glb",
-  villager: "/models/units/agent.glb",
+const GLB_URL: Record<UnitModelSlot, string> = {
+  hoplite: "/models/units/hoplite.glb",
+  agent: "/models/units/agent.glb",
+  synthaur: "/models/units/synthaur.glb",
 };
 
-const templates: Record<UnitSlot, UnitPartTemplate[] | null> = {
-  warband: null,
-  villager: null,
+const templates: Record<UnitModelSlot, UnitPartTemplate[] | null> = {
+  hoplite: null,
+  agent: null,
+  synthaur: null,
 };
 
 let ensurePromise: Promise<void> | null = null;
 
-function targetHeightForSlot(slot: UnitSlot): number {
+function targetHeightForSlot(slot: UnitModelSlot): number {
   const rules =
-    slot === "villager" ? getUnitRules(UnitType.VILLAGER) : getUnitRules(UnitType.WARBAND);
+    slot === "agent"
+      ? getUnitRules(UnitType.VILLAGER)
+      : slot === "synthaur"
+        ? getUnitRules(UnitType.CENTAUR)
+        : getUnitRules(UnitType.WARBAND);
   return GAME_RULES.UNIT_HEIGHT * rules.visualScale * 1.08;
 }
 
@@ -121,7 +127,7 @@ function extractTemplates(root: THREE.Group): UnitPartTemplate[] {
   return out;
 }
 
-async function loadSlot(slot: UnitSlot): Promise<void> {
+async function loadSlot(slot: UnitModelSlot): Promise<void> {
   if (templates[slot] !== null) return;
   const url = GLB_URL[slot];
   const logTag = `[unit-model:${slot}]`;
@@ -153,11 +159,11 @@ async function loadSlot(slot: UnitSlot): Promise<void> {
 
 /** Loads warband + villager GLBs from `public/models/units/` (compressed from `models-source/units/`). */
 export async function ensureUnitInstancedModelsLoaded(): Promise<void> {
-  ensurePromise ??= Promise.all([loadSlot("warband"), loadSlot("villager")]).then(() => undefined);
+  ensurePromise ??= Promise.all([loadSlot("hoplite"), loadSlot("agent"), loadSlot("synthaur")]).then(() => undefined);
   await ensurePromise;
 }
 
-function createInstancedMeshesForSlot(slot: UnitSlot, capacity: number): THREE.InstancedMesh[] {
+export function createUnitInstancedMeshes(slot: UnitModelSlot, capacity: number): THREE.InstancedMesh[] {
   const t = templates[slot];
   if (!t || t.length === 0) return [];
   return t.map((part) => {
@@ -172,17 +178,21 @@ function createInstancedMeshesForSlot(slot: UnitSlot, capacity: number): THREE.I
 }
 
 export function createWarbandInstancedMeshes(capacity: number): THREE.InstancedMesh[] {
-  return createInstancedMeshesForSlot("warband", capacity);
+  return createUnitInstancedMeshes("hoplite", capacity);
 }
 
 export function createVillagerInstancedMeshes(capacity: number): THREE.InstancedMesh[] {
-  return createInstancedMeshesForSlot("villager", capacity);
+  return createUnitInstancedMeshes("agent", capacity);
+}
+
+export function hasUnitInstancedGlb(slot: UnitModelSlot): boolean {
+  return templates[slot] !== null && templates[slot].length > 0;
 }
 
 export function hasWarbandInstancedGlb(): boolean {
-  return templates.warband !== null && templates.warband.length > 0;
+  return hasUnitInstancedGlb("hoplite");
 }
 
 export function hasVillagerInstancedGlb(): boolean {
-  return templates.villager !== null && templates.villager.length > 0;
+  return hasUnitInstancedGlb("agent");
 }

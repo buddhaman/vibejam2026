@@ -1,12 +1,5 @@
 import * as THREE from "three";
-import {
-  BuildingType,
-  canAfford,
-  getBuildingRules,
-  getUnitRules,
-  type BuildingType as BuildingTypeValue,
-  type UnitType as UnitTypeValue,
-} from "../../shared/game-rules.js";
+import { canAfford, getBuildingRules, getUnitRules, type BuildingType as BuildingTypeValue, type UnitType as UnitTypeValue } from "../../shared/game-rules.js";
 import type { Game } from "./game.js";
 import { Entity, type SelectionInfo } from "./entity.js";
 import { getTerrainHeightAt } from "./terrain.js";
@@ -138,12 +131,7 @@ export class BuildingEntity extends Entity {
     const currentUnitType = this.building.productionQueue[0] ?? null;
     const queueCount = this.building.productionQueue.length;
     const currentUnitRules = currentUnitType ? getUnitRules(currentUnitType) : null;
-    const baseDetail =
-      this.building.buildingType === BuildingType.TOWN_CENTER
-        ? "Produces villagers"
-        : this.building.buildingType === BuildingType.BARRACKS
-          ? "Produces warbands"
-          : "Defensive structure";
+    const baseDetail = rules.detail;
     return {
       title: rules.label,
       detail: mine ? baseDetail : `Enemy · ${baseDetail.toLowerCase()}`,

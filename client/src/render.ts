@@ -18,6 +18,7 @@ import type { SelectionInfo } from "./entity.js";
 import { createTerrainMesh, getTerrainHeightAt, type TileView } from "./terrain.js";
 import { attachDevNetworkPerf } from "./network-perf.js";
 import { RagdollFxSystem } from "./ragdoll-fx.js";
+import { ArrowFxSystem } from "./arrow-fx.js";
 import { TileVisualManager } from "./tile-visuals.js";
 import { TileDebugOverlay, drawTileDebugPanel } from "./tile-debug.js";
 
@@ -130,6 +131,9 @@ export function startRender(game: Game) {
   const ragdollFx = new RagdollFxSystem();
   scene.add(ragdollFx.root);
   game.setRagdollFxSystem(ragdollFx);
+  const arrowFx = new ArrowFxSystem();
+  scene.add(arrowFx.root);
+  game.setArrowFxSystem(arrowFx);
   const beamDrawer = new BeamDrawer(12_288);
   scene.add(beamDrawer.root);
   game.setBeamDrawer(beamDrawer);
@@ -357,6 +361,7 @@ export function startRender(game: Game) {
     ndcV.set((clientX / window.innerWidth) * 2 - 1, -(clientY / window.innerHeight) * 2 + 1);
     raycaster.setFromCamera(ndcV, camera);
     const point = groundHit(clientX, clientY);
+    const ownedPointPicked = point ? game.pickOwnedEntity(point.x, point.z) : null;
     const pointPicked = point ? game.pickEntityAtWorldPoint(point.x, point.z) : null;
     const selectedBlob = game.getSelectedMyBlobEntity();
     const attackPicked =
@@ -369,7 +374,11 @@ export function startRender(game: Game) {
       return;
     }
 
-    const picked = game.pickEntityFromRay(raycaster) ?? pointPicked;
+    const picked =
+      game.pickOwnedEntityFromRay(raycaster) ??
+      ownedPointPicked ??
+      game.pickEntityFromRay(raycaster) ??
+      pointPicked;
     if (picked) {
       cancelPendingMove();
       if (selectedBlob && picked instanceof BlobEntity && !picked.isMine()) {
@@ -524,6 +533,7 @@ export function startRender(game: Game) {
     syncWalkabilityOverlay();
     game.setOrbitCameraForFrame(distance, CAM.distanceMin, CAM.distanceMax);
     game.updateRagdollFx(dt);
+    game.updateArrowFx(dt);
     for (const entity of game.entities) entity.render(dt);
     game.flushBeamDraws();
     dir.shadow.camera.updateProjectionMatrix();

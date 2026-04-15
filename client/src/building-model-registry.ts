@@ -141,6 +141,8 @@ function mergeTemplateSet(gltf: Partial<Record<BuildingTypeValue, BuildingVarian
     [BuildingType.BARRACKS]: gltf[BuildingType.BARRACKS] ?? procedural[BuildingType.BARRACKS],
     [BuildingType.TOWER]: gltf[BuildingType.TOWER] ?? procedural[BuildingType.TOWER],
     [BuildingType.TOWN_CENTER]: gltf[BuildingType.TOWN_CENTER] ?? procedural[BuildingType.TOWN_CENTER],
+    [BuildingType.ARCHERY_RANGE]: gltf[BuildingType.ARCHERY_RANGE] ?? procedural[BuildingType.ARCHERY_RANGE],
+    [BuildingType.STABLE]: gltf[BuildingType.STABLE] ?? procedural[BuildingType.STABLE],
   };
 }
 
@@ -163,6 +165,8 @@ export function instantiateBuildingSet(templates: BuildingSet): BuildingSet {
     [BuildingType.BARRACKS]: cloneBuildingVariant(templates[BuildingType.BARRACKS]),
     [BuildingType.TOWER]: cloneBuildingVariant(templates[BuildingType.TOWER]),
     [BuildingType.TOWN_CENTER]: cloneBuildingVariant(templates[BuildingType.TOWN_CENTER]),
+    [BuildingType.ARCHERY_RANGE]: cloneBuildingVariant(templates[BuildingType.ARCHERY_RANGE]),
+    [BuildingType.STABLE]: cloneBuildingVariant(templates[BuildingType.STABLE]),
   };
 }
 

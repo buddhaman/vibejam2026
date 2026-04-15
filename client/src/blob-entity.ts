@@ -16,11 +16,18 @@ import { getTerrainHeightAt } from "./terrain.js";
 import {
   createVillagerInstancedMeshes,
   createWarbandInstancedMeshes,
-  hasVillagerInstancedGlb,
-  hasWarbandInstancedGlb,
+  createUnitInstancedMeshes,
+  hasUnitInstancedGlb,
 } from "./unit-instanced-models.js";
 import { applyTeamColorTexturesToMarkedMeshes, secondaryTeamHexFromPrimary } from "./render-texture-recolor.js";
 import { applyStylizedShading } from "./stylized-shading.js";
+import { getUnitVisualSpec } from "./unit-visual-config.js";
+import {
+  applyFamilyBodyMatrices,
+  createSynthaurFallbackMesh,
+  drawFamilyEquipment,
+  drawFamilyLegs,
+} from "./unit-family-renderers.js";
 
 const UNIT_GEOM = createUnitBodyGeometry();
 const UNIT_MAT = applyStylizedShading(new THREE.MeshStandardMaterial({
@@ -43,7 +50,14 @@ const OVAL_RING_MAT = new THREE.MeshBasicMaterial({
   side: THREE.DoubleSide,
   depthWrite: false,
 });
-const DUMMY = new THREE.Object3D();
+const RANGE_RING_GEOM = new THREE.RingGeometry(0.985, 1, 72);
+const RANGE_RING_MAT = new THREE.MeshBasicMaterial({
+  color: 0xffffff,
+  transparent: true,
+  opacity: 0.18,
+  side: THREE.DoubleSide,
+  depthWrite: false,
+});
 /** Keep ≥ starter Hoplite squad size — dev server uses a larger START_WARBAND_UNIT_COUNT (see server config). */
 const INSTANCE_CAP = import.meta.env.DEV
   ? 8192
@@ -76,48 +90,23 @@ const COMBAT_CENTER_PULL = 2.2;
 const COMBAT_SEPARATION_RADIUS = GAME_RULES.UNIT_RADIUS * 3.15;
 const COMBAT_SEPARATION_STRENGTH = GAME_RULES.UNIT_RADIUS * 0.95;
 const HIP_WIDTH = GAME_RULES.UNIT_RADIUS * 0.32;
-const HIP_LIFT = GAME_RULES.UNIT_HEIGHT * 0.46;
 const BODY_FLOAT = GAME_RULES.UNIT_HEIGHT * 0.6;
-const LEG_WIDTH = GAME_RULES.UNIT_RADIUS * 0.24;
-const LEG_DEPTH = GAME_RULES.UNIT_RADIUS * 0.18;
-const FOOT_GROUND_LIFT = 0.03;
+const ARCHER_RELEASE_INTERVAL = 0.72;
 const TEMP_A = new THREE.Vector3();
 const TEMP_B = new THREE.Vector3();
 const TEMP_PATH_COLOR = new THREE.Color();
 /** Ground/st ray pick: villagers use a small procedural mesh — pad ellipse + invisible column for rays. */
-const VILLAGER_CONTAINS_ELLIPSE_MULT = 1.7;
 const VILLAGER_PICK_CYLINDER_R = 1.35;
 const VILLAGER_PICK_CYLINDER_H = 3.8;
 
 /** Legs & move markers stay neutral; squad ovals use owner team color (see `render`). */
-const COLOR_LEG_BEAM  = new THREE.Color(0x4a433a);
-const COLOR_SWORD     = new THREE.Color(0xd0d4dc); // light steel gray
 const COLOR_MOVE_MARKER = new THREE.Color(0xfff8ef);
 const TEMP_OVAL_RING  = new THREE.Color();
 const TEMP_OVAL_FILL  = new THREE.Color();
 const _ovalHsl = { h: 0, s: 0, l: 0 };
 
-// ── Weapon / shield geometry (warband / hoplite only) ─────────────────────────
-/** Fraction of UNIT_HEIGHT where the shoulder joint sits. */
-const SHOULDER_H_FRAC = 0.78;
-/** Lateral shoulder offset as fraction of UNIT_RADIUS. */
-const SHOULDER_SIDE_FRAC = 0.30;
-/** Arm length (shoulder → hand) as fraction of UNIT_HEIGHT. */
-const ARM_LEN_FRAC = 0.30;
-/** Sword beam length as fraction of UNIT_HEIGHT. */
-const SWORD_LEN_FRAC = 0.75;
-/** Sword beam square cross-section side. */
-const SWORD_W = 0.048;
-/** Maximum arm swing angle (radians) while walking. */
-const ARM_SWING_MAX = Math.PI * 0.40;
-const ATTACK_SWING_MAX = Math.PI * 0.95;
 const SHIELD_RADIUS    = 0.44;
 const SHIELD_THICKNESS = 0.055;
-/** Shield barely moves — just a subtle sway, not a full arm swing. */
-const SHIELD_SWING_MAX = Math.PI * 0.06;
-const _shieldFwdVec  = new THREE.Vector3();
-const _shieldQuat    = new THREE.Quaternion();
-const _upAxis        = new THREE.Vector3(0, 1, 0);
 
 type UnitCombatMode = "formation" | "chase" | "attack";
 
@@ -146,6 +135,7 @@ type UnitState = {
   combatJitterZ: number;
   combatJitterVx: number;
   combatJitterVz: number;
+  attackCooldown: number;
 };
 
 export class BlobEntity extends Entity {
@@ -159,10 +149,14 @@ export class BlobEntity extends Entity {
   /** One mesh (cylinder fallback) or multiple parts from `models/units/hoplite.glb`. */
   private unitsWarband: THREE.InstancedMesh[] = [];
   private warbandTeamTexApplied = false;
+  private unitsSynthaur: THREE.InstancedMesh[] = [];
+  private synthaurTeamTexApplied = false;
+  private unitsCentaur!: THREE.InstancedMesh;
   /** Flat disc in the left hand of each warband soldier. */
   private unitShield!: THREE.InstancedMesh;
   private ovalFill!: THREE.Mesh<THREE.CircleGeometry, THREE.MeshBasicMaterial>;
   private ovalRing!: THREE.Mesh<THREE.RingGeometry, THREE.MeshBasicMaterial>;
+  private attackRangeRing!: THREE.Mesh<THREE.RingGeometry, THREE.MeshBasicMaterial>;
   private blobSnapshot: {
     attackTargetBlobId: string;
     engagedTargetBlobId: string;
@@ -256,6 +250,8 @@ export class BlobEntity extends Entity {
       this.unitsWarband = [fallback];
     }
 
+    this.unitsSynthaur = createUnitInstancedMeshes("synthaur", INSTANCE_CAP);
+
     this.ovalRoot = new THREE.Group();
 
     this.ovalFill = new THREE.Mesh(OVAL_FILL_GEOM, OVAL_FILL_MAT.clone());
@@ -266,8 +262,14 @@ export class BlobEntity extends Entity {
     this.ovalRing.rotation.x = -Math.PI / 2;
     this.ovalRing.position.y = 0.03;
 
+    this.attackRangeRing = new THREE.Mesh(RANGE_RING_GEOM, RANGE_RING_MAT.clone());
+    this.attackRangeRing.rotation.x = -Math.PI / 2;
+    this.attackRangeRing.position.y = 0.05;
+    this.attackRangeRing.visible = false;
+
     this.ovalRoot.add(this.ovalFill);
     this.ovalRoot.add(this.ovalRing);
+    this.ovalRoot.add(this.attackRangeRing);
 
     this.villagerPickProxy = new THREE.Mesh(
       new THREE.CylinderGeometry(VILLAGER_PICK_CYLINDER_R, VILLAGER_PICK_CYLINDER_R, VILLAGER_PICK_CYLINDER_H, 16),
@@ -291,11 +293,15 @@ export class BlobEntity extends Entity {
     this.unitShield.frustumCulled = false;
     this.unitShield.count = 0;
 
+    this.unitsCentaur = createSynthaurFallbackMesh(INSTANCE_CAP);
+
     const group = new THREE.Group();
     group.add(this.ovalRoot);
     for (const m of this.unitsAgent) group.add(m);
     group.add(this.villagerPickProxy);
     for (const m of this.unitsWarband) group.add(m);
+    for (const m of this.unitsSynthaur) group.add(m);
+    group.add(this.unitsCentaur);
     group.add(this.unitShield);
     return group;
   }
@@ -426,6 +432,20 @@ export class BlobEntity extends Entity {
     return this.game.getBlobCombatTarget(this.id);
   }
 
+  private getAttackTarget() {
+    if (!this.blob?.attackTargetBlobId) return null;
+    return this.game.findBlobEntity(this.blob.attackTargetBlobId);
+  }
+
+  private isTargetInRangedAttackRange(target: BlobEntity | null): boolean {
+    if (!this.blob || !target) return false;
+    const rules = getUnitRules(this.blob.unitType);
+    if (rules.attackStyle !== "ranged") return false;
+    const own = this.getPredictedWorldCenter();
+    const enemy = target.getPredictedWorldCenter();
+    return Math.hypot(own.x - enemy.x, own.z - enemy.z) <= rules.attackRange + target.getRadius();
+  }
+
   private getCanonicalFormationAxis(dx: number, dy: number): { x: number; y: number } | null {
     const len = Math.hypot(dx, dy);
     if (len <= 1e-4) return null;
@@ -510,6 +530,7 @@ export class BlobEntity extends Entity {
         combatJitterZ: 0,
         combatJitterVx: 0,
         combatJitterVz: 0,
+        attackCooldown: Math.random() * ARCHER_RELEASE_INTERVAL,
       });
     }
     if (this.unitStates.length > count) {
@@ -940,12 +961,25 @@ export class BlobEntity extends Entity {
         ? 0.24 + zoomT * 0.08
         : 0.1 + enemyZoom * 0.28;
 
-    const isVillager = this.blob.unitType === UnitType.VILLAGER;
+    const visualSpec = getUnitVisualSpec(this.blob.unitType);
+    const unitRules = getUnitRules(this.blob.unitType);
+    const usesAgentMeshes = visualSpec.modelSlot === "agent";
+    const usesSynthaurMeshes = visualSpec.modelSlot === "synthaur";
+    const usesCentaurBody = visualSpec.animationFamily === "synthaur" && !hasUnitInstancedGlb("synthaur");
     const n = Math.min(this.blob.unitCount, INSTANCE_CAP);
+    const rangedAttackTarget =
+      unitRules.attackStyle === "ranged" && this.blob.engagedTargetBlobId.length === 0 ? this.getAttackTarget() : null;
+    const rangedTargetInRange = this.isTargetInRangedAttackRange(rangedAttackTarget);
 
-    this.villagerPickProxy.visible = isVillager;
+    this.villagerPickProxy.visible = visualSpec.easyPick;
+    this.attackRangeRing.visible = this.isSelected() && unitRules.attackStyle === "ranged";
+    if (this.attackRangeRing.visible) {
+      this.attackRangeRing.scale.setScalar(unitRules.attackRange);
+      this.attackRangeRing.material.color.copy(teamTint).offsetHSL(0, -0.08, 0.16);
+      this.attackRangeRing.material.opacity = rangedTargetInRange ? 0.32 : 0.18;
+    }
 
-    if (isVillager && this.unitsAgent.length > 0 && hasVillagerInstancedGlb() && !this.agentTeamTexApplied) {
+    if (usesAgentMeshes && this.unitsAgent.length > 0 && hasUnitInstancedGlb("agent") && !this.agentTeamTexApplied) {
       const primary = this.game.getPlayerColor(this.blob.ownerId);
       applyTeamColorTexturesToMarkedMeshes(
         this.unitsAgent,
@@ -955,7 +989,7 @@ export class BlobEntity extends Entity {
       this.agentTeamTexApplied = true;
     }
 
-    if (!isVillager && this.unitsWarband.length > 0 && hasWarbandInstancedGlb() && !this.warbandTeamTexApplied) {
+    if (!usesAgentMeshes && !usesSynthaurMeshes && this.unitsWarband.length > 0 && hasUnitInstancedGlb("hoplite") && !this.warbandTeamTexApplied) {
       const primary = this.game.getPlayerColor(this.blob.ownerId);
       applyTeamColorTexturesToMarkedMeshes(
         this.unitsWarband,
@@ -965,26 +999,51 @@ export class BlobEntity extends Entity {
       this.warbandTeamTexApplied = true;
     }
 
-    const villagerGlb = hasVillagerInstancedGlb();
+    if (usesSynthaurMeshes && this.unitsSynthaur.length > 0 && hasUnitInstancedGlb("synthaur") && !this.synthaurTeamTexApplied) {
+      const primary = this.game.getPlayerColor(this.blob.ownerId);
+      applyTeamColorTexturesToMarkedMeshes(
+        this.unitsSynthaur,
+        primary,
+        secondaryTeamHexFromPrimary(primary)
+      );
+      this.synthaurTeamTexApplied = true;
+    }
+
+    const agentGlb = hasUnitInstancedGlb("agent");
     for (const m of this.unitsAgent) {
-      m.count = isVillager ? n : 0;
-      m.visible = isVillager;
+      m.count = usesAgentMeshes ? n : 0;
+      m.visible = usesAgentMeshes;
       const pm = m.material as THREE.MeshStandardMaterial;
       pm.opacity = this.isMine() ? 1 : 0.68;
       pm.transparent = !this.isMine();
-      if (!villagerGlb) pm.color.copy(teamTint).offsetHSL(0, 0.02, 0.02);
+      if (!agentGlb) pm.color.copy(teamTint).offsetHSL(0, 0.02, 0.02);
     }
 
     for (const m of this.unitsWarband) {
-      m.count = !isVillager ? n : 0;
-      m.visible = !isVillager;
+      m.count = !usesAgentMeshes && !usesSynthaurMeshes ? n : 0;
+      m.visible = !usesAgentMeshes && !usesSynthaurMeshes;
       const pm = m.material as THREE.MeshStandardMaterial;
       pm.opacity = this.isMine() ? 1 : 0.68;
       pm.transparent = !this.isMine();
     }
 
-    this.unitShield.count   = !isVillager ? n : 0;
-    this.unitShield.visible = !isVillager;
+    for (const m of this.unitsSynthaur) {
+      m.count = usesSynthaurMeshes && !usesCentaurBody ? n : 0;
+      m.visible = usesSynthaurMeshes && !usesCentaurBody;
+      const pm = m.material as THREE.MeshStandardMaterial;
+      pm.opacity = this.isMine() ? 1 : 0.72;
+      pm.transparent = !this.isMine();
+    }
+
+    this.unitsCentaur.count = usesCentaurBody ? n : 0;
+    this.unitsCentaur.visible = usesCentaurBody;
+    const centaurMat = this.unitsCentaur.material as THREE.MeshStandardMaterial;
+    centaurMat.color.copy(teamTint).offsetHSL(0, 0.02, 0.04);
+    centaurMat.opacity = this.isMine() ? 1 : 0.72;
+    centaurMat.transparent = !this.isMine();
+
+    this.unitShield.count = visualSpec.usesShield ? n : 0;
+    this.unitShield.visible = visualSpec.usesShield;
     (this.unitShield.material as THREE.MeshStandardMaterial).color
       .copy(teamTint).offsetHSL(0, 0.04, -0.14);
 
@@ -996,7 +1055,6 @@ export class BlobEntity extends Entity {
     }
     this.stepUnits(stepDt, layout);
 
-    const unitRules = getUnitRules(this.blob.unitType);
     const combatTarget = this.getCombatTarget();
     const engagedCombatTarget =
       combatTarget &&
@@ -1012,6 +1070,10 @@ export class BlobEntity extends Entity {
     const enemyUnitCount = engagedCombatTarget ? engagedCombatTarget.getUnitCount() : 0;
     const enemyPositions = engagedCombatTarget
       ? Array.from({ length: enemyUnitCount }, (_, index) => engagedCombatTarget.getRenderedUnitWorldPosition(index))
+      : [];
+    const rangedEnemyCount = rangedAttackTarget ? rangedAttackTarget.getUnitCount() : 0;
+    const rangedEnemyPositions = rangedAttackTarget
+      ? Array.from({ length: rangedEnemyCount }, (_, index) => rangedAttackTarget.getRenderedUnitWorldPosition(index))
       : [];
     const enemyLoads = enemyUnitCount > 0 ? new Array(enemyUnitCount).fill(0) : [];
     const plannedCombatPositions: { x: number; z: number }[] = [];
@@ -1088,6 +1150,7 @@ export class BlobEntity extends Entity {
       let stepForwardX = forwardX;
       let stepForwardZ = forwardZ;
       const hasEnemyAssignment = state.combatMode !== "formation";
+      const hasRangedAim = !hasEnemyAssignment && !!rangedAttackTarget && rangedTargetInRange;
       if (hasEnemyAssignment && engagedCombatTarget) {
         let faceDx = targetWorldX - worldX;
         let faceDz = targetWorldZ - worldZ;
@@ -1105,6 +1168,15 @@ export class BlobEntity extends Entity {
         }
         stepForwardX = faceDx / faceDist;
         stepForwardZ = faceDz / faceDist;
+      } else if (hasRangedAim && rangedEnemyPositions.length > 0) {
+        const rangedTarget = rangedEnemyPositions[i % rangedEnemyPositions.length]!;
+        const faceDx = rangedTarget.x - worldX;
+        const faceDz = rangedTarget.z - worldZ;
+        const faceDist = Math.hypot(faceDx, faceDz);
+        if (faceDist > 1e-4) {
+          stepForwardX = faceDx / faceDist;
+          stepForwardZ = faceDz / faceDist;
+        }
       }
       const bodySpeed = Math.hypot(bodyVx, bodyVz);
       if (!hasEnemyAssignment && bodySpeed > FOOT_IDLE_SPEED) {
@@ -1144,103 +1216,81 @@ export class BlobEntity extends Entity {
         HIP_WIDTH * unitRules.visualScale
       );
 
-      DUMMY.position.set(px, hoverY, pz);
-      DUMMY.rotation.set(0, Math.atan2(stepForwardX, stepForwardZ), 0);
-      DUMMY.scale.setScalar(unitRules.visualScale);
-      DUMMY.updateMatrix();
-      if (isVillager) {
-        for (const m of this.unitsAgent) m.setMatrixAt(i, DUMMY.matrix);
-      } else {
-        for (const m of this.unitsWarband) m.setMatrixAt(i, DUMMY.matrix);
+      applyFamilyBodyMatrices({
+        family: visualSpec.animationFamily,
+        usesAgentMeshes,
+        usesSynthaurMeshes,
+        usesSynthaurFallback: usesCentaurBody,
+        index: i,
+        localX: px,
+        localY: hoverY,
+        localZ: pz,
+        forwardX: stepForwardX,
+        forwardZ: stepForwardZ,
+        unitScale: unitRules.visualScale,
+        unitsAgent: this.unitsAgent,
+        unitsWarband: this.unitsWarband,
+        unitsSynthaur: this.unitsSynthaur,
+        unitsSynthaurFallback: this.unitsCentaur,
+      });
+
+      drawFamilyLegs({
+        family: visualSpec.animationFamily,
+        worldX,
+        worldZ,
+        unitTerrainY,
+        bodySpeed,
+        forwardX: stepForwardX,
+        forwardZ: stepForwardZ,
+        sideX,
+        sideZ,
+        unitType: this.blob.unitType,
+        state,
+        tiles,
+        drawBeam: this.game.drawBeam.bind(this.game),
+      });
+
+      state.attackCooldown = Math.max(0, state.attackCooldown - stepDt);
+      if (hasRangedAim && rangedEnemyPositions.length > 0 && state.attackCooldown <= 0) {
+        const targetPos = rangedEnemyPositions[i % rangedEnemyPositions.length]!;
+        const targetY = getTerrainHeightAt(targetPos.x, targetPos.z, tiles) + BODY_FLOAT * 0.78;
+        this.game.spawnArrowFx({
+          fromX: worldX + stepForwardX * 0.35,
+          fromY: unitTerrainY + BODY_FLOAT * 0.9,
+          fromZ: worldZ + stepForwardZ * 0.35,
+          toX: targetPos.x,
+          toY: targetY,
+          toZ: targetPos.z,
+          speed: Math.max(1, unitRules.projectileSpeed),
+        });
+        state.attackCooldown = ARCHER_RELEASE_INTERVAL * (0.85 + Math.random() * 0.35);
       }
 
-      const hipOffsetX = sideX * HIP_WIDTH * unitRules.visualScale;
-      const hipOffsetZ = sideZ * HIP_WIDTH * unitRules.visualScale;
-      const hipWorldY = unitTerrainY + HIP_LIFT * unitRules.visualScale;
-      const leftFootTerrainY = getTerrainHeightAt(state.leftFootX, state.leftFootZ, tiles) + FOOT_GROUND_LIFT;
-      const rightFootTerrainY = getTerrainHeightAt(state.rightFootX, state.rightFootZ, tiles) + FOOT_GROUND_LIFT;
-      TEMP_A.set(worldX + hipOffsetX, hipWorldY, worldZ + hipOffsetZ);
-      TEMP_B.set(state.leftFootX, leftFootTerrainY, state.leftFootZ);
-      this.game.drawBeam(
-        TEMP_A,
-        TEMP_B,
-        LEG_WIDTH * unitRules.visualScale,
-        LEG_DEPTH * unitRules.visualScale,
-        COLOR_LEG_BEAM
-      );
-
-      TEMP_A.set(worldX - hipOffsetX, hipWorldY, worldZ - hipOffsetZ);
-      TEMP_B.set(state.rightFootX, rightFootTerrainY, state.rightFootZ);
-      this.game.drawBeam(
-        TEMP_A,
-        TEMP_B,
-        LEG_WIDTH * unitRules.visualScale,
-        LEG_DEPTH * unitRules.visualScale,
-        COLOR_LEG_BEAM
-      );
-
-      // ── Sword (right arm) + Shield (left arm) — warband only ───────────────
-      if (!isVillager) {
-        const vs = unitRules.visualScale;
-        const shoulderH    = GAME_RULES.UNIT_HEIGHT * SHOULDER_H_FRAC * vs;
-        const shoulderSide = GAME_RULES.UNIT_RADIUS  * SHOULDER_SIDE_FRAC * vs;
-        const armLen       = GAME_RULES.UNIT_HEIGHT  * ARM_LEN_FRAC  * vs;
-        const swordLen     = GAME_RULES.UNIT_HEIGHT  * SWORD_LEN_FRAC * vs;
-        const shoulderWorldY = unitTerrainY + shoulderH;
-
-        const walkPhase  = state.distanceWalked / (FOOT_STRIDE * vs + 1e-6);
-        const swingSign  = state.leftPlanted ? 1 : -1;
-        const isAttacking = state.combatMode === "attack";
-        const isStriding = !isAttacking && bodySpeed > FOOT_IDLE_SPEED * 2;
-        const attackPhase = this.combatAnimT * 9 + i * 0.37;
-        const rightSwing = isAttacking
-          ? -0.24 + Math.max(0, Math.sin(attackPhase)) * ATTACK_SWING_MAX
-          : isStriding
-            ? Math.sin(walkPhase * Math.PI * 2) * swingSign * ARM_SWING_MAX
-            : 0;
-        const leftSwing  = isAttacking
-          ? Math.sin(attackPhase * 0.85) * SHIELD_SWING_MAX * 0.8
-          : isStriding
-            ? Math.sin(walkPhase * Math.PI * 2) * (-swingSign) * SHIELD_SWING_MAX
-            : 0;
-
-        const rShX = worldX + sideX * shoulderSide;
-        const rShZ = worldZ + sideZ * shoulderSide;
-        const rFwd = Math.cos(rightSwing);
-        const rUp  = Math.sin(rightSwing);
-        const handX = rShX + stepForwardX * rFwd * armLen;
-        const handY = shoulderWorldY + rUp * armLen;
-        const handZ = rShZ + stepForwardZ * rFwd * armLen;
-        const tipX = handX + stepForwardX * rFwd * swordLen;
-        const tipY = handY + rUp * swordLen;
-        const tipZ = handZ + stepForwardZ * rFwd * swordLen;
-        TEMP_A.set(handX, handY, handZ);
-        TEMP_B.set(tipX, tipY, tipZ);
-        this.game.drawBeam(TEMP_A, TEMP_B, SWORD_W * vs, SWORD_W * vs, COLOR_SWORD);
-
-        // Left shoulder → hand → shield center
-        const lShX = worldX - sideX * shoulderSide;
-        const lShZ = worldZ - sideZ * shoulderSide;
-        const lFwd = Math.cos(leftSwing);
-        const lUp  = Math.sin(leftSwing);
-
-        const shieldX = lShX + stepForwardX * lFwd * armLen;
-        const shieldY = shoulderWorldY + lUp * armLen;
-        const shieldZ = lShZ + stepForwardZ * lFwd * armLen;
-
-        // Orient shield disc: cylinder Y-axis → arm direction (so face points forward)
-        _shieldFwdVec.set(stepForwardX * lFwd, lUp, stepForwardZ * lFwd).normalize();
-        _shieldQuat.setFromUnitVectors(_upAxis, _shieldFwdVec);
-
-        // Position is relative to the group root (layout.x, terrainY, layout.y)
-        DUMMY.position.set(shieldX - layout.x, shieldY - terrainY, shieldZ - layout.y);
-        DUMMY.quaternion.copy(_shieldQuat);
-        DUMMY.scale.setScalar(vs);
-        DUMMY.updateMatrix();
-        this.unitShield.setMatrixAt(i, DUMMY.matrix);
-      }
+      drawFamilyEquipment({
+        visualSpec,
+        worldX,
+        worldZ,
+        unitTerrainY,
+        bodySpeed,
+        forwardX: stepForwardX,
+        forwardZ: stepForwardZ,
+        sideX,
+        sideZ,
+        unitType: this.blob.unitType,
+        state,
+        attackAnimT: this.combatAnimT,
+        unitIndex: i,
+        layoutX: layout.x,
+        layoutZ: layout.y,
+        terrainY,
+        unitShield: this.unitShield,
+        shieldIndex: i,
+        drawBeam: this.game.drawBeam.bind(this.game),
+      });
     }
     for (const m of this.unitsAgent) m.instanceMatrix.needsUpdate = true;
+    for (const m of this.unitsSynthaur) m.instanceMatrix.needsUpdate = true;
+    this.unitsCentaur.instanceMatrix.needsUpdate = true;
     this.unitShield.instanceMatrix.needsUpdate = true;
     for (const m of this.unitsWarband) m.instanceMatrix.needsUpdate = true;
 
@@ -1376,10 +1426,9 @@ export class BlobEntity extends Entity {
     if (!this.blob) return false;
     const layout = this.getLayout();
     let { minor, major } = layout;
-    if (this.blob.unitType === UnitType.VILLAGER) {
-      minor *= VILLAGER_CONTAINS_ELLIPSE_MULT;
-      major *= VILLAGER_CONTAINS_ELLIPSE_MULT;
-    }
+    const visualSpec = getUnitVisualSpec(this.blob.unitType);
+    minor *= visualSpec.containsEllipseMult;
+    major *= visualSpec.containsEllipseMult;
     const cos = Math.cos(-this.heading);
     const sin = Math.sin(-this.heading);
     const lx = (x - layout.x) * cos - (z - layout.y) * sin;
@@ -1420,18 +1469,17 @@ export class BlobEntity extends Entity {
   public getSelectionInfo(): SelectionInfo | null {
     if (!this.blob) return null;
     const unitRules = getUnitRules(this.blob.unitType);
+    const visualSpec = getUnitVisualSpec(this.blob.unitType);
     const enemy = !this.isMine();
     return {
       title: unitRules.label,
       detail: enemy
-        ? `Enemy${this.blob.engagedTargetBlobId ? " · Engaged" : ""} · ${this.blob.unitType === UnitType.VILLAGER ? "agent" : `${this.blob.unitCount} units`}`
-        : this.blob.unitType === UnitType.VILLAGER
-          ? this.blob.engagedTargetBlobId ? "Engaged" : "Can gather resources"
-          : `${this.blob.unitCount} units${this.blob.engagedTargetBlobId ? " · Engaged" : ""}`,
+        ? `Enemy${this.blob.engagedTargetBlobId ? " · Engaged" : ""} · ${this.blob.unitCount} ${visualSpec.enemyDetailNoun}${unitRules.attackStyle === "ranged" ? ` · Range ${Math.round(unitRules.attackRange)}` : ""}`
+        : `${visualSpec.idleDetail}${this.blob.engagedTargetBlobId ? " · Engaged" : ""}${unitRules.attackStyle === "ranged" ? ` · Range ${Math.round(unitRules.attackRange)}` : ""}`,
       health: this.blob.health,
       maxHealth: getBlobMaxHealth(this.blob.unitType, this.blob.unitCount),
       color: this.game.getPlayerColor(this.blob.ownerId),
-      actions: this.isMine() && this.blob.unitType !== UnitType.VILLAGER
+      actions: this.isMine() && visualSpec.supportsSpreadControls
         ? [
             { id: "spread:tight", label: "Tight", active: this.blob.spread === SquadSpread.TIGHT },
             { id: "spread:default", label: "Default", active: this.blob.spread === SquadSpread.DEFAULT },
