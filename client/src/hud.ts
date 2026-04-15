@@ -58,7 +58,7 @@ export type HudState = {
 // ─── Layout constants ────────────────────────────────────────────────────────
 
 const BAR_H        = 62; // two rows: resources + hint line
-const CARD_W       = 340;
+const CARD_W       = 428;
 const CARD_H       = 130;
 const CARD_PAD     = 10;
 const CARD_R       = 4;

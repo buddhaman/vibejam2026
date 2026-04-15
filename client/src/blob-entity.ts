@@ -9,7 +9,12 @@ import {
   type SquadSpread as SquadSpreadValue,
   type UnitType as UnitTypeValue,
 } from "../../shared/game-rules.js";
-import { AttackTargetType, BlobActionState, type BlobActionState as BlobActionStateValue } from "../../shared/protocol.js";
+import {
+  AttackTargetType,
+  BlobActionState,
+  BlobAggroMode,
+  type BlobActionState as BlobActionStateValue,
+} from "../../shared/protocol.js";
 import type { Game } from "./game.js";
 import { Entity, type SelectionInfo } from "./entity.js";
 import { BuildingEntity } from "./building-entity.js";
@@ -143,6 +148,7 @@ type UnitState = {
 
 type BlobRenderView = {
   actionState: BlobActionStateValue;
+  aggroMode: number;
   combatGroupId: string;
   combatCenterX: number;
   combatCenterY: number;
@@ -358,6 +364,7 @@ export class BlobEntity extends Entity {
     }
     this.blobSnapshot = {
       actionState: blob.actionState,
+      aggroMode: blob.aggroMode,
       combatGroupId: blob.combatGroupId,
       combatCenterX: blob.combatCenterX,
       combatCenterY: blob.combatCenterY,
@@ -1686,21 +1693,30 @@ export class BlobEntity extends Entity {
     const visualSpec = getUnitVisualSpec(this.blob.unitType);
     const enemy = !this.isMine();
     const engaged = this.blob.combatGroupId.length > 0;
-    return {
-      title: unitRules.label,
-      detail: enemy
-        ? `Enemy${engaged ? " · Engaged" : ""} · ${this.blob.unitCount} ${visualSpec.enemyDetailNoun}${unitRules.attackStyle === "ranged" ? ` · Range ${Math.round(unitRules.attackRange)}` : ""}`
-        : `${visualSpec.idleDetail}${engaged ? " · Engaged" : ""}${unitRules.attackStyle === "ranged" ? ` · Range ${Math.round(unitRules.attackRange)}` : ""}`,
-      health: this.blob.health,
-      maxHealth: getBlobMaxHealth(this.blob.unitType, this.blob.unitCount),
-      color: this.game.getPlayerColor(this.blob.ownerId),
-      actions: this.isMine() && visualSpec.supportsSpreadControls
+    const isActive = this.blob.aggroMode === BlobAggroMode.ACTIVE;
+    const stanceActions = this.isMine()
+      ? [
+          { id: "aggro:active", label: "Active", active: isActive },
+          { id: "aggro:passive", label: "Passive", active: !isActive },
+        ]
+      : [];
+    const spreadActions =
+      this.isMine() && visualSpec.supportsSpreadControls
         ? [
             { id: "spread:tight", label: "Tight", active: this.blob.spread === SquadSpread.TIGHT },
             { id: "spread:default", label: "Default", active: this.blob.spread === SquadSpread.DEFAULT },
             { id: "spread:wide", label: "Wide", active: this.blob.spread === SquadSpread.WIDE },
           ]
-        : [],
+        : [];
+    return {
+      title: unitRules.label,
+      detail: enemy
+        ? `Enemy${engaged ? " · Engaged" : ""} · ${this.blob.unitCount} ${visualSpec.enemyDetailNoun}${unitRules.attackStyle === "ranged" ? ` · Range ${Math.round(unitRules.attackRange)}` : ""}`
+        : `${visualSpec.idleDetail} · ${isActive ? "Active" : "Passive"}${engaged ? " · Engaged" : ""}${unitRules.attackStyle === "ranged" ? ` · Range ${Math.round(unitRules.attackRange)}` : ""}`,
+      health: this.blob.health,
+      maxHealth: getBlobMaxHealth(this.blob.unitType, this.blob.unitCount),
+      color: this.game.getPlayerColor(this.blob.ownerId),
+      actions: [...spreadActions, ...stanceActions],
       production: null,
     };
   }

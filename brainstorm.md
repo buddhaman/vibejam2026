@@ -1,4 +1,4 @@
-# Greeks vs Michaelsoft — Graphics Direction Brainstorm
+# AGI of Mythology — Graphics Direction Brainstorm
 
 ## Core aesthetic goal
 

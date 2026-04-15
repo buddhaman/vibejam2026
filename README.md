@@ -1,4 +1,4 @@
-# Vibejam
+# AGI of Mythology
 
 **Simplicity is the rule.** This repo is a small **TypeScript** stack: an **authoritative Colyseus** server and a **Three.js** browser client. Gameplay truth lives on the server; the client sends **intent** and **renders** what the server says is true.
 
@@ -86,7 +86,7 @@ The server only updates numbers. The client interprets those numbers as a living
 
 ## Visual Direction
 
-The current rendering target is a stylized RTS look: simple shapes, bold colors, and readable lighting instead of realistic PBR detail. The working art-direction notes live in [docs/art-style.md](/Users/tim/Code/vibejam/docs/art-style.md).
+The current rendering target is a stylized RTS look: simple shapes, bold colors, and readable lighting instead of realistic PBR detail. The working art-direction notes live in [docs/art-style.md](docs/art-style.md).
 
 ---
 
@@ -94,7 +94,7 @@ The current rendering target is a stylized RTS look: simple shapes, bold colors,
 
 Aggregate RTS: many **visual** units per blob, **instancing**, local ragdoll/floppy physics, fake arrows and blood — all **client-only**. The server keeps **tens** of entities; the client may show **hundreds** of decorative bodies. **Bandwidth stays small** because only aggregates sync.
 
-Friendly blobs of the same owner and unit type also rebalance on the server as aggregate counters only. Each unit type defines a `targetSize`, `rebalanceThreshold`, and `mergeDistance` in [shared/game-rules.ts](/Users/tim/Code/vibejam/shared/game-rules.ts). When two nearby friendly blobs are close enough and not heavily engaged, the server may rebalance them toward an even split if the move would be meaningful. Newly trained units first try to join a nearby same-type blob that is still below its target size; otherwise they spawn as their own blob. The server never tracks individual soldiers for this.
+Friendly blobs of the same owner and unit type also rebalance on the server as aggregate counters only. Each unit type defines a `targetSize`, `rebalanceThreshold`, and `mergeDistance` in [shared/game-rules.ts](shared/game-rules.ts). When two nearby friendly blobs are close enough and not heavily engaged, the server may rebalance them toward an even split if the move would be meaningful. Newly trained units first try to join a nearby same-type blob that is still below its target size; otherwise they spawn as their own blob. The server never tracks individual soldiers for this.
 
 ## Combat State Machine
 

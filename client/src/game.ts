@@ -15,7 +15,9 @@ import {
 } from "../../shared/game-rules.js";
 import {
   AttackTargetType,
+  BlobAggroMode,
   type AttackMessage,
+  type BlobAggroMessage,
   MessageType,
   type BuildMessage,
   type IntentMessage,
@@ -193,6 +195,7 @@ export class Game {
       if (!entity) entity = new BlobEntity(this, id as string);
       entity.sync(blob as {
         actionState: number;
+        aggroMode: number;
         combatGroupId: string;
         combatCenterX: number;
         combatCenterY: number;
@@ -610,6 +613,10 @@ export class Game {
     this.room.send(MessageType.SQUAD_SPREAD, { blobId, spread } satisfies SquadSpreadMessage);
   }
 
+  public sendBlobAggroIntent(blobId: string, aggroMode: number): void {
+    this.room.send(MessageType.BLOB_AGGRO, { blobId, aggroMode } satisfies BlobAggroMessage);
+  }
+
   public runSelectionAction(actionId: string): void {
     const selected = this.getSelectedEntity();
     if (!selected) return;
@@ -623,6 +630,8 @@ export class Game {
     if (actionId === "spread:tight") this.sendSquadSpreadIntent(selected.id, SquadSpread.TIGHT);
     if (actionId === "spread:default") this.sendSquadSpreadIntent(selected.id, SquadSpread.DEFAULT);
     if (actionId === "spread:wide") this.sendSquadSpreadIntent(selected.id, SquadSpread.WIDE);
+    if (actionId === "aggro:active") this.sendBlobAggroIntent(selected.id, BlobAggroMode.ACTIVE);
+    if (actionId === "aggro:passive") this.sendBlobAggroIntent(selected.id, BlobAggroMode.PASSIVE);
   }
 
   public getBlobCombatContext(blobId: string): {

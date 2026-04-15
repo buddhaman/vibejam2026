@@ -31,7 +31,9 @@ import {
 import {
   AttackTargetType,
   BlobActionState,
+  BlobAggroMode,
   type AttackMessage,
+  type BlobAggroMessage,
   MessageType,
   type IntentMessage,
   type BuildMessage,
@@ -58,6 +60,8 @@ const WAYPOINT_REACH = GAME_RULES.TILE_SIZE * 0.45;
 const DISENGAGE_LOCK_RELEASE_BUFFER = GAME_RULES.TILE_SIZE * 0.35;
 const RANGED_ATTACK_HYSTERESIS = GAME_RULES.TILE_SIZE * 1.1;
 const RANGED_ATTACK_COMMIT_INSET = GAME_RULES.TILE_SIZE * 0.55;
+const ACTIVE_MELEE_AGGRO_BUFFER = GAME_RULES.TILE_SIZE * 0.75;
+const ACTIVE_RANGED_AGGRO_BUFFER = GAME_RULES.TILE_SIZE * 1.15;
 
 type AttackableTarget =
   | { type: typeof AttackTargetType.BLOB; entity: Blob }
@@ -166,6 +170,19 @@ export class BattleRoom extends Room<{ state: GameState }> {
       if (!blob || blob.ownerId !== client.sessionId) return;
       blob.spread = msg.spread;
       blob.radius = getSquadRadius(blob.unitCount, blob.spread);
+    });
+
+    this.onMessage(MessageType.BLOB_AGGRO, (client, raw) => {
+      const msg = raw as BlobAggroMessage;
+      if (
+        typeof msg?.blobId !== "string" ||
+        (msg.aggroMode !== BlobAggroMode.ACTIVE && msg.aggroMode !== BlobAggroMode.PASSIVE)
+      ) {
+        return;
+      }
+      const blob = this.state.blobs.get(msg.blobId);
+      if (!blob || blob.ownerId !== client.sessionId) return;
+      blob.aggroMode = msg.aggroMode;
     });
 
     this.onMessage(MessageType.BUILD, (client, raw) => {
@@ -321,6 +338,41 @@ export class BattleRoom extends Room<{ state: GameState }> {
     if (rules.attackStyle === "ranged") return rules.attackRange + this.getAttackTargetRadius(target);
     if (target.type === AttackTargetType.BLOB) return this.getBlobEngageDistance(blob, target.entity);
     return blob.radius + this.getAttackTargetRadius(target) + GAME_RULES.UNIT_RADIUS * 0.6;
+  }
+
+  private getBlobAutoAggroAcquireRange(blob: Blob, target: Blob): number {
+    const baseRange = this.getBlobAttackRange(blob, { type: AttackTargetType.BLOB, entity: target });
+    const rules = getUnitRules(blob.unitType);
+    return baseRange + (rules.attackStyle === "ranged" ? ACTIVE_RANGED_AGGRO_BUFFER : ACTIVE_MELEE_AGGRO_BUFFER);
+  }
+
+  private findBlobAutoAggroTarget(blob: Blob): Blob | null {
+    if (blob.aggroMode !== BlobAggroMode.ACTIVE) return null;
+    if (this.blobHasCombatGroup(blob) || this.blobHasRetreatIntent(blob)) return null;
+    if (blob.attackTargetType !== AttackTargetType.NONE || blob.attackTargetId.length > 0) return null;
+
+    let bestTarget: Blob | null = null;
+    let bestScore = Infinity;
+    for (const other of this.state.blobs.values()) {
+      if (other.id === blob.id || other.ownerId === blob.ownerId) continue;
+      const distance = Math.hypot(blob.x - other.x, blob.y - other.y);
+      const acquireRange = this.getBlobAutoAggroAcquireRange(blob, other);
+      if (distance > acquireRange) continue;
+      const score = distance - Math.max(1, other.unitCount) * 0.015;
+      if (score < bestScore) {
+        bestScore = score;
+        bestTarget = other;
+      }
+    }
+    return bestTarget;
+  }
+
+  private tryAcquireAutoAggroTarget(blob: Blob): void {
+    const target = this.findBlobAutoAggroTarget(blob);
+    if (!target) return;
+    blob.attackTargetType = AttackTargetType.BLOB;
+    blob.attackTargetId = target.id;
+    this.combatRetreatTargets.delete(blob.id);
   }
 
   private isBlobRangedAttackActive(blob: Blob, target: AttackableTarget): boolean {
@@ -900,6 +952,10 @@ export class BattleRoom extends Room<{ state: GameState }> {
     this.assignCombatGroups();
     if (this.resolveCombatGroupRetreats()) {
       this.assignCombatGroups();
+    }
+
+    for (const blob of this.state.blobs.values()) {
+      this.tryAcquireAutoAggroTarget(blob);
     }
 
     for (const blob of this.state.blobs.values()) {

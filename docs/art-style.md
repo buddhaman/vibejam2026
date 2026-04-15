@@ -1,6 +1,6 @@
 # Art Style
 
-Vibejam is aiming for a stylized RTS look built around readability first:
+AGI of Mythology is aiming for a stylized RTS look built around readability first:
 
 - low-detail geometry
 - bold hand-authored color blocks

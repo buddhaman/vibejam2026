@@ -6,6 +6,7 @@ export const MessageType = {
   BUILD:         "build",
   TRAIN:         "train",
   SQUAD_SPREAD:  "squad_spread",
+  BLOB_AGGRO:    "blob_aggro",
   // Tile streaming — client requests chunks, server replies; server pushes mutations
   TILES_REQUEST: "tiles_req",
   TILE_CHUNK:    "tile_chunk",
@@ -33,6 +34,13 @@ export const BlobActionState = {
 
 export type BlobActionState = (typeof BlobActionState)[keyof typeof BlobActionState];
 
+export const BlobAggroMode = {
+  PASSIVE: 0,
+  ACTIVE: 1,
+} as const;
+
+export type BlobAggroMode = (typeof BlobAggroMode)[keyof typeof BlobAggroMode];
+
 export type IntentMessage = {
   blobId: string;
   targetX: number;
@@ -59,6 +67,11 @@ export type TrainMessage = {
 export type SquadSpreadMessage = {
   blobId: string;
   spread: SquadSpread;
+};
+
+export type BlobAggroMessage = {
+  blobId: string;
+  aggroMode: BlobAggroMode;
 };
 
 /** Client → Server: request one chunk of tile data by index. */

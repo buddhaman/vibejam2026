@@ -2,8 +2,8 @@ import * as THREE from "three";
 
 export type StylizedLitMaterial = THREE.MeshStandardMaterial | THREE.MeshPhysicalMaterial;
 
-const STYLIZED_SHADER_TAG = "vibejamStylizedShading";
-const STYLIZED_SHADER_VERSION = "v3";
+const STYLIZED_SHADER_TAG = "agiOfMythologyStylizedShading";
+const STYLIZED_SHADER_VERSION = "v4";
 
 function shaderKeyPart(material: StylizedLitMaterial): string {
   if (typeof material.userData?.[STYLIZED_SHADER_TAG] === "string") {
@@ -27,14 +27,14 @@ export function applyStylizedShading<T extends StylizedLitMaterial>(material: T)
     shader.fragmentShader = shader.fragmentShader.replace(
       "vec3 outgoingLight = totalDiffuse + totalSpecular + totalEmissiveRadiance;",
       `
-      vec3 vibejamDiffuse = totalDiffuse;
-      float vibejamDiffuseLuma = max(max(vibejamDiffuse.r, vibejamDiffuse.g), vibejamDiffuse.b);
-      float vibejamBand = vibejamDiffuseLuma < 0.2 ? 0.82 : (vibejamDiffuseLuma < 0.58 ? 0.94 : 1.04);
-      vec3 vibejamBandedDiffuse = mix(vibejamDiffuse, vibejamDiffuse * vibejamBand, 0.55);
-      float vibejamRim = pow(1.0 - saturate(dot(normalize(geometryNormal), normalize(geometryViewDir))), 2.6);
-      vibejamRim *= 0.035;
-      vec3 vibejamRimColor = mix(diffuseColor.rgb, vec3(1.0), 0.05);
-      vec3 outgoingLight = vibejamBandedDiffuse + totalSpecular * 0.14 + totalEmissiveRadiance + vibejamRimColor * vibejamRim;
+      vec3 agiomDiffuse = totalDiffuse;
+      float agiomDiffuseLuma = max(max(agiomDiffuse.r, agiomDiffuse.g), agiomDiffuse.b);
+      float agiomBand = agiomDiffuseLuma < 0.2 ? 0.82 : (agiomDiffuseLuma < 0.58 ? 0.94 : 1.04);
+      vec3 agiomBandedDiffuse = mix(agiomDiffuse, agiomDiffuse * agiomBand, 0.55);
+      float agiomRim = pow(1.0 - saturate(dot(normalize(geometryNormal), normalize(geometryViewDir))), 2.6);
+      agiomRim *= 0.035;
+      vec3 agiomRimColor = mix(diffuseColor.rgb, vec3(1.0), 0.05);
+      vec3 outgoingLight = agiomBandedDiffuse + totalSpecular * 0.14 + totalEmissiveRadiance + agiomRimColor * agiomRim;
       `
     );
   };

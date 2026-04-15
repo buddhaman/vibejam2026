@@ -1,6 +1,6 @@
 import { Schema, type, MapSchema, ArraySchema } from "@colyseus/schema";
 import type { BuildingType, SquadSpread, UnitType } from "../../shared/game-rules.js";
-import type { AttackTargetType, BlobActionState } from "../../shared/protocol.js";
+import type { AttackTargetType, BlobActionState, BlobAggroMode } from "../../shared/protocol.js";
 
 /** Identity + ownership bookkeeping (blobs/buildings reference ownerId). */
 export class Player extends Schema {
@@ -16,6 +16,7 @@ export class Blob extends Schema {
   @type("string") id: string = "";
   @type("string") ownerId: string = "";
   @type("uint8") actionState: BlobActionState = 0 as BlobActionState;
+  @type("uint8") aggroMode: BlobAggroMode = 1 as BlobAggroMode;
   @type("string") combatGroupId: string = "";
   @type("number") combatCenterX: number = 0;
   @type("number") combatCenterY: number = 0;

@@ -77,7 +77,7 @@ function runTextureOnlyPipeline(input, output) {
     process.exit(1);
   }
 
-  const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), "vibejam-gltf-tex-"));
+  const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), "agi-of-mythology-gltf-tex-"));
   const resized = path.join(tmpRoot, "resized.glb");
 
   try {
