@@ -77,20 +77,21 @@ const UNIT_BODY_CATCHUP_GAIN = 2.8;
 const UNIT_BODY_COMBAT_MAX_SPEED = 4.8;
 const UNIT_BODY_COMBAT_CATCHUP_GAIN = 0;
 const UNIT_MAX_TURN_RATE = Math.PI * 5.2;
+const UNIT_COMBAT_TURN_RATE = Math.PI * 7.2;
 const FOOT_IDLE_SPEED = 0.01;
 const FOOT_STRIDE = GAME_RULES.UNIT_RADIUS * 1.05;
 const COMBAT_TARGET_STANDOFF = GAME_RULES.UNIT_RADIUS * 1.55;
 const COMBAT_ATTACK_ENTER_DISTANCE = GAME_RULES.UNIT_RADIUS * 1.85;
-const COMBAT_ZONE_PADDING = GAME_RULES.UNIT_RADIUS * 1.9;
+const COMBAT_ZONE_PADDING = GAME_RULES.UNIT_RADIUS * 2.45;
 const COMBAT_TARGET_SEARCH_RADIUS = 6;
 const COMBAT_TARGET_SIDE_SPACING = GAME_RULES.UNIT_RADIUS * 0.72;
-const COMBAT_JITTER_RADIUS = GAME_RULES.UNIT_RADIUS * 1.1;
-const COMBAT_JITTER_ACCEL = GAME_RULES.UNIT_RADIUS * 18;
-const COMBAT_JITTER_DAMPING = 5.5;
-const COMBAT_JITTER_RETURN = 4.2;
+const COMBAT_JITTER_RADIUS = GAME_RULES.UNIT_RADIUS * 0.68;
+const COMBAT_JITTER_ACCEL = GAME_RULES.UNIT_RADIUS * 7.2;
+const COMBAT_JITTER_DAMPING = 7.6;
+const COMBAT_JITTER_RETURN = 5.6;
 const COMBAT_CENTER_PULL = 2.2;
-const COMBAT_SEPARATION_RADIUS = GAME_RULES.UNIT_RADIUS * 4.8;
-const COMBAT_SEPARATION_STRENGTH = GAME_RULES.UNIT_RADIUS * 1.2;
+const COMBAT_SEPARATION_RADIUS = GAME_RULES.UNIT_RADIUS * 6.1;
+const COMBAT_SEPARATION_STRENGTH = GAME_RULES.UNIT_RADIUS * 1.45;
 const HIP_WIDTH = GAME_RULES.UNIT_RADIUS * 0.32;
 const BODY_FLOAT = GAME_RULES.UNIT_HEIGHT * 0.6;
 const ARCHER_RELEASE_INTERVAL = 0.72;
@@ -590,7 +591,7 @@ export class BlobEntity extends Entity {
     return {
       centerX,
       centerZ,
-      radius: Math.max(GAME_RULES.UNIT_RADIUS * 4.5, Math.sqrt(total) * COMBAT_ZONE_PADDING * 1.2),
+      radius: Math.max(GAME_RULES.UNIT_RADIUS * 6.2, Math.sqrt(total) * COMBAT_ZONE_PADDING * 1.35),
     };
   }
 
@@ -646,7 +647,13 @@ export class BlobEntity extends Entity {
     return this.getPredictedWorldCenter();
   }
 
-  private rotateFacingToward(state: UnitState, desiredX: number, desiredZ: number, dt: number): { x: number; z: number } {
+  private rotateFacingToward(
+    state: UnitState,
+    desiredX: number,
+    desiredZ: number,
+    dt: number,
+    maxTurnRate = UNIT_MAX_TURN_RATE
+  ): { x: number; z: number } {
     const desiredLen = Math.hypot(desiredX, desiredZ);
     if (desiredLen <= 1e-4) {
       const cachedLen = Math.hypot(state.faceX, state.faceZ);
@@ -670,7 +677,7 @@ export class BlobEntity extends Entity {
     let delta = desiredAngle - currentAngle;
     while (delta > Math.PI) delta -= Math.PI * 2;
     while (delta < -Math.PI) delta += Math.PI * 2;
-    const maxTurn = UNIT_MAX_TURN_RATE * dt;
+    const maxTurn = maxTurnRate * dt;
     const nextAngle = currentAngle + Math.max(-maxTurn, Math.min(maxTurn, delta));
     state.faceX = Math.sin(nextAngle);
     state.faceZ = Math.cos(nextAngle);
@@ -1314,10 +1321,18 @@ export class BlobEntity extends Entity {
       let desiredFaceX = stepForwardX;
       let desiredFaceZ = stepForwardZ;
       if (bodySpeed > FOOT_IDLE_SPEED) {
-        desiredFaceX = bodyVx / bodySpeed;
-        desiredFaceZ = bodyVz / bodySpeed;
+        if (!hasEnemyAssignment) {
+          desiredFaceX = bodyVx / bodySpeed;
+          desiredFaceZ = bodyVz / bodySpeed;
+        }
       }
-      const facing = this.rotateFacingToward(state, desiredFaceX, desiredFaceZ, stepDt);
+      const facing = this.rotateFacingToward(
+        state,
+        desiredFaceX,
+        desiredFaceZ,
+        stepDt,
+        hasEnemyAssignment ? UNIT_COMBAT_TURN_RATE : UNIT_MAX_TURN_RATE
+      );
       stepForwardX = facing.x;
       stepForwardZ = facing.z;
       const sideX = -stepForwardZ;
