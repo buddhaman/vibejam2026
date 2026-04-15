@@ -80,7 +80,7 @@ const UNIT_MAX_TURN_RATE = Math.PI * 5.2;
 const UNIT_COMBAT_TURN_RATE = Math.PI * 7.2;
 const FOOT_IDLE_SPEED = 0.01;
 const FOOT_STRIDE = GAME_RULES.UNIT_RADIUS * 1.05;
-const COMBAT_TARGET_STANDOFF = GAME_RULES.UNIT_RADIUS * 1.55;
+const COMBAT_TARGET_STANDOFF = GAME_RULES.UNIT_RADIUS * 1.9;
 const COMBAT_ATTACK_ENTER_DISTANCE = GAME_RULES.UNIT_RADIUS * 1.85;
 const COMBAT_ZONE_PADDING = GAME_RULES.UNIT_RADIUS * 2.45;
 const COMBAT_TARGET_SEARCH_RADIUS = 6;
@@ -91,7 +91,7 @@ const COMBAT_JITTER_DAMPING = 7.6;
 const COMBAT_JITTER_RETURN = 5.6;
 const COMBAT_CENTER_PULL = 2.2;
 const COMBAT_SEPARATION_RADIUS = GAME_RULES.UNIT_RADIUS * 6.1;
-const COMBAT_SEPARATION_STRENGTH = GAME_RULES.UNIT_RADIUS * 1.45;
+const COMBAT_COLLISION_RADIUS = GAME_RULES.UNIT_RADIUS * 1.7;
 const HIP_WIDTH = GAME_RULES.UNIT_RADIUS * 0.32;
 const BODY_FLOAT = GAME_RULES.UNIT_HEIGHT * 0.6;
 const ARCHER_RELEASE_INTERVAL = 0.72;
@@ -684,6 +684,49 @@ export class BlobEntity extends Entity {
     return { x: state.faceX, z: state.faceZ };
   }
 
+  private resolveCombatCollisions(
+    desiredWorldX: number,
+    desiredWorldZ: number,
+    occupiedPositions: { x: number; z: number }[],
+    fallbackDirX: number,
+    fallbackDirZ: number
+  ): { x: number; z: number } {
+    let resolvedX = desiredWorldX;
+    let resolvedZ = desiredWorldZ;
+    const minDistance = COMBAT_COLLISION_RADIUS * 2;
+
+    for (let iter = 0; iter < 2; iter++) {
+      let moved = false;
+      for (const other of occupiedPositions) {
+        const dx = resolvedX - other.x;
+        const dz = resolvedZ - other.z;
+        const dist = Math.hypot(dx, dz);
+        if (dist >= minDistance) continue;
+
+        let pushX = dx;
+        let pushZ = dz;
+        let pushLen = dist;
+        if (pushLen <= 1e-4) {
+          pushX = fallbackDirX;
+          pushZ = fallbackDirZ;
+          pushLen = Math.hypot(pushX, pushZ);
+        }
+        if (pushLen <= 1e-4) {
+          pushX = 1;
+          pushZ = 0;
+          pushLen = 1;
+        }
+        const correction = minDistance - dist;
+        resolvedX += (pushX / pushLen) * correction;
+        resolvedZ += (pushZ / pushLen) * correction;
+        moved = true;
+      }
+      if (!moved) break;
+    }
+
+    return { x: resolvedX, z: resolvedZ };
+  }
+
   private getCombatPlan(
     unitIndex: number,
     unitCount: number,
@@ -692,7 +735,8 @@ export class BlobEntity extends Entity {
     enemyLoads: number[],
     dt: number,
     zone: { centerX: number; centerZ: number; radius: number },
-    plannedPositions: { x: number; z: number }[]
+    plannedPositions: { x: number; z: number }[],
+    occupiedPositions: { x: number; z: number }[]
   ): {
     mode: UnitCombatMode;
     desiredWorldX: number;
@@ -795,15 +839,15 @@ export class BlobEntity extends Entity {
     desiredWorldX += centerDx * COMBAT_CENTER_PULL * dt;
     desiredWorldZ += centerDz * COMBAT_CENTER_PULL * dt;
 
-    for (const other of plannedPositions) {
-      const dx = desiredWorldX - other.x;
-      const dz = desiredWorldZ - other.z;
-      const dist = Math.hypot(dx, dz);
-      if (dist <= 1e-4 || dist >= COMBAT_SEPARATION_RADIUS) continue;
-      const push = ((COMBAT_SEPARATION_RADIUS - dist) / COMBAT_SEPARATION_RADIUS) * COMBAT_SEPARATION_STRENGTH;
-      desiredWorldX += (dx / dist) * push;
-      desiredWorldZ += (dz / dist) * push;
-    }
+    const resolved = this.resolveCombatCollisions(
+      desiredWorldX,
+      desiredWorldZ,
+      occupiedPositions,
+      -dirX,
+      -dirZ
+    );
+    desiredWorldX = resolved.x;
+    desiredWorldZ = resolved.z;
 
     const finalDx = desiredWorldX - zone.centerX;
     const finalDz = desiredWorldZ - zone.centerZ;
@@ -1208,6 +1252,27 @@ export class BlobEntity extends Entity {
     const combatZone = combatContext
       ? this.getCombatZone(combatContext.center.x, combatContext.center.z, combatContext.totalUnitCount)
       : null;
+    const occupiedCombatPositions: { x: number; z: number }[] = [];
+    if (combatContext) {
+      const globalCombatRadius = combatZone
+        ? combatZone.radius + COMBAT_SEPARATION_RADIUS * 1.25
+        : Infinity;
+      for (const entity of this.game.entities) {
+        if (!(entity instanceof BlobEntity) || entity.id === this.id) continue;
+        if (!entity.isInCombat()) continue;
+        const otherCenter = entity.getPredictedWorldCenter();
+        if (
+          combatZone &&
+          Math.hypot(otherCenter.x - combatZone.centerX, otherCenter.z - combatZone.centerZ) > globalCombatRadius
+        ) {
+          continue;
+        }
+        const otherCount = entity.getUnitCount();
+        for (let index = 0; index < otherCount; index++) {
+          occupiedCombatPositions.push(entity.getRenderedUnitWorldPosition(index));
+        }
+      }
+    }
     const drawBeam = this.game.drawBeam.bind(this.game);
     const drawBrightBeam = this.game.drawBrightBeam.bind(this.game);
     for (let i = 0; i < n; i++) {
@@ -1229,7 +1294,8 @@ export class BlobEntity extends Entity {
               enemyLoads,
               stepDt,
               combatZone,
-              plannedCombatPositions
+              plannedCombatPositions,
+              occupiedCombatPositions
             )
           : null;
       if (combatPlan) {
@@ -1238,7 +1304,9 @@ export class BlobEntity extends Entity {
         targetWorldX = combatPlan.targetWorldX;
         targetWorldZ = combatPlan.targetWorldZ;
         state.combatMode = combatPlan.mode;
-        plannedCombatPositions.push({ x: desiredWorldX, z: desiredWorldZ });
+        const planned = { x: desiredWorldX, z: desiredWorldZ };
+        plannedCombatPositions.push(planned);
+        occupiedCombatPositions.push(planned);
       } else if (buildingAttackPlan) {
         desiredWorldX = buildingAttackPlan.desiredWorldX;
         desiredWorldZ = buildingAttackPlan.desiredWorldZ;
@@ -1590,6 +1658,10 @@ export class BlobEntity extends Entity {
 
   public getUnitCount(): number {
     return this.blob?.unitCount ?? 0;
+  }
+
+  public isInCombat(): boolean {
+    return !!this.blob?.combatGroupId;
   }
 
   public getUnitType(): UnitTypeValue | null {
