@@ -918,7 +918,9 @@ export class BattleRoom extends Room<{ state: GameState }> {
           if (
             rules.attackStyle === "ranged"
               ? this.isBlobRangedAttackActive(blob, target)
-              : this.blobIsWithinAttackRange(blob, target, GAME_RULES.UNIT_RADIUS * 0.3)
+              : target.type === AttackTargetType.BUILDING
+                ? this.blobIsWithinAttackRange(blob, target, GAME_RULES.UNIT_RADIUS * 0.3)
+                : false
           ) {
             blob.targetX = blob.x;
             blob.targetY = blob.y;
