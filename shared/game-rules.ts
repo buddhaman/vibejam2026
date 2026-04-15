@@ -133,6 +133,7 @@ const TILE_HALF = GAME_RULES.TILE_SIZE * 0.5;
 const TILE_CENTER_MIN = GAME_RULES.WORLD_MIN + TILE_HALF;
 const TILE_CENTER_MAX = GAME_RULES.WORLD_MAX - TILE_HALF;
 
+/** All buildings occupy exactly one tile for placement, blocking, and walk/build flags (`footprint*` / `selection*`). */
 export const BUILDING_RULES = {
   [BuildingType.BARRACKS]: {
     label: "Stratégion",
@@ -154,12 +155,12 @@ export const BUILDING_RULES = {
     health: GAME_RULES.TOWER_HEALTH,
     buildable: true,
     cost: { biomass: 0, material: 125, compute: 50 },
-    footprintWidth: GAME_RULES.TILE_SIZE * 0.78,
-    footprintDepth: GAME_RULES.TILE_SIZE * 0.78,
-    selectionWidth: GAME_RULES.TILE_SIZE * 0.86,
-    selectionDepth: GAME_RULES.TILE_SIZE * 0.86,
+    footprintWidth: GAME_RULES.TILE_SIZE,
+    footprintDepth: GAME_RULES.TILE_SIZE,
+    selectionWidth: GAME_RULES.TILE_SIZE,
+    selectionDepth: GAME_RULES.TILE_SIZE,
     height: 15.5,
-    trainSpawnOffsetX: GAME_RULES.TILE_SIZE * 0.9,
+    trainSpawnOffsetX: GAME_RULES.TILE_SIZE,
     producibleUnits: [],
   },
   [BuildingType.TOWN_CENTER]: {
@@ -196,12 +197,12 @@ export const BUILDING_RULES = {
     health: GAME_RULES.STABLE_HEALTH,
     buildable: true,
     cost: { biomass: 0, material: 210, compute: 80 },
-    footprintWidth: GAME_RULES.TILE_SIZE * 1.15,
-    footprintDepth: GAME_RULES.TILE_SIZE * 1.05,
-    selectionWidth: GAME_RULES.TILE_SIZE * 1.15,
-    selectionDepth: GAME_RULES.TILE_SIZE * 1.05,
+    footprintWidth: GAME_RULES.TILE_SIZE,
+    footprintDepth: GAME_RULES.TILE_SIZE,
+    selectionWidth: GAME_RULES.TILE_SIZE,
+    selectionDepth: GAME_RULES.TILE_SIZE,
     height: 6.8,
-    trainSpawnOffsetX: GAME_RULES.TILE_SIZE * 1.15,
+    trainSpawnOffsetX: GAME_RULES.TILE_SIZE,
     producibleUnits: [UnitType.SYNTHAUR],
   },
 } as const;

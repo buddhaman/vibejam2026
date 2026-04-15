@@ -77,6 +77,10 @@ export class BattleRoom extends Room<{ state: GameState }> {
   private blobPaths = new Map<string, { waypoints: Waypoint[]; index: number }>();
   /** Pairwise "do not instantly re-engage" locks, used when fast units break contact. */
   private disengageLocks = new Set<string>();
+  /** Latched enemy contact graph for melee combat; components become combat groups. */
+  private combatLinks = new Set<string>();
+  /** Explicit retreat orders issued while in melee combat; keeps combat-state rules separate from pathing. */
+  private combatRetreatTargets = new Map<string, { x: number; y: number }>();
 
   onCreate() {
     this.state.terrainSeed = Math.floor(Math.random() * 0xffffffff);
@@ -108,16 +112,24 @@ export class BattleRoom extends Room<{ state: GameState }> {
       }
       const blob = this.state.blobs.get(msg.blobId);
       if (!blob || blob.ownerId !== client.sessionId) return;
-      const engagedTarget = this.getBlobEngagedBlobTarget(blob);
-      if (engagedTarget && engagedTarget.ownerId !== blob.ownerId && !this.canBlobInstantlyDisengage(blob, engagedTarget)) {
-        this.clearBlobAttackTarget(blob);
-        this.setBlobDestination(blob, msg.targetX, msg.targetY, client);
-        return;
+      const hasCombatPressure =
+        this.blobHasCombatGroup(blob) ||
+        this.getCombatNeighborIds(blob.id).some((neighborId) => {
+          const neighbor = this.state.blobs.get(neighborId);
+          return !!neighbor && neighbor.ownerId !== blob.ownerId;
+        });
+      for (const neighborId of this.getCombatNeighborIds(blob.id)) {
+        const neighbor = this.state.blobs.get(neighborId);
+        if (!neighbor || neighbor.ownerId === blob.ownerId) continue;
+        if (this.canBlobInstantlyDisengage(blob, neighbor)) {
+          this.addDisengageLock(blob, neighbor);
+        }
       }
-      if (engagedTarget && engagedTarget.ownerId !== blob.ownerId) {
-        this.addDisengageLock(blob, engagedTarget);
+      if (hasCombatPressure) {
+        this.combatRetreatTargets.set(blob.id, { x: msg.targetX, y: msg.targetY });
+      } else {
+        this.combatRetreatTargets.delete(blob.id);
       }
-      this.clearBlobCombatState(blob);
       this.clearBlobAttackTarget(blob);
       this.setBlobDestination(blob, msg.targetX, msg.targetY, client);
     });
@@ -130,6 +142,7 @@ export class BattleRoom extends Room<{ state: GameState }> {
       const target = this.getAttackableTarget(msg.targetType, msg.targetId);
       if (!target || target.entity.ownerId === client.sessionId) return;
 
+      this.combatRetreatTargets.delete(blob.id);
       blob.attackTargetType = msg.targetType;
       blob.attackTargetId = msg.targetId;
       const approach = this.getBlobAttackApproachPoint(blob, target);
@@ -245,6 +258,7 @@ export class BattleRoom extends Room<{ state: GameState }> {
       if (b.ownerId === sid) blobIds.push(id as string);
     });
     for (const id of blobIds) {
+      this.combatRetreatTargets.delete(id);
       this.blobPaths.delete(id);
       this.state.blobs.delete(id);
     }
@@ -322,7 +336,7 @@ export class BattleRoom extends Room<{ state: GameState }> {
 
   private refreshBlobActionState(blob: Blob): void {
     const rules = getUnitRules(blob.unitType);
-    if (blob.engagedTargetType === AttackTargetType.BLOB && blob.engagedTargetId.length > 0) {
+    if (this.blobHasCombatGroup(blob)) {
       blob.actionState = this.blobHasRetreatIntent(blob)
         ? BlobActionState.RETREATING
         : BlobActionState.ENGAGED;
@@ -347,6 +361,175 @@ export class BattleRoom extends Room<{ state: GameState }> {
 
   private getBlobPairKey(a: Blob, b: Blob): string {
     return a.id < b.id ? `${a.id}:${b.id}` : `${b.id}:${a.id}`;
+  }
+
+  private clearBlobCombatAssignment(blob: Blob): void {
+    blob.combatGroupId = "";
+    blob.combatCenterX = blob.x;
+    blob.combatCenterY = blob.y;
+    this.clearBlobEngagedTarget(blob);
+  }
+
+  private blobHasCombatGroup(blob: Blob): boolean {
+    return blob.combatGroupId.length > 0;
+  }
+
+  private getCombatNeighborIds(blobId: string): string[] {
+    const neighbors: string[] = [];
+    for (const key of this.combatLinks) {
+      const [aId, bId] = key.split(":");
+      if (aId === blobId && bId) neighbors.push(bId);
+      else if (bId === blobId && aId) neighbors.push(aId);
+    }
+    return neighbors;
+  }
+
+  private refreshCombatLinks(): void {
+    const blobList = Array.from(this.state.blobs.values());
+    const nextLinks = new Set<string>();
+
+    for (const existingKey of Array.from(this.combatLinks)) {
+      const [aId, bId] = existingKey.split(":");
+      const a = aId ? this.state.blobs.get(aId) : null;
+      const b = bId ? this.state.blobs.get(bId) : null;
+      if (!a || !b || a.ownerId === b.ownerId) {
+        this.combatLinks.delete(existingKey);
+        continue;
+      }
+
+      const aRetreat = this.blobHasRetreatIntent(a);
+      const bRetreat = this.blobHasRetreatIntent(b);
+      if (aRetreat && bRetreat) continue;
+      if (aRetreat && this.canBlobInstantlyDisengage(a, b)) {
+        this.addDisengageLock(a, b);
+        continue;
+      }
+      if (bRetreat && this.canBlobInstantlyDisengage(b, a)) {
+        this.addDisengageLock(a, b);
+        continue;
+      }
+
+      const releaseDistance = this.getBlobEngageDistance(a, b) + DISENGAGE_LOCK_RELEASE_BUFFER;
+      if (Math.hypot(a.x - b.x, a.y - b.y) <= releaseDistance) {
+        nextLinks.add(existingKey);
+      }
+    }
+
+    for (let i = 0; i < blobList.length; i++) {
+      const a = blobList[i]!;
+      for (let j = i + 1; j < blobList.length; j++) {
+        const b = blobList[j]!;
+        if (a.ownerId === b.ownerId) continue;
+        const key = this.getBlobPairKey(a, b);
+        if (nextLinks.has(key) || this.hasDisengageLock(a, b)) continue;
+        if (!this.blobsCanEngage(a, b)) continue;
+        nextLinks.add(key);
+      }
+    }
+
+    this.combatLinks = nextLinks;
+  }
+
+  private assignCombatGroups(): void {
+    for (const blob of this.state.blobs.values()) {
+      this.clearBlobCombatAssignment(blob);
+    }
+
+    const visited = new Set<string>();
+    for (const blob of this.state.blobs.values()) {
+      if (visited.has(blob.id)) continue;
+      const neighbors = this.getCombatNeighborIds(blob.id);
+      if (neighbors.length === 0) continue;
+
+      const queue = [blob.id];
+      const memberIds: string[] = [];
+      const owners = new Set<string>();
+      while (queue.length > 0) {
+        const currentId = queue.pop()!;
+        if (visited.has(currentId)) continue;
+        visited.add(currentId);
+        const current = this.state.blobs.get(currentId);
+        if (!current) continue;
+        memberIds.push(currentId);
+        owners.add(current.ownerId);
+        for (const neighborId of this.getCombatNeighborIds(currentId)) {
+          if (!visited.has(neighborId)) queue.push(neighborId);
+        }
+      }
+      if (memberIds.length <= 1 || owners.size <= 1) continue;
+
+      let totalWeight = 0;
+      let centerX = 0;
+      let centerY = 0;
+      for (const memberId of memberIds) {
+        const member = this.state.blobs.get(memberId);
+        if (!member) continue;
+        const weight = Math.max(1, member.unitCount);
+        totalWeight += weight;
+        centerX += member.x * weight;
+        centerY += member.y * weight;
+      }
+      if (totalWeight <= 0) continue;
+      centerX /= totalWeight;
+      centerY /= totalWeight;
+
+      const groupId = `cg:${memberIds.slice().sort()[0]}`;
+      for (const memberId of memberIds) {
+        const member = this.state.blobs.get(memberId);
+        if (!member) continue;
+        member.combatGroupId = groupId;
+        member.combatCenterX = centerX;
+        member.combatCenterY = centerY;
+
+        let bestEnemy: Blob | null = null;
+        let bestDistance = Infinity;
+        for (const otherId of memberIds) {
+          const other = this.state.blobs.get(otherId);
+          if (!other || other.ownerId === member.ownerId) continue;
+          const distance = Math.hypot(member.x - other.x, member.y - other.y);
+          if (distance < bestDistance) {
+            bestDistance = distance;
+            bestEnemy = other;
+          }
+        }
+        if (bestEnemy) {
+          member.engagedTargetType = AttackTargetType.BLOB;
+          member.engagedTargetId = bestEnemy.id;
+        }
+      }
+    }
+  }
+
+  private resolveCombatGroupRetreats(): boolean {
+    const groups = new Map<string, Blob[]>();
+    for (const blob of this.state.blobs.values()) {
+      if (!this.blobHasCombatGroup(blob)) continue;
+      const list = groups.get(blob.combatGroupId) ?? [];
+      list.push(blob);
+      groups.set(blob.combatGroupId, list);
+    }
+
+    let changed = false;
+    for (const members of groups.values()) {
+      const owners = new Set<string>();
+      const retreatOwners = new Set<string>();
+      for (const blob of members) {
+        owners.add(blob.ownerId);
+        if (this.blobHasRetreatIntent(blob)) retreatOwners.add(blob.ownerId);
+      }
+      if (owners.size === 0 || retreatOwners.size !== owners.size) continue;
+
+      for (let i = 0; i < members.length; i++) {
+        const a = members[i]!;
+        for (let j = i + 1; j < members.length; j++) {
+          const b = members[j]!;
+          if (a.ownerId === b.ownerId) continue;
+          this.addDisengageLock(a, b);
+          changed = this.combatLinks.delete(this.getBlobPairKey(a, b)) || changed;
+        }
+      }
+    }
+    return changed;
   }
 
   private addDisengageLock(a: Blob, b: Blob): void {
@@ -409,6 +592,7 @@ export class BattleRoom extends Room<{ state: GameState }> {
 
   private clearBlobPath(blob: Blob, client?: Client): void {
     const removed = this.blobPaths.delete(blob.id);
+    this.combatRetreatTargets.delete(blob.id);
     if (!removed) return;
     (client ?? this.getBlobOwnerClient(blob))?.send(MessageType.PATH, {
       blobId: blob.id,
@@ -416,9 +600,14 @@ export class BattleRoom extends Room<{ state: GameState }> {
     } satisfies PathMessage);
   }
 
+  private getBlobRetreatTarget(blob: Blob): { x: number; y: number } | null {
+    return this.combatRetreatTargets.get(blob.id) ?? null;
+  }
+
   private blobHasRetreatIntent(blob: Blob): boolean {
-    if (!this.blobPaths.has(blob.id)) return false;
-    return Math.hypot(blob.targetX - blob.x, blob.targetY - blob.y) > CONFIG.BLOB_STOP_EPSILON * 2.5;
+    const target = this.getBlobRetreatTarget(blob);
+    if (!target) return false;
+    return Math.hypot(target.x - blob.x, target.y - blob.y) > CONFIG.BLOB_STOP_EPSILON * 2.5;
   }
 
   private canBlobInstantlyDisengage(blob: Blob, target: Blob): boolean {
@@ -507,102 +696,79 @@ export class BattleRoom extends Room<{ state: GameState }> {
   }
 
   /**
-   * Mutually engaged blobs march toward a shared center until centers coincide (stacked fight).
-   * Velocity is set each tick for sync; paths stay cleared.
+   * Every melee combat group collapses toward one shared center.
+   * If some members are trying to leave, the whole melee scrimmage drifts slowly
+   * in that weighted direction instead of instantly breaking.
    */
-  private applyEngagedOverlapForAllPairs(dt: number): void {
-    const seen = new Set<string>();
+  private applyCombatGroupOverlap(dt: number): void {
+    const groups = new Map<string, Blob[]>();
     for (const blob of this.state.blobs.values()) {
-      const other = this.getBlobEngagedBlobTarget(blob);
-      if (!other || other.ownerId === blob.ownerId) continue;
-      if (other.engagedTargetType !== AttackTargetType.BLOB || other.engagedTargetId !== blob.id) continue;
-      const a = blob.id < other.id ? blob : other;
-      const b = blob.id < other.id ? other : blob;
-      const pairKey = `${a.id}:${b.id}`;
-      if (seen.has(pairKey)) continue;
-      seen.add(pairKey);
+      if (!this.blobHasCombatGroup(blob)) continue;
+      const list = groups.get(blob.combatGroupId) ?? [];
+      list.push(blob);
+      groups.set(blob.combatGroupId, list);
+    }
 
-      const aRetreating = this.blobHasRetreatIntent(a);
-      const bRetreating = this.blobHasRetreatIntent(b);
+    for (const members of groups.values()) {
+      let totalWeight = 0;
+      let centerX = 0;
+      let centerY = 0;
+      let driftX = 0;
+      let driftY = 0;
+      let driftWeight = 0;
 
-      if (aRetreating && bRetreating) {
-        this.clearBlobCombatState(a);
-        this.clearBlobCombatState(b);
-        continue;
+      for (const blob of members) {
+        const weight = Math.max(1, blob.unitCount);
+        totalWeight += weight;
+        centerX += blob.x * weight;
+        centerY += blob.y * weight;
+        if (!this.blobHasRetreatIntent(blob)) this.clearBlobPath(blob);
+
+        if (!this.blobHasRetreatIntent(blob)) continue;
+        const retreatTarget = this.getBlobRetreatTarget(blob);
+        if (!retreatTarget) continue;
+        const dx = retreatTarget.x - blob.x;
+        const dy = retreatTarget.y - blob.y;
+        const dist = Math.hypot(dx, dy);
+        if (dist <= 1e-4) continue;
+        const rules = getBlobMoveRules(blob.unitType);
+        driftX += (dx / dist) * rules.moveSpeed * rules.retreatSpeedMultiplier * weight;
+        driftY += (dy / dist) * rules.moveSpeed * rules.retreatSpeedMultiplier * weight;
+        driftWeight += weight;
       }
 
-      const retreating = aRetreating ? a : bRetreating ? b : null;
-      const pinned = retreating === a ? b : a;
-      if (retreating && this.canBlobInstantlyDisengage(retreating, pinned)) {
-        this.addDisengageLock(retreating, pinned);
-        this.clearBlobCombatState(retreating);
-        this.clearBlobCombatState(pinned);
-        continue;
-      }
-
-      if (retreating) {
-        const moved = this.advanceBlobAlongPath(
-          retreating,
-          dt,
-          getBlobMoveRules(retreating.unitType).retreatSpeedMultiplier
-        );
-        if (!moved) {
-          retreating.vx = 0;
-          retreating.vy = 0;
-        }
-        pinned.x = retreating.x;
-        pinned.y = retreating.y;
-        pinned.vx = retreating.vx;
-        pinned.vy = retreating.vy;
-        pinned.targetX = retreating.x;
-        pinned.targetY = retreating.y;
-        continue;
-      }
-
-      this.clearBlobPath(a);
-      this.clearBlobPath(b);
-
-      const midX = (a.x + b.x) * 0.5;
-      const midY = (a.y + b.y) * 0.5;
-      const sep = Math.hypot(a.x - b.x, a.y - b.y);
-      const eps = CONFIG.ENGAGE_OVERLAP_EPSILON;
-
-      if (sep <= eps) {
-        a.x = midX;
-        a.y = midY;
-        b.x = midX;
-        b.y = midY;
-        a.vx = 0;
-        a.vy = 0;
-        b.vx = 0;
-        b.vy = 0;
-        a.targetX = midX;
-        a.targetY = midY;
-        b.targetX = midX;
-        b.targetY = midY;
-        continue;
+      if (totalWeight <= 0) continue;
+      centerX /= totalWeight;
+      centerY /= totalWeight;
+      if (driftWeight > 0) {
+        centerX += (driftX / driftWeight) * dt;
+        centerY += (driftY / driftWeight) * dt;
       }
 
       const step = CONFIG.ENGAGE_OVERLAP_CONVERGE_SPEED * dt;
-      const moveTowardMid = (blob: Blob): void => {
-        const dx = midX - blob.x;
-        const dy = midY - blob.y;
-        const d = Math.hypot(dx, dy);
-        if (d < 1e-6) return;
-        const move = Math.min(step, d);
-        const ox = blob.x;
-        const oy = blob.y;
-        blob.x += (dx / d) * move;
-        blob.y += (dy / d) * move;
-        blob.x = clamp(blob.x, CONFIG.WORLD_MIN, CONFIG.WORLD_MAX);
-        blob.y = clamp(blob.y, CONFIG.WORLD_MIN, CONFIG.WORLD_MAX);
-        blob.vx = (blob.x - ox) / dt;
-        blob.vy = (blob.y - oy) / dt;
-        blob.targetX = blob.x;
-        blob.targetY = blob.y;
-      };
-      moveTowardMid(a);
-      moveTowardMid(b);
+      for (const blob of members) {
+        const dx = centerX - blob.x;
+        const dy = centerY - blob.y;
+        const dist = Math.hypot(dx, dy);
+        if (dist <= CONFIG.ENGAGE_OVERLAP_EPSILON) {
+          blob.x = centerX;
+          blob.y = centerY;
+          blob.vx = 0;
+          blob.vy = 0;
+        } else {
+          const move = Math.min(step, dist);
+          const ox = blob.x;
+          const oy = blob.y;
+          blob.x = clamp(blob.x + (dx / dist) * move, CONFIG.WORLD_MIN, CONFIG.WORLD_MAX);
+          blob.y = clamp(blob.y + (dy / dist) * move, CONFIG.WORLD_MIN, CONFIG.WORLD_MAX);
+          blob.vx = (blob.x - ox) / Math.max(dt, 1e-4);
+          blob.vy = (blob.y - oy) / Math.max(dt, 1e-4);
+        }
+        blob.targetX = centerX;
+        blob.targetY = centerY;
+        blob.combatCenterX = centerX;
+        blob.combatCenterY = centerY;
+      }
     }
   }
 
@@ -730,23 +896,14 @@ export class BattleRoom extends Room<{ state: GameState }> {
       blob.radius = getSquadRadius(blob.unitCount, blob.spread);
     }
 
-    const engagedBlobIds = new Set<string>();
-    for (const blob of this.state.blobs.values()) {
-      if (blob.engagedTargetId.length > 0) {
-        const engagedTarget = this.getBlobEngagedBlobTarget(blob);
-        if (!engagedTarget || engagedTarget.ownerId === blob.ownerId) {
-          this.clearBlobCombatState(blob);
-        } else {
-          engagedBlobIds.add(blob.id);
-          engagedBlobIds.add(engagedTarget.id);
-          if (engagedTarget.engagedTargetType !== AttackTargetType.BLOB || engagedTarget.engagedTargetId !== blob.id) {
-            engagedTarget.engagedTargetType = AttackTargetType.BLOB;
-            engagedTarget.engagedTargetId = blob.id;
-          }
-        }
-      }
+    this.refreshCombatLinks();
+    this.assignCombatGroups();
+    if (this.resolveCombatGroupRetreats()) {
+      this.assignCombatGroups();
+    }
 
-      if (blob.engagedTargetId.length > 0) continue;
+    for (const blob of this.state.blobs.values()) {
+      if (this.blobHasCombatGroup(blob)) continue;
       if (blob.attackTargetId.length > 0) {
         const target = this.getBlobAttackTarget(blob);
         if (!target || target.entity.ownerId === blob.ownerId) {
@@ -759,22 +916,6 @@ export class BattleRoom extends Room<{ state: GameState }> {
         } else {
           const rules = getUnitRules(blob.unitType);
           if (
-            target.type === AttackTargetType.BLOB &&
-            rules.attackStyle === "melee" &&
-            !this.hasDisengageLock(blob, target.entity) &&
-            this.blobsCanEngage(blob, target.entity) &&
-            this.defenderAllowsEngagement(target.entity, blob)
-          ) {
-            engagedBlobIds.add(blob.id);
-            engagedBlobIds.add(target.entity.id);
-            blob.engagedTargetType = AttackTargetType.BLOB;
-            blob.engagedTargetId = target.entity.id;
-            target.entity.engagedTargetType = AttackTargetType.BLOB;
-            target.entity.engagedTargetId = blob.id;
-            target.entity.attackTargetType = AttackTargetType.BLOB;
-            target.entity.attackTargetId = blob.id;
-            this.clearBlobPath(blob);
-          } else if (
             rules.attackStyle === "ranged"
               ? this.isBlobRangedAttackActive(blob, target)
               : this.blobIsWithinAttackRange(blob, target, GAME_RULES.UNIT_RADIUS * 0.3)
@@ -810,10 +951,15 @@ export class BattleRoom extends Room<{ state: GameState }> {
       }
     }
 
-    this.applyEngagedOverlapForAllPairs(dt);
+    this.refreshCombatLinks();
+    this.assignCombatGroups();
+    if (this.resolveCombatGroupRetreats()) {
+      this.assignCombatGroups();
+    }
+    this.applyCombatGroupOverlap(dt);
 
     for (const blob of this.state.blobs.values()) {
-      if (engagedBlobIds.has(blob.id)) {
+      if (this.blobHasCombatGroup(blob)) {
         continue;
       }
       const moved = this.advanceBlobAlongPath(blob, dt);
@@ -1169,27 +1315,37 @@ export class BattleRoom extends Room<{ state: GameState }> {
   }
 
   private resolveBlobCombat(dt: number): void {
-    const locked = new Set<string>();
     const deadIds = new Set<string>();
+    const pendingDamage = new Map<string, number>();
+    const groups = new Map<string, Blob[]>();
 
     for (const blob of this.state.blobs.values()) {
-      if (locked.has(blob.id)) continue;
-      const target = this.getBlobEngagedBlobTarget(blob);
-      if (!target || target.ownerId === blob.ownerId || locked.has(target.id)) continue;
+      if (!this.blobHasCombatGroup(blob)) continue;
+      const list = groups.get(blob.combatGroupId) ?? [];
+      list.push(blob);
+      groups.set(blob.combatGroupId, list);
+    }
 
-      const blobRules = getUnitRules(blob.unitType);
-      const targetRules = getUnitRules(target.unitType);
-      blob.health -= target.unitCount * targetRules.meleeDpsPerUnit * dt;
-      target.health -= blob.unitCount * blobRules.meleeDpsPerUnit * dt;
+    for (const members of groups.values()) {
+      for (const attacker of members) {
+        const attackerRules = getUnitRules(attacker.unitType);
+        const enemies = members.filter((candidate) => candidate.ownerId !== attacker.ownerId);
+        const totalEnemyUnits = enemies.reduce((sum, enemy) => sum + Math.max(1, enemy.unitCount), 0);
+        if (totalEnemyUnits <= 0) continue;
+        const totalDamage = attacker.unitCount * attackerRules.meleeDpsPerUnit * dt;
+        for (const enemy of enemies) {
+          const weight = Math.max(1, enemy.unitCount) / totalEnemyUnits;
+          pendingDamage.set(enemy.id, (pendingDamage.get(enemy.id) ?? 0) + totalDamage * weight);
+        }
+      }
+    }
 
+    for (const [blobId, damage] of pendingDamage) {
+      const blob = this.state.blobs.get(blobId);
+      if (!blob) continue;
+      blob.health -= damage;
       this.syncBlobHealthToUnitCount(blob);
-      this.syncBlobHealthToUnitCount(target);
-
       if (blob.unitCount <= 0 || blob.health <= 0) deadIds.add(blob.id);
-      if (target.unitCount <= 0 || target.health <= 0) deadIds.add(target.id);
-
-      locked.add(blob.id);
-      locked.add(target.id);
     }
 
     if (deadIds.size === 0) return;
@@ -1205,7 +1361,7 @@ export class BattleRoom extends Room<{ state: GameState }> {
     const deadBuildingIds = new Set<string>();
 
     for (const blob of this.state.blobs.values()) {
-      if (blob.engagedTargetId.length > 0) continue;
+      if (this.blobHasCombatGroup(blob)) continue;
       if (blob.attackTargetId.length === 0) continue;
       const rules = getUnitRules(blob.unitType);
       const target = this.getBlobAttackTarget(blob);
@@ -1218,7 +1374,6 @@ export class BattleRoom extends Room<{ state: GameState }> {
 
       const damage = blob.unitCount * (rules.attackStyle === "ranged" ? rules.dpsPerUnit : rules.meleeDpsPerUnit) * dt;
       if (target.type === AttackTargetType.BLOB) {
-        if (target.entity.engagedTargetType === AttackTargetType.BLOB && target.entity.engagedTargetId === blob.id) continue;
         target.entity.health -= damage;
         this.syncBlobHealthToUnitCount(target.entity);
         if (target.entity.unitCount <= 0 || target.entity.health <= 0) deadBlobIds.add(target.entity.id);
@@ -1239,6 +1394,12 @@ export class BattleRoom extends Room<{ state: GameState }> {
 
   private clearDeadBlobTargetRefs(deadIds: Set<string>): void {
     if (deadIds.size === 0) return;
+    for (const key of Array.from(this.combatLinks)) {
+      const [aId, bId] = key.split(":");
+      if ((aId && deadIds.has(aId)) || (bId && deadIds.has(bId))) {
+        this.combatLinks.delete(key);
+      }
+    }
     for (const blob of this.state.blobs.values()) {
       if (blob.attackTargetType === AttackTargetType.BLOB && deadIds.has(blob.attackTargetId)) {
         this.clearBlobAttackTarget(blob);
@@ -1252,6 +1413,7 @@ export class BattleRoom extends Room<{ state: GameState }> {
         this.clearBlobCombatState(blob);
       }
     }
+    for (const deadId of deadIds) this.combatRetreatTargets.delete(deadId);
   }
 
   private destroyBuildings(deadBuildingIds: Set<string>): void {

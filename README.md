@@ -96,6 +96,37 @@ Aggregate RTS: many **visual** units per blob, **instancing**, local ragdoll/flo
 
 Friendly blobs of the same owner and unit type also rebalance on the server as aggregate counters only. Each unit type defines a `targetSize`, `rebalanceThreshold`, and `mergeDistance` in [shared/game-rules.ts](/Users/tim/Code/vibejam/shared/game-rules.ts). When two nearby friendly blobs are close enough and not heavily engaged, the server may rebalance them toward an even split if the move would be meaningful. Newly trained units first try to join a nearby same-type blob that is still below its target size; otherwise they spawn as their own blob. The server never tracks individual soldiers for this.
 
+## Combat State Machine
+
+Combat is server-authoritative and aggregate. The server never simulates individual soldiers; it only tracks blob counters, health, targets, and combat-group membership.
+
+- `IDLE`
+  The blob has no path and no valid target.
+- `MOVING`
+  The blob is following a normal move path.
+- `PURSUING`
+  The blob has an attack target and is pathing or holding toward attack distance.
+- `RANGED_ATTACKING`
+  The blob is comfortably inside ranged attack distance and keeps firing with hysteresis, so it does not edge-jitter at max range.
+- `ENGAGED`
+  The blob belongs to a latched melee combat group.
+- `RETREATING`
+  The blob is still in a melee combat group, but its owner has issued a retreat order.
+
+Melee combat is resolved in one central pass on the server:
+
+- enemy contact creates latched pair links
+- those links form connected combat groups, which may contain multiple teams
+- every blob in a combat group contributes its total melee DPS
+- that DPS is split across all enemy blobs in the same group, weighted by enemy unit counts
+- the client then uses the combat-group membership and shared combat center only for cosmetic unit pairing and motion
+
+Retreat rules are also stateful:
+
+- if one side retreats and it cannot instantly disengage, the melee group keeps fighting and drifts at retreat speed
+- if all sides in that melee group retreat, the group disengages and receives a temporary re-engage lock
+- fast units such as synthaurs can instantly disengage from slower enemy types, but not from equal-speed mirrors
+
 Next steps when the MVP is stable:
 
 1. Multiple blobs per player (already two at join for testing selection).

@@ -16,6 +16,9 @@ export class Blob extends Schema {
   @type("string") id: string = "";
   @type("string") ownerId: string = "";
   @type("uint8") actionState: BlobActionState = 0 as BlobActionState;
+  @type("string") combatGroupId: string = "";
+  @type("number") combatCenterX: number = 0;
+  @type("number") combatCenterY: number = 0;
   @type("uint8") attackTargetType: AttackTargetType = 0 as AttackTargetType;
   @type("string") attackTargetId: string = "";
   @type("uint8") engagedTargetType: AttackTargetType = 0 as AttackTargetType;

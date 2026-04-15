@@ -193,6 +193,9 @@ export class Game {
       if (!entity) entity = new BlobEntity(this, id as string);
       entity.sync(blob as {
         actionState: number;
+        combatGroupId: string;
+        combatCenterX: number;
+        combatCenterY: number;
         attackTargetType: number;
         attackTargetId: string;
         engagedTargetType: number;
@@ -622,40 +625,46 @@ export class Game {
     if (actionId === "spread:wide") this.sendSquadSpreadIntent(selected.id, SquadSpread.WIDE);
   }
 
-  public getBlobCombatTarget(blobId: string): BlobEntity | null {
+  public getBlobCombatContext(blobId: string): {
+    center: { x: number; z: number };
+    enemies: BlobEntity[];
+    allies: BlobEntity[];
+    totalUnitCount: number;
+  } | null {
     const blob = this.room.state.blobs.get(blobId) as {
-      engagedTargetType?: number;
-      engagedTargetId?: string;
-      attackTargetType?: number;
-      attackTargetId?: string;
+      combatGroupId?: string;
+      combatCenterX?: number;
+      combatCenterY?: number;
+      ownerId?: string;
+      unitCount?: number;
     } | undefined;
-    const targetType =
-      (blob?.engagedTargetId ? blob.engagedTargetType : undefined)
-      ?? (blob?.attackTargetId ? blob.attackTargetType : undefined);
-    const targetId = blob?.engagedTargetId || blob?.attackTargetId;
-    if (targetType !== AttackTargetType.BLOB) return null;
-    if (typeof targetId === "string" && targetId.length > 0) {
-      return this.findBlobEntity(targetId);
-    }
+    if (!blob?.combatGroupId) return null;
 
-    let fallback: BlobEntity | null = null;
+    const enemies: BlobEntity[] = [];
+    const allies: BlobEntity[] = [];
+    let totalUnitCount = 0;
     this.room.state.blobs.forEach((candidate, id) => {
       const snapshot = candidate as {
-        engagedTargetType?: number;
-        engagedTargetId?: string;
-        attackTargetType?: number;
-        attackTargetId?: string;
+        combatGroupId?: string;
+        ownerId?: string;
+        unitCount?: number;
       };
-      const combatTarget =
-        snapshot.engagedTargetType === AttackTargetType.BLOB
-          ? snapshot.engagedTargetId
-          : snapshot.attackTargetType === AttackTargetType.BLOB
-            ? snapshot.attackTargetId
-            : "";
-      if (combatTarget !== blobId) return;
+      if (snapshot.combatGroupId !== blob.combatGroupId) return;
+      totalUnitCount += snapshot.unitCount ?? 0;
       const entity = this.findBlobEntity(id as string);
-      if (entity) fallback = entity;
+      if (!entity) return;
+      if (snapshot.ownerId === blob.ownerId) allies.push(entity);
+      else enemies.push(entity);
     });
-    return fallback;
+
+    return {
+      center: {
+        x: blob.combatCenterX ?? 0,
+        z: blob.combatCenterY ?? 0,
+      },
+      enemies,
+      allies,
+      totalUnitCount,
+    };
   }
 }
