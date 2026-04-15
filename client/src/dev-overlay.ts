@@ -4,6 +4,8 @@ import type { NetworkPerfSnapshot } from "./network-perf.js";
 export type DevOverlayStats = {
   fps: number;
   ms: number;
+  totalWorkMs: number;
+  idleBudgetMs: number;
   syncMs: number;
   tileVisualsMs: number;
   entityRenderMs: number;
@@ -35,9 +37,10 @@ export function drawDevOverlay(
   const x = 16;
   const y = 16;
   const w = 430;
-  const h = 338;
   const pad = 14;
   const lh = 18;
+  const rows = 23;
+  const h = 48 + rows * lh + 18;
 
   ctx.save();
   ctx.globalAlpha = 0.9;
@@ -59,6 +62,8 @@ export function drawDevOverlay(
 
   let row = y + 48;
   line(ctx, "FPS", `${stats.fps.toFixed(0)}  (${stats.ms.toFixed(2)} ms)`, x + pad, row, "#6ff0a4"); row += lh;
+  line(ctx, "frame work", `${stats.totalWorkMs.toFixed(2)} ms`, x + pad, row); row += lh;
+  line(ctx, "frame slack", `${stats.idleBudgetMs.toFixed(2)} ms`, x + pad, row, stats.idleBudgetMs >= 0 ? "#6ff0a4" : "#ff9a8a"); row += lh;
   line(ctx, "sync()", `${stats.syncMs.toFixed(2)} ms`, x + pad, row); row += lh;
   line(ctx, "tileVisuals", `${stats.tileVisualsMs.toFixed(2)} ms`, x + pad, row); row += lh;
   line(ctx, "entity render", `${stats.entityRenderMs.toFixed(2)} ms`, x + pad, row); row += lh;

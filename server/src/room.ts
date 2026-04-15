@@ -1163,7 +1163,7 @@ export class BattleRoom extends Room<{ state: GameState }> {
       const rules = getUnitRules(blob.unitType);
       const target = this.getBlobAttackTarget(blob);
       if (!target || target.entity.ownerId === blob.ownerId) continue;
-      if (!this.blobIsWithinAttackRange(blob, target)) continue;
+      if (!this.blobIsWithinAttackRange(blob, target, RANGED_ATTACK_HYSTERESIS)) continue;
 
       const damage = blob.unitCount * (rules.attackStyle === "ranged" ? rules.dpsPerUnit : rules.meleeDpsPerUnit) * dt;
       if (target.type === AttackTargetType.BLOB) {

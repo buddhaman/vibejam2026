@@ -135,6 +135,8 @@ export function startRender(game: Game) {
   let frameStats = {
     fps: 0,
     ms: 0,
+    totalWorkMs: 0,
+    idleBudgetMs: 0,
     syncMs: 0,
     tileVisualsMs: 0,
     entityRenderMs: 0,
@@ -600,6 +602,8 @@ export function startRender(game: Game) {
     frameStats = {
       fps: dt > 0 ? 1 / dt : 0,
       ms: dt * 1000,
+      totalWorkMs: perf4 - perfSync0,
+      idleBudgetMs: dt * 1000 - (perf4 - perfSync0),
       syncMs: perfSync1 - perfSync0,
       tileVisualsMs: perfTile1 - perfTile0,
       entityRenderMs: perf2 - perf1,
