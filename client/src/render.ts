@@ -1,6 +1,6 @@
 import * as THREE from "three";
 import { RoomEnvironment } from "three/examples/jsm/environments/RoomEnvironment.js";
-import { GAME_RULES, getTileCenter, snapWorldToTileCenter } from "../../shared/game-rules.js";
+import { GAME_RULES, UnitType, getTileCenter, snapWorldToTileCenter } from "../../shared/game-rules.js";
 import { AttackTargetType } from "../../shared/protocol.js";
 import type { Game } from "./game.js";
 import { BeamDrawer } from "./beam-drawer.js";
@@ -449,11 +449,23 @@ export function startRender(game: Game) {
       const tz = point.z;
       const sx = clientX;
       const sy = clientY;
+      const selectedBlob = game.getSelectedMyBlobEntity();
+      const tile = game.getTileAtWorld(tx, tz);
+      if (
+        selectedBlob &&
+        selectedBlob.getUnitType() === UnitType.VILLAGER &&
+        tile &&
+        (tile.material > 0 || tile.compute > 0)
+      ) {
+        game.sendGatherIntent(selectedBlob.id, tile.key);
+        addMoveMarker(hud, sx, sy, performance.now() / 1000);
+        return;
+      }
       pendingMoveTimer = setTimeout(() => {
         pendingMoveTimer = null;
-        const tile = game.getTileAtWorld(tx, tz);
-        if (!tile?.canWalk) {
-          showWarning(hud, getMoveBlockedMessage(tile), performance.now() / 1000);
+        const moveTile = game.getTileAtWorld(tx, tz);
+        if (!moveTile?.canWalk) {
+          showWarning(hud, getMoveBlockedMessage(moveTile), performance.now() / 1000);
           return;
         }
         game.sendMoveIntent(tx, tz);

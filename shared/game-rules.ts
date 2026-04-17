@@ -306,6 +306,21 @@ export function getUnitRules(unitType: UnitType) {
   return UNIT_RULES[unitType] ?? UNIT_RULES[UnitType.WARBAND];
 }
 
+export function getUnitTrainCost(unitType: UnitType): ResourceCost {
+  const rules = getUnitRules(unitType);
+  const count = Math.max(1, rules.unitCount);
+  return {
+    biomass: Math.ceil(rules.cost.biomass / count),
+    material: Math.ceil(rules.cost.material / count),
+    compute: Math.ceil(rules.cost.compute / count),
+  };
+}
+
+export function getUnitTrainTimeMs(unitType: UnitType): number {
+  const rules = getUnitRules(unitType);
+  return Math.max(1, Math.ceil(rules.trainTimeMs / Math.max(1, rules.unitCount)));
+}
+
 export function getUnitBalanceRules(unitType: UnitType) {
   const rules = getUnitRules(unitType);
   return {

@@ -13,6 +13,7 @@ import {
   AttackTargetType,
   BlobActionState,
   BlobAggroMode,
+  CarriedResourceType,
   type BlobActionState as BlobActionStateValue,
 } from "../../shared/protocol.js";
 import type { Game } from "./game.js";
@@ -167,6 +168,9 @@ type BlobRenderView = {
   health: number;
   spread: SquadSpreadValue;
   unitType: UnitTypeValue;
+  gatherTargetKey: string;
+  carriedResourceType: number;
+  carriedAmount: number;
 };
 
 export class BlobEntity extends Entity {
@@ -383,6 +387,9 @@ export class BlobEntity extends Entity {
       health: blob.health,
       spread: blob.spread,
       unitType: blob.unitType,
+      gatherTargetKey: blob.gatherTargetKey,
+      carriedResourceType: blob.carriedResourceType,
+      carriedAmount: blob.carriedAmount,
     };
   }
 
@@ -1694,6 +1701,18 @@ export class BlobEntity extends Entity {
     const enemy = !this.isMine();
     const engaged = this.blob.combatGroupId.length > 0;
     const isActive = this.blob.aggroMode === BlobAggroMode.ACTIVE;
+    const carryingMaterial =
+      this.blob.carriedAmount > 0 && this.blob.carriedResourceType === CarriedResourceType.MATERIAL;
+    const carryingCompute =
+      this.blob.carriedAmount > 0 && this.blob.carriedResourceType === CarriedResourceType.COMPUTE;
+    const isGathering = this.blob.unitType === UnitType.VILLAGER && this.blob.gatherTargetKey.length > 0;
+    const statusSuffix = carryingMaterial
+      ? ` · Returning ${this.blob.carriedAmount} material`
+      : carryingCompute
+        ? ` · Returning ${this.blob.carriedAmount} compute`
+        : isGathering
+          ? " · Harvesting"
+          : "";
     const stanceActions = this.isMine()
       ? [
           { id: "aggro:active", label: "Active", active: isActive },
@@ -1712,7 +1731,7 @@ export class BlobEntity extends Entity {
       title: unitRules.label,
       detail: enemy
         ? `Enemy${engaged ? " · Engaged" : ""} · ${this.blob.unitCount} ${visualSpec.enemyDetailNoun}${unitRules.attackStyle === "ranged" ? ` · Range ${Math.round(unitRules.attackRange)}` : ""}`
-        : `${visualSpec.idleDetail} · ${isActive ? "Active" : "Passive"}${engaged ? " · Engaged" : ""}${unitRules.attackStyle === "ranged" ? ` · Range ${Math.round(unitRules.attackRange)}` : ""}`,
+        : `${visualSpec.idleDetail} · ${isActive ? "Active" : "Passive"}${engaged ? " · Engaged" : ""}${statusSuffix}${unitRules.attackStyle === "ranged" ? ` · Range ${Math.round(unitRules.attackRange)}` : ""}`,
       health: this.blob.health,
       maxHealth: getBlobMaxHealth(this.blob.unitType, this.blob.unitCount),
       color: this.game.getPlayerColor(this.blob.ownerId),

@@ -18,6 +18,7 @@ import {
   BlobAggroMode,
   type AttackMessage,
   type BlobAggroMessage,
+  type GatherMessage,
   MessageType,
   type BuildMessage,
   type IntentMessage,
@@ -214,6 +215,9 @@ export class Game {
         health: number;
         spread: SquadSpreadValue;
         unitType: UnitTypeValue;
+        gatherTargetKey: string;
+        carriedResourceType: number;
+        carriedAmount: number;
       });
     });
 
@@ -598,6 +602,10 @@ export class Game {
       targetType,
       targetId,
     } satisfies AttackMessage);
+  }
+
+  public sendGatherIntent(blobId: string, tileKey: string): void {
+    this.room.send(MessageType.GATHER, { blobId, tileKey } satisfies GatherMessage);
   }
 
   public sendBuildIntent(type: BuildMessage["type"], worldX: number, worldZ: number): void {

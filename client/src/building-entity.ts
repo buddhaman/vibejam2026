@@ -1,5 +1,13 @@
 import * as THREE from "three";
-import { canAfford, getBuildingRules, getUnitRules, type BuildingType as BuildingTypeValue, type UnitType as UnitTypeValue } from "../../shared/game-rules.js";
+import {
+  canAfford,
+  getBuildingRules,
+  getUnitRules,
+  getUnitTrainCost,
+  getUnitTrainTimeMs,
+  type BuildingType as BuildingTypeValue,
+  type UnitType as UnitTypeValue,
+} from "../../shared/game-rules.js";
 import type { Game } from "./game.js";
 import { Entity, type SelectionInfo } from "./entity.js";
 import { getTerrainHeightAt } from "./terrain.js";
@@ -152,13 +160,15 @@ export class BuildingEntity extends Entity {
       actions: mine
         ? rules.producibleUnits.map((unitType) => {
             const unitRules = getUnitRules(unitType);
+            const trainCost = getUnitTrainCost(unitType);
+            const trainTimeMs = getUnitTrainTimeMs(unitType);
             const count = this.building!.productionQueue.filter((queuedType) => queuedType === unitType).length;
             return {
               id: `train:${unitType}`,
               label: unitRules.label,
-              disabled: !canAfford(resources, unitRules.cost),
-              cost: unitRules.cost,
-              timeMs: unitRules.trainTimeMs,
+              disabled: !canAfford(resources, trainCost),
+              cost: trainCost,
+              timeMs: trainTimeMs,
               queueCount: count,
             };
           })
@@ -168,8 +178,8 @@ export class BuildingEntity extends Entity {
           ? {
               label: currentUnitRules.label,
               queueCount,
-              remainingMs: Math.max(0, currentUnitRules.trainTimeMs - this.building.productionProgressMs),
-              progress: Math.max(0, Math.min(1, this.building.productionProgressMs / currentUnitRules.trainTimeMs)),
+              remainingMs: Math.max(0, getUnitTrainTimeMs(currentUnitType) - this.building.productionProgressMs),
+              progress: Math.max(0, Math.min(1, this.building.productionProgressMs / getUnitTrainTimeMs(currentUnitType))),
             }
           : null,
     };

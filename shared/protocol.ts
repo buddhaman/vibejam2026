@@ -3,6 +3,7 @@ import type { BuildingType, SquadSpread, TileType, UnitType } from "./game-rules
 export const MessageType = {
   INTENT:        "intent",
   ATTACK:        "attack",
+  GATHER:        "gather",
   BUILD:         "build",
   TRAIN:         "train",
   SQUAD_SPREAD:  "squad_spread",
@@ -51,6 +52,19 @@ export type AttackMessage = {
   blobId: string;
   targetType: AttackTargetType;
   targetId: string;
+};
+
+export const CarriedResourceType = {
+  NONE: 0,
+  MATERIAL: 1,
+  COMPUTE: 2,
+} as const;
+
+export type CarriedResourceType = (typeof CarriedResourceType)[keyof typeof CarriedResourceType];
+
+export type GatherMessage = {
+  blobId: string;
+  tileKey: string;
 };
 
 export type BuildMessage = {
