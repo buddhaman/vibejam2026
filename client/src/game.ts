@@ -4,6 +4,7 @@ import type { Entity } from "./entity.js";
 import {
   BuildingType,
   SquadSpread,
+  UnitType,
   getTileCoordsFromWorld,
   getTileKey,
   getWorldTileCount,
@@ -16,6 +17,8 @@ import {
 import {
   AttackTargetType,
   BlobAggroMode,
+  BlobGatherPhase,
+  CarriedResourceType,
   type AttackMessage,
   type BlobAggroMessage,
   type GatherMessage,
@@ -216,6 +219,8 @@ export class Game {
         spread: SquadSpreadValue;
         unitType: UnitTypeValue;
         gatherTargetKey: string;
+        gatherPhase: number;
+        gatherTimerMs: number;
         carriedResourceType: number;
         carriedAmount: number;
       });
@@ -465,6 +470,34 @@ export class Game {
 
   /** Ordered (tz, tx) array for terrain/forest rendering — object refs are live. */
   public getTilesOrdered(): TileView[] { return this._tilesOrdered; }
+
+  public getCarriedTreeCountByTile(): Map<string, number> {
+    const counts = new Map<string, number>();
+    this.room.state.blobs.forEach((raw) => {
+      const blob = raw as {
+        unitType?: number;
+        gatherTargetKey?: string;
+        carriedResourceType?: number;
+        carriedAmount?: number;
+        unitCount?: number;
+      };
+      if (
+        blob.unitType === UnitType.VILLAGER &&
+        typeof blob.gatherTargetKey === "string" &&
+        blob.gatherTargetKey.length > 0 &&
+        blob.carriedResourceType === CarriedResourceType.MATERIAL &&
+        (blob.carriedAmount ?? 0) > 0
+      ) {
+        const perCarrier = 12;
+        const carriers = Math.min(
+          Math.max(1, blob.unitCount ?? 1),
+          Math.ceil((blob.carriedAmount ?? 0) / perCarrier)
+        );
+        counts.set(blob.gatherTargetKey, (counts.get(blob.gatherTargetKey) ?? 0) + carriers);
+      }
+    });
+    return counts;
+  }
 
   public consumeTileVisualDirty(): { all: boolean; layers: Set<"forest" | "datacenters"> } {
     const dirty = {

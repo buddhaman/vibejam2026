@@ -17,6 +17,9 @@ const COLOR_SYNTHAUR_SWORD = new THREE.Color(0xe6e9f1);
 const COLOR_BOW = new THREE.Color(0xa67642);
 const COLOR_BOWSTRING = new THREE.Color(0xf3ead2);
 const COLOR_BOW_ARROW = new THREE.Color(0xd9c8a1);
+const COLOR_CARGO_TRUNK = new THREE.Color(0x7c5632);
+const COLOR_CARGO_LEAF = new THREE.Color(0x6f9f58);
+const COLOR_CARGO_COMPUTE = new THREE.Color(0x7be7ff);
 
 const BODY_FLOAT = GAME_RULES.UNIT_HEIGHT * 0.6;
 const FOOT_GROUND_LIFT = 0.03;
@@ -201,6 +204,8 @@ export function drawFamilyEquipment(params: {
   state: UnitPoseState;
   attackAnimT: number;
   attackPose: boolean;
+  carryTree: boolean;
+  carryCompute: boolean;
   unitIndex: number;
   layoutX: number;
   layoutZ: number;
@@ -213,10 +218,54 @@ export function drawFamilyEquipment(params: {
   if (
     params.visualSpec.animationFamily !== "archer" &&
     !params.visualSpec.usesMeleeWeapon &&
-    !params.visualSpec.usesShield
+    !params.visualSpec.usesShield &&
+    !params.carryTree &&
+    !params.carryCompute
   ) return;
   const unitRules = getUnitRules(params.unitType);
   const vs = unitRules.visualScale;
+
+  if (params.carryTree || params.carryCompute) {
+    const cargoBaseX =
+      params.worldX - params.sideX * GAME_RULES.UNIT_RADIUS * 0.58 * vs - params.forwardX * GAME_RULES.UNIT_RADIUS * 0.18 * vs;
+    const cargoBaseY = params.unitTerrainY + GAME_RULES.UNIT_HEIGHT * 0.9 * vs;
+    const cargoBaseZ =
+      params.worldZ - params.sideZ * GAME_RULES.UNIT_RADIUS * 0.58 * vs - params.forwardZ * GAME_RULES.UNIT_RADIUS * 0.18 * vs;
+    if (params.carryTree) {
+      const trunkTopY = cargoBaseY + GAME_RULES.UNIT_HEIGHT * 0.48 * vs;
+      TEMP_A.set(cargoBaseX, cargoBaseY, cargoBaseZ);
+      TEMP_B.set(cargoBaseX, trunkTopY, cargoBaseZ);
+      params.drawBrightBeam(TEMP_A, TEMP_B, GAME_RULES.UNIT_RADIUS * 0.17 * vs, GAME_RULES.UNIT_RADIUS * 0.15 * vs, COLOR_CARGO_TRUNK);
+
+      TEMP_A.set(cargoBaseX, trunkTopY, cargoBaseZ);
+      TEMP_B.set(
+        cargoBaseX + params.sideX * GAME_RULES.UNIT_RADIUS * 0.42 * vs,
+        trunkTopY + GAME_RULES.UNIT_RADIUS * 0.24 * vs,
+        cargoBaseZ + params.sideZ * GAME_RULES.UNIT_RADIUS * 0.42 * vs
+      );
+      params.drawBrightBeam(TEMP_A, TEMP_B, GAME_RULES.UNIT_RADIUS * 0.34 * vs, GAME_RULES.UNIT_RADIUS * 0.26 * vs, COLOR_CARGO_LEAF);
+      TEMP_B.set(
+        cargoBaseX - params.sideX * GAME_RULES.UNIT_RADIUS * 0.42 * vs,
+        trunkTopY + GAME_RULES.UNIT_RADIUS * 0.16 * vs,
+        cargoBaseZ - params.sideZ * GAME_RULES.UNIT_RADIUS * 0.42 * vs
+      );
+      params.drawBrightBeam(TEMP_A, TEMP_B, GAME_RULES.UNIT_RADIUS * 0.34 * vs, GAME_RULES.UNIT_RADIUS * 0.26 * vs, COLOR_CARGO_LEAF);
+      TEMP_B.set(
+        cargoBaseX + params.forwardX * GAME_RULES.UNIT_RADIUS * 0.34 * vs,
+        trunkTopY + GAME_RULES.UNIT_RADIUS * 0.28 * vs,
+        cargoBaseZ + params.forwardZ * GAME_RULES.UNIT_RADIUS * 0.34 * vs
+      );
+      params.drawBrightBeam(TEMP_A, TEMP_B, GAME_RULES.UNIT_RADIUS * 0.34 * vs, GAME_RULES.UNIT_RADIUS * 0.26 * vs, COLOR_CARGO_LEAF);
+    } else if (params.carryCompute) {
+      TEMP_A.set(cargoBaseX, cargoBaseY, cargoBaseZ);
+      TEMP_B.set(
+        cargoBaseX + params.forwardX * GAME_RULES.UNIT_RADIUS * 0.44 * vs,
+        cargoBaseY,
+        cargoBaseZ + params.forwardZ * GAME_RULES.UNIT_RADIUS * 0.44 * vs
+      );
+      params.drawBrightBeam(TEMP_A, TEMP_B, GAME_RULES.UNIT_RADIUS * 0.28 * vs, GAME_RULES.UNIT_RADIUS * 0.24 * vs, COLOR_CARGO_COMPUTE);
+    }
+  }
 
   if (params.visualSpec.animationFamily === "archer") {
     const shoulderH = GAME_RULES.UNIT_HEIGHT * SHOULDER_H_FRAC * vs;

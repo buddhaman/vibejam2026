@@ -15,7 +15,13 @@ type TileVisualLayerId = "forest" | "datacenters";
 type TileVisualLayer = {
   id: TileVisualLayerId;
   set: ReturnType<typeof createInstancedVariantSet>;
-  rebuild: (tiles: TileView[]) => void;
+  rebuild: (tiles: TileView[], game: Game) => void;
+  shouldRebuild?: (game: Game) => boolean;
+};
+
+type RegrowingTree = {
+  slotIndex: number;
+  startedAt: number;
 };
 
 let datacenterVariantTemplate: InstancedVariant | null = null;
@@ -175,7 +181,7 @@ function createTreeVariants(): InstancedVariant[] {
   ];
 }
 
-function ensureTreeSlots(tile: TileView): TreeSlot[] {
+export function ensureTreeSlots(tile: TileView): TreeSlot[] {
   if (tile.treeSlots) return tile.treeSlots;
 
   const center = getTileCenter(tile.tx, tile.tz);
@@ -223,24 +229,79 @@ async function loadDatacenterVariant(): Promise<InstancedVariant> {
 
 function createForestLayer(): TileVisualLayer {
   const set = createInstancedVariantSet(createTreeVariants(), 1024);
+  let lastCarrySignature = "";
+  const previousCarriedByTile = new Map<string, number>();
+  const regrowingByTile = new Map<string, RegrowingTree[]>();
+  const REGROW_DURATION = 0.9;
 
   return {
     id: "forest",
     set,
-    rebuild(tiles) {
+    shouldRebuild(game) {
+      const now = performance.now() / 1000;
+      const carried = game.getCarriedTreeCountByTile();
+      const signature = Array.from(carried.entries())
+        .sort((a, b) => a[0].localeCompare(b[0]))
+        .map(([key, count]) => `${key}:${count}`)
+        .join("|");
+      const changed = signature !== lastCarrySignature;
+      lastCarrySignature = signature;
+      let animating = false;
+      for (const [tileKey, entries] of Array.from(regrowingByTile.entries())) {
+        const active = entries.filter((entry) => now - entry.startedAt < REGROW_DURATION);
+        if (active.length > 0) {
+          animating = true;
+          regrowingByTile.set(tileKey, active);
+        } else {
+          regrowingByTile.delete(tileKey);
+        }
+      }
+      return changed || animating;
+    },
+    rebuild(tiles, game) {
+      const now = performance.now() / 1000;
+      const carried = game.getCarriedTreeCountByTile();
       const transformsByVariant: InstancedTransform[][] = Array.from({ length: TREE_VARIANT_COUNT }, () => []);
       for (const tile of tiles) {
         if (tile.tileType !== TileType.FOREST || tile.maxMaterial <= 0 || tile.material <= 0) continue;
         const fill = Math.max(0.15, tile.material / tile.maxMaterial);
-        const visibleCount = Math.max(1, Math.round(2 + fill * 8));
+        const baseVisibleCount = Math.max(1, Math.round(2 + fill * 8));
+        const hiddenCount = carried.get(tile.key) ?? 0;
+        const previousHiddenCount = previousCarriedByTile.get(tile.key) ?? 0;
+        previousCarriedByTile.set(tile.key, hiddenCount);
         const slots = ensureTreeSlots(tile);
+        const clampedHiddenCount = Math.min(hiddenCount, slots.length);
+        const visibleCount = Math.max(0, Math.min(baseVisibleCount, slots.length) - clampedHiddenCount);
+        const previousVisibleCount = Math.max(0, Math.min(baseVisibleCount, slots.length) - Math.min(previousHiddenCount, slots.length));
+
+        if (visibleCount > previousVisibleCount) {
+          const entries = regrowingByTile.get(tile.key) ?? [];
+          for (let i = previousVisibleCount; i < visibleCount; i++) {
+            entries.push({ slotIndex: i, startedAt: now });
+          }
+          regrowingByTile.set(tile.key, entries);
+        } else if (visibleCount < previousVisibleCount) {
+          const entries = regrowingByTile.get(tile.key)?.filter((entry) => entry.slotIndex < visibleCount) ?? [];
+          if (entries.length > 0) regrowingByTile.set(tile.key, entries);
+          else regrowingByTile.delete(tile.key);
+        }
+
+        const regrowing = regrowingByTile.get(tile.key) ?? [];
+        const regrowingBySlot = new Map<number, number>();
+        for (const entry of regrowing) {
+          const t = Math.min(1, Math.max(0, (now - entry.startedAt) / REGROW_DURATION));
+          if (t >= 1) continue;
+          regrowingBySlot.set(entry.slotIndex, t);
+        }
 
         for (let i = 0; i < Math.min(visibleCount, slots.length); i++) {
           const slot = slots[i]!;
+          const regrowT = regrowingBySlot.get(i) ?? 1;
+          const growth = regrowT >= 1 ? 1 : (0.18 + regrowT * regrowT * 0.82);
           transformsByVariant[slot.variantIndex]!.push({
             position: new THREE.Vector3(slot.x, tile.height + 0.06, slot.z),
             rotationY: slot.rotationY,
-            scale: new THREE.Vector3(slot.scaleX, slot.scaleY, slot.scaleZ),
+            scale: new THREE.Vector3(slot.scaleX * growth, slot.scaleY * growth, slot.scaleZ * growth),
           });
         }
       }
@@ -255,7 +316,7 @@ function createDatacenterLayer(): TileVisualLayer {
   return {
     id: "datacenters",
     set,
-    rebuild(tiles) {
+    rebuild(tiles, _game) {
       const transforms: InstancedTransform[] = [];
       for (const tile of tiles) {
         const maxC = tile.maxCompute ?? 0;
@@ -289,11 +350,15 @@ export class TileVisualManager {
 
   public sync(game: Game): void {
     const dirty = game.consumeTileVisualDirty();
-    if (!dirty.all && dirty.layers.size === 0) return;
+    const layerDirty = new Set<TileVisualLayerId>(dirty.layers);
+    for (const layer of this.layers) {
+      if (layer.shouldRebuild?.(game)) layerDirty.add(layer.id);
+    }
+    if (!dirty.all && layerDirty.size === 0) return;
 
     const tiles = game.getTilesOrdered();
     for (const layer of this.layers) {
-      if (dirty.all || dirty.layers.has(layer.id)) layer.rebuild(tiles);
+      if (dirty.all || layerDirty.has(layer.id)) layer.rebuild(tiles, game);
     }
   }
 }

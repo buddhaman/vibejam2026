@@ -34,6 +34,7 @@ import {
   AttackTargetType,
   BlobActionState,
   BlobAggroMode,
+  BlobGatherPhase,
   CarriedResourceType,
   type AttackMessage,
   type BlobAggroMessage,
@@ -67,8 +68,10 @@ const RANGED_ATTACK_COMMIT_INSET = GAME_RULES.TILE_SIZE * 0.55;
 const ACTIVE_MELEE_AGGRO_BUFFER = GAME_RULES.TILE_SIZE * 0.75;
 const ACTIVE_RANGED_AGGRO_BUFFER = GAME_RULES.TILE_SIZE * 1.15;
 const VILLAGER_GATHER_REACH = GAME_RULES.TILE_SIZE * 0.32;
-const VILLAGER_DROP_OFF_REACH = GAME_RULES.TILE_SIZE * 0.65;
+const VILLAGER_DROP_OFF_PADDING = GAME_RULES.TILE_SIZE * 0.35;
 const VILLAGER_CARRY_PER_UNIT = 12;
+const VILLAGER_PICKUP_MS = 1000;
+const VILLAGER_DROPOFF_MS = 1000;
 
 type AttackableTarget =
   | { type: typeof AttackTargetType.BLOB; entity: Blob }
@@ -191,6 +194,8 @@ export class BattleRoom extends Room<{ state: GameState }> {
       this.combatRetreatTargets.delete(blob.id);
       this.clearBlobAttackTarget(blob);
       blob.gatherTargetKey = msg.tileKey;
+      blob.gatherPhase = BlobGatherPhase.MOVING_TO_RESOURCE;
+      blob.gatherTimerMs = 0;
     });
 
     this.onMessage(MessageType.BLOB_AGGRO, (client, raw) => {
@@ -345,6 +350,8 @@ export class BattleRoom extends Room<{ state: GameState }> {
 
   private clearBlobGatherTarget(blob: Blob): void {
     blob.gatherTargetKey = "";
+    blob.gatherPhase = BlobGatherPhase.NONE;
+    blob.gatherTimerMs = 0;
   }
 
   private clearBlobEngagedTarget(blob: Blob): void {
@@ -705,6 +712,11 @@ export class BattleRoom extends Room<{ state: GameState }> {
       }
     }
     return best;
+  }
+
+  private getBuildingDropoffRadius(building: Building): number {
+    const rules = getBuildingRules(building.buildingType);
+    return Math.hypot(rules.selectionWidth * 0.5, rules.selectionDepth * 0.5) + GAME_RULES.TILE_SIZE * 0.8;
   }
 
   private steerBlobTo(blob: Blob, x: number, y: number, snapToNearestWalkable = false): void {
@@ -1292,25 +1304,49 @@ export class BattleRoom extends Room<{ state: GameState }> {
     if (!player) return false;
     const targetTile = this.tileData.get(blob.gatherTargetKey) ?? null;
     const carryCapacity = this.getVillagerCarryCapacity(blob);
+    const dtMs = dt * 1000;
+
+    if (blob.gatherPhase === BlobGatherPhase.DROPPING_OFF) {
+      const dropoff = this.getNearestDropoffBuilding(blob.ownerId, blob.x, blob.y);
+      if (!dropoff) {
+        this.clearBlobGatherTarget(blob);
+        return false;
+      }
+      blob.gatherTimerMs = Math.min(VILLAGER_DROPOFF_MS, blob.gatherTimerMs + dtMs);
+      blob.targetX = dropoff.x;
+      blob.targetY = dropoff.y;
+      blob.vx = 0;
+      blob.vy = 0;
+      this.clearBlobPath(blob);
+      if (blob.gatherTimerMs < VILLAGER_DROPOFF_MS) return true;
+
+      if (blob.carriedResourceType === CarriedResourceType.MATERIAL) player.material += blob.carriedAmount;
+      else if (blob.carriedResourceType === CarriedResourceType.COMPUTE) player.compute += blob.carriedAmount;
+      blob.carriedAmount = 0;
+      blob.carriedResourceType = CarriedResourceType.NONE;
+      blob.gatherTimerMs = 0;
+      if (!targetTile || this.getTileGatherResourceType(targetTile) === CarriedResourceType.NONE) {
+        this.clearBlobGatherTarget(blob);
+      } else {
+        blob.gatherPhase = BlobGatherPhase.MOVING_TO_RESOURCE;
+      }
+      return true;
+    }
 
     if (blob.carriedAmount > 0) {
       const dropoff = this.getNearestDropoffBuilding(blob.ownerId, blob.x, blob.y);
       if (!dropoff) return true;
       const distance = Math.hypot(blob.x - dropoff.x, blob.y - dropoff.y);
-      if (distance <= VILLAGER_DROP_OFF_REACH) {
-        if (blob.carriedResourceType === CarriedResourceType.MATERIAL) player.material += blob.carriedAmount;
-        else if (blob.carriedResourceType === CarriedResourceType.COMPUTE) player.compute += blob.carriedAmount;
-        blob.carriedAmount = 0;
-        blob.carriedResourceType = CarriedResourceType.NONE;
-        blob.targetX = blob.x;
-        blob.targetY = blob.y;
+      if (distance <= this.getBuildingDropoffRadius(dropoff)) {
+        blob.gatherPhase = BlobGatherPhase.DROPPING_OFF;
+        blob.gatherTimerMs = 0;
+        blob.targetX = dropoff.x;
+        blob.targetY = dropoff.y;
         blob.vx = 0;
         blob.vy = 0;
         this.clearBlobPath(blob);
-        if (!targetTile || this.getTileGatherResourceType(targetTile) === CarriedResourceType.NONE) {
-          this.clearBlobGatherTarget(blob);
-        }
       } else {
+        blob.gatherPhase = BlobGatherPhase.RETURNING;
         this.steerBlobTo(blob, dropoff.x, dropoff.y, true);
       }
       return true;
@@ -1324,6 +1360,7 @@ export class BattleRoom extends Room<{ state: GameState }> {
     const center = getTileCenter(targetTile.tx, targetTile.tz);
     const distance = Math.hypot(blob.x - center.x, blob.y - center.z);
     if (distance > VILLAGER_GATHER_REACH) {
+      blob.gatherPhase = BlobGatherPhase.MOVING_TO_RESOURCE;
       this.steerBlobTo(blob, center.x, center.z);
       return true;
     }
@@ -1338,12 +1375,13 @@ export class BattleRoom extends Room<{ state: GameState }> {
     const freeCapacity = Math.max(0, carryCapacity - blob.carriedAmount);
     if (freeCapacity <= 0) return true;
 
+    blob.gatherPhase = BlobGatherPhase.PICKING_UP;
+    blob.gatherTimerMs = Math.min(VILLAGER_PICKUP_MS, blob.gatherTimerMs + dtMs);
+    if (blob.gatherTimerMs < VILLAGER_PICKUP_MS) return true;
+
+    blob.gatherTimerMs = 0;
     if (resourceType === CarriedResourceType.MATERIAL) {
-      const amount = Math.min(
-        targetTile.material,
-        freeCapacity,
-        Math.max(1, Math.round(CONFIG.VILLAGER_GATHER_MATERIAL_PER_SEC * dt))
-      );
+      const amount = Math.min(targetTile.material, freeCapacity);
       if (amount > 0) {
         targetTile.material -= amount;
         blob.carriedAmount += amount;
@@ -1351,11 +1389,7 @@ export class BattleRoom extends Room<{ state: GameState }> {
         this.broadcastTileUpdate(targetTile.key);
       }
     } else if (resourceType === CarriedResourceType.COMPUTE) {
-      const amount = Math.min(
-        targetTile.compute,
-        freeCapacity,
-        Math.max(1, Math.round(CONFIG.VILLAGER_GATHER_COMPUTE_PER_SEC * dt))
-      );
+      const amount = Math.min(targetTile.compute, freeCapacity);
       if (amount > 0) {
         targetTile.compute -= amount;
         blob.carriedAmount += amount;
@@ -1364,9 +1398,12 @@ export class BattleRoom extends Room<{ state: GameState }> {
       }
     }
 
-    if (blob.carriedAmount >= carryCapacity || this.getTileGatherResourceType(targetTile) === CarriedResourceType.NONE) {
+    if (blob.carriedAmount > 0) {
       const dropoff = this.getNearestDropoffBuilding(blob.ownerId, blob.x, blob.y);
+      blob.gatherPhase = BlobGatherPhase.RETURNING;
       if (dropoff) this.steerBlobTo(blob, dropoff.x, dropoff.y, true);
+    } else if (this.getTileGatherResourceType(targetTile) === CarriedResourceType.NONE) {
+      this.clearBlobGatherTarget(blob);
     }
     return true;
   }
@@ -1421,40 +1458,47 @@ export class BattleRoom extends Room<{ state: GameState }> {
     return false;
   }
 
-  private canRebalancePair(a: Blob, b: Blob): boolean {
-    if (a.id === b.id) return false;
-    if (a.ownerId !== b.ownerId || a.unitType !== b.unitType) return false;
-
-    const balanceRules = getUnitBalanceRules(a.unitType);
-    if (Math.hypot(a.x - b.x, a.y - b.y) > balanceRules.mergeDistance) return false;
-    if (this.isBlobHeavilyEngaged(a) || this.isBlobHeavilyEngaged(b)) return false;
-
-    const diff = Math.abs(a.unitCount - b.unitCount);
-    if (diff < balanceRules.rebalanceThreshold) return false;
-
-    const total = a.unitCount + b.unitCount;
-    const nextA = Math.max(Math.ceil(total / 2), Math.floor(total / 2));
-    const nextB = Math.min(Math.ceil(total / 2), Math.floor(total / 2));
-    const wouldMove = Math.min(Math.abs(a.unitCount - nextA), Math.abs(b.unitCount - nextB));
-    return wouldMove >= balanceRules.rebalanceThreshold;
+  private canMergeBlobInto(receiver: Blob, donor: Blob): boolean {
+    if (receiver.id === donor.id) return false;
+    if (receiver.ownerId !== donor.ownerId || receiver.unitType !== donor.unitType) return false;
+    const balanceRules = getUnitBalanceRules(receiver.unitType);
+    if (receiver.unitCount >= balanceRules.targetSize) return false;
+    if (Math.hypot(receiver.x - donor.x, receiver.y - donor.y) > balanceRules.mergeDistance) return false;
+    if (this.isBlobHeavilyEngaged(receiver) || this.isBlobHeavilyEngaged(donor)) return false;
+    if (receiver.unitCount + donor.unitCount > balanceRules.targetSize) return false;
+    if (receiver.unitType === UnitType.VILLAGER) {
+      const receiverHasCarry = receiver.carriedAmount > 0;
+      const donorHasCarry = donor.carriedAmount > 0;
+      const carryTypesCompatible =
+        !receiverHasCarry ||
+        !donorHasCarry ||
+        receiver.carriedResourceType === donor.carriedResourceType;
+      if (!carryTypesCompatible) return false;
+      const receiverHasTarget = receiver.gatherTargetKey.length > 0;
+      const donorHasTarget = donor.gatherTargetKey.length > 0;
+      if (receiverHasTarget && donorHasTarget && receiver.gatherTargetKey !== donor.gatherTargetKey) return false;
+    }
+    return true;
   }
 
-  private rebalancePair(a: Blob, b: Blob): void {
-    const totalHealth = a.health + b.health;
-    const total = a.unitCount + b.unitCount;
-    if (a.unitCount >= b.unitCount) {
-      a.unitCount = Math.ceil(total / 2);
-      b.unitCount = Math.floor(total / 2);
-    } else {
-      a.unitCount = Math.floor(total / 2);
-      b.unitCount = Math.ceil(total / 2);
+  private mergeBlobInto(receiver: Blob, donor: Blob): void {
+    receiver.unitCount += donor.unitCount;
+    receiver.health += donor.health;
+    if (receiver.unitType === UnitType.VILLAGER) {
+      if (receiver.gatherTargetKey.length === 0 && donor.gatherTargetKey.length > 0) {
+        receiver.gatherTargetKey = donor.gatherTargetKey;
+        receiver.gatherPhase = donor.gatherPhase;
+        receiver.gatherTimerMs = donor.gatherTimerMs;
+      }
+      if (receiver.carriedAmount <= 0 && donor.carriedAmount > 0) {
+        receiver.carriedResourceType = donor.carriedResourceType;
+      }
+      receiver.carriedAmount += donor.carriedAmount;
     }
-    if (total > 0 && totalHealth > 0) {
-      a.health = totalHealth * (a.unitCount / total);
-      b.health = totalHealth - a.health;
-    }
-    this.refreshBlobDerived(a);
-    this.refreshBlobDerived(b);
+    this.refreshBlobDerived(receiver);
+    this.blobPaths.delete(donor.id);
+    this.combatRetreatTargets.delete(donor.id);
+    this.state.blobs.delete(donor.id);
   }
 
   private rebalanceFriendlyBlobs(): void {
@@ -1468,33 +1512,6 @@ export class BattleRoom extends Room<{ state: GameState }> {
 
     for (const blobs of groups.values()) {
       this.mergeFriendlyBlobsTowardTarget(blobs);
-      blobs.sort((a, b) => a.id.localeCompare(b.id));
-      const locked = new Set<string>();
-
-      for (let i = 0; i < blobs.length; i++) {
-        const a = blobs[i]!;
-        if (locked.has(a.id)) continue;
-
-        let best: Blob | null = null;
-        let bestDistance = Infinity;
-        let bestDiff = -1;
-        for (let j = i + 1; j < blobs.length; j++) {
-          const b = blobs[j]!;
-          if (locked.has(b.id) || !this.canRebalancePair(a, b)) continue;
-          const diff = Math.abs(a.unitCount - b.unitCount);
-          const distance = Math.hypot(a.x - b.x, a.y - b.y);
-          if (diff > bestDiff || (diff === bestDiff && distance < bestDistance)) {
-            best = b;
-            bestDiff = diff;
-            bestDistance = distance;
-          }
-        }
-
-        if (!best) continue;
-        this.rebalancePair(a, best);
-        locked.add(a.id);
-        locked.add(best.id);
-      }
     }
   }
 
@@ -1509,25 +1526,9 @@ export class BattleRoom extends Room<{ state: GameState }> {
 
       for (const donor of blobs) {
         if (donor.id === receiver.id || removed.has(donor.id)) continue;
-        if (receiver.ownerId !== donor.ownerId || receiver.unitType !== donor.unitType) continue;
-        if (this.isBlobHeavilyEngaged(donor)) continue;
-        if (Math.hypot(receiver.x - donor.x, receiver.y - donor.y) > balanceRules.mergeDistance) continue;
-
-        const transferUnits = Math.min(donor.unitCount, balanceRules.targetSize - receiver.unitCount);
-        if (transferUnits <= 0) continue;
-        const donorUnitFraction = donor.unitCount > 0 ? transferUnits / donor.unitCount : 0;
-        const transferHealth = donor.health * donorUnitFraction;
-
-        receiver.unitCount += transferUnits;
-        receiver.health += transferHealth;
-        donor.unitCount -= transferUnits;
-        donor.health = Math.max(0, donor.health - transferHealth);
-        this.refreshBlobDerived(receiver);
-        this.refreshBlobDerived(donor);
-
-        if (donor.unitCount <= 0 || donor.health <= 0) {
-          removed.add(donor.id);
-        }
+        if (!this.canMergeBlobInto(receiver, donor)) continue;
+        this.mergeBlobInto(receiver, donor);
+        removed.add(donor.id);
         if (receiver.unitCount >= balanceRules.targetSize) break;
       }
     }
@@ -1690,6 +1691,13 @@ export class BattleRoom extends Room<{ state: GameState }> {
     const spawnX = clamp(building.x + buildingRules.trainSpawnOffsetX, CONFIG.WORLD_MIN, CONFIG.WORLD_MAX);
     const spawnY = clamp(building.y, CONFIG.WORLD_MIN, CONFIG.WORLD_MAX);
     const producedCount = unitCountOverride ?? unitRules.unitCount;
+    const nearby = this.findNearbyFriendlyBlobForTrainedUnits(building.ownerId, unitType, spawnX, spawnY);
+    if (nearby) {
+      nearby.unitCount += producedCount;
+      nearby.health += getBlobMaxHealth(unitType, producedCount);
+      this.refreshBlobDerived(nearby);
+      return;
+    }
 
     const blob = new Blob();
     blob.id = makeId("blob");

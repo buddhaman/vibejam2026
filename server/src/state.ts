@@ -1,6 +1,12 @@
 import { Schema, type, MapSchema, ArraySchema } from "@colyseus/schema";
 import type { BuildingType, SquadSpread, UnitType } from "../../shared/game-rules.js";
-import type { AttackTargetType, BlobActionState, BlobAggroMode, CarriedResourceType } from "../../shared/protocol.js";
+import type {
+  AttackTargetType,
+  BlobActionState,
+  BlobAggroMode,
+  BlobGatherPhase,
+  CarriedResourceType,
+} from "../../shared/protocol.js";
 
 /** Identity + ownership bookkeeping (blobs/buildings reference ownerId). */
 export class Player extends Schema {
@@ -36,6 +42,8 @@ export class Blob extends Schema {
   @type("uint8") spread: SquadSpread = 0 as SquadSpread;
   @type("uint8") unitType: UnitType = 0 as UnitType;
   @type("string") gatherTargetKey: string = "";
+  @type("uint8") gatherPhase: BlobGatherPhase = 0 as BlobGatherPhase;
+  @type("uint16") gatherTimerMs: number = 0;
   @type("uint8") carriedResourceType: CarriedResourceType = 0 as CarriedResourceType;
   @type("uint16") carriedAmount: number = 0;
 }

@@ -1,5 +1,6 @@
 import * as THREE from "three";
 import {
+  BuildingType,
   GAME_RULES,
   SquadSpread,
   UnitType,
@@ -13,6 +14,7 @@ import {
   AttackTargetType,
   BlobActionState,
   BlobAggroMode,
+  BlobGatherPhase,
   CarriedResourceType,
   type BlobActionState as BlobActionStateValue,
 } from "../../shared/protocol.js";
@@ -36,6 +38,13 @@ import {
   drawFamilyEquipment,
   drawFamilyLegs,
 } from "./unit-family-renderers.js";
+import {
+  CarriedResourceRenderer,
+  createDraggedComputeInstance,
+  createDraggedTreeInstance,
+  type CarriedResourceInstance,
+} from "./carried-resource-renderer.js";
+import { ensureTreeSlots } from "./tile-visuals.js";
 
 const UNIT_GEOM = createUnitBodyGeometry();
 const UNIT_MAT = applyStylizedShading(new THREE.MeshStandardMaterial({
@@ -101,6 +110,7 @@ const COMBAT_COLLISION_RADIUS = GAME_RULES.UNIT_RADIUS * 1.7;
 const HIP_WIDTH = GAME_RULES.UNIT_RADIUS * 0.32;
 const BODY_FLOAT = GAME_RULES.UNIT_HEIGHT * 0.6;
 const ARCHER_RELEASE_INTERVAL = 0.72;
+const VILLAGER_CARRY_DISPLAY_CHUNK = 12;
 const TEMP_A = new THREE.Vector3();
 const TEMP_B = new THREE.Vector3();
 const TEMP_PATH_COLOR = new THREE.Color();
@@ -169,6 +179,8 @@ type BlobRenderView = {
   spread: SquadSpreadValue;
   unitType: UnitTypeValue;
   gatherTargetKey: string;
+  gatherPhase: number;
+  gatherTimerMs: number;
   carriedResourceType: number;
   carriedAmount: number;
 };
@@ -192,6 +204,7 @@ export class BlobEntity extends Entity {
   private unitsCentaur!: THREE.InstancedMesh;
   /** Flat disc in the left hand of each warband soldier. */
   private unitShield!: THREE.InstancedMesh;
+  private carriedResources!: CarriedResourceRenderer;
   private ovalFill!: THREE.Mesh<THREE.CircleGeometry, THREE.MeshBasicMaterial>;
   private ovalRing!: THREE.Mesh<THREE.RingGeometry, THREE.MeshBasicMaterial>;
   private attackRangeRing!: THREE.Mesh<THREE.RingGeometry, THREE.MeshBasicMaterial>;
@@ -203,6 +216,8 @@ export class BlobEntity extends Entity {
   private visualVx = 0;
   private visualVy = 0;
   private visualTime = 0;
+  private gatherVisualPhase: number = BlobGatherPhase.NONE;
+  private gatherVisualTimerMs = 0;
   private forwardX = 0;
   private forwardY = 1;
   private formationForwardX = 0;
@@ -231,11 +246,13 @@ export class BlobEntity extends Entity {
     this.buildTargetIndicator();
     this.game.scene.add(this.targetGroup);
     this.game.scene.add(this.targetConnector);
+    this.game.scene.add(this.carriedResources.root);
   }
 
   public override destroy(): void {
     this.game.scene.remove(this.targetGroup);
     this.game.scene.remove(this.targetConnector);
+    this.game.scene.remove(this.carriedResources.root);
     super.destroy();
   }
 
@@ -314,6 +331,7 @@ export class BlobEntity extends Entity {
     this.unitShield.count = 0;
 
     this.unitsCentaur = createSynthaurFallbackMesh(INSTANCE_CAP);
+    this.carriedResources = new CarriedResourceRenderer(INSTANCE_CAP);
 
     const group = new THREE.Group();
     group.add(this.ovalRoot);
@@ -366,6 +384,21 @@ export class BlobEntity extends Entity {
         this.formationForwardY = this.forwardY;
       }
     }
+    const gatherPhaseChanged =
+      this.gatherVisualPhase !== blob.gatherPhase ||
+      (this.blobSnapshot?.gatherTargetKey ?? "") !== blob.gatherTargetKey ||
+      (this.blobSnapshot?.carriedResourceType ?? CarriedResourceType.NONE) !== blob.carriedResourceType;
+    if (gatherPhaseChanged) {
+      this.gatherVisualPhase = blob.gatherPhase;
+      this.gatherVisualTimerMs = blob.gatherTimerMs;
+    } else if (
+      blob.gatherPhase === BlobGatherPhase.PICKING_UP ||
+      blob.gatherPhase === BlobGatherPhase.DROPPING_OFF
+    ) {
+      this.gatherVisualTimerMs = Math.max(this.gatherVisualTimerMs, blob.gatherTimerMs);
+    } else {
+      this.gatherVisualTimerMs = blob.gatherTimerMs;
+    }
     this.blobSnapshot = {
       actionState: blob.actionState,
       aggroMode: blob.aggroMode,
@@ -388,9 +421,17 @@ export class BlobEntity extends Entity {
       spread: blob.spread,
       unitType: blob.unitType,
       gatherTargetKey: blob.gatherTargetKey,
+      gatherPhase: blob.gatherPhase,
+      gatherTimerMs: blob.gatherTimerMs,
       carriedResourceType: blob.carriedResourceType,
       carriedAmount: blob.carriedAmount,
     };
+  }
+
+  private getGatherPhaseProgress(dt: number, phase: number): number {
+    if (this.blob?.gatherPhase !== phase || this.gatherVisualPhase !== phase) return phase === BlobGatherPhase.PICKING_UP ? 1 : 0;
+    this.gatherVisualTimerMs = Math.min(1000, this.gatherVisualTimerMs + dt * 1000);
+    return Math.max(0, Math.min(1, this.gatherVisualTimerMs / 1000));
   }
 
   private getUnitWorldPositionFromLayout(
@@ -460,6 +501,42 @@ export class BlobEntity extends Entity {
       return entity instanceof BuildingEntity ? entity : null;
     }
     return null;
+  }
+
+  private getNearestOwnedDropoffCenter(x: number, z: number): { x: number; y: number; z: number } | null {
+    if (!this.blob) return null;
+    let best: { x: number; y: number; z: number } | null = null;
+    let bestDistance = Infinity;
+    this.game.room.state.buildings.forEach((building) => {
+      const candidate = building as { ownerId?: string; buildingType?: number; x?: number; y?: number };
+      if (candidate.ownerId !== this.blob!.ownerId || candidate.buildingType !== BuildingType.TOWN_CENTER) return;
+      const cx = candidate.x ?? 0;
+      const cz = candidate.y ?? 0;
+      const distance = Math.hypot(cx - x, cz - z);
+      if (distance < bestDistance) {
+        bestDistance = distance;
+        best = {
+          x: cx,
+          y: getTerrainHeightAt(cx, cz, this.game.getTiles()) + GAME_RULES.UNIT_HEIGHT * 0.28,
+          z: cz,
+        };
+      }
+    });
+    return best;
+  }
+
+  private getGatherTreeSourcePosition(carryIndex: number): { x: number; y: number; z: number } | null {
+    if (!this.blob?.gatherTargetKey) return null;
+    const tile = this.game.getTiles().get(this.blob.gatherTargetKey);
+    if (!tile) return null;
+    const slots = ensureTreeSlots(tile);
+    if (slots.length === 0) return null;
+    const slot = slots[carryIndex % slots.length]!;
+    return {
+      x: slot.x,
+      y: getTerrainHeightAt(slot.x, slot.z, this.game.getTiles()),
+      z: slot.z,
+    };
   }
 
   private isTargetInRangedAttackRange(target: BlobEntity | BuildingEntity | null): boolean {
@@ -1289,6 +1366,21 @@ export class BlobEntity extends Entity {
     }
     const drawBeam = this.game.drawBeam.bind(this.game);
     const drawBrightBeam = this.game.drawBrightBeam.bind(this.game);
+    const pickupProgress =
+      this.blob.gatherPhase === BlobGatherPhase.PICKING_UP
+        ? this.getGatherPhaseProgress(stepDt, BlobGatherPhase.PICKING_UP)
+        : 1;
+    const dropoffProgress =
+      this.blob.gatherPhase === BlobGatherPhase.DROPPING_OFF
+        ? this.getGatherPhaseProgress(stepDt, BlobGatherPhase.DROPPING_OFF)
+        : 0;
+    const carriedDisplayCount =
+      this.blob.gatherPhase === BlobGatherPhase.PICKING_UP && this.blob.unitType === UnitType.VILLAGER
+        ? n
+        : this.blob.carriedAmount > 0
+          ? Math.min(n, Math.ceil(this.blob.carriedAmount / VILLAGER_CARRY_DISPLAY_CHUNK))
+          : 0;
+    const carriedResourceInstances: CarriedResourceInstance[] = [];
     for (let i = 0; i < n; i++) {
       const state = this.unitStates[i];
       let desiredWorldX = state.x;
@@ -1501,6 +1593,8 @@ export class BlobEntity extends Entity {
         state,
         attackAnimT: this.combatAnimT,
         attackPose: state.combatMode === "attack" || hasRangedAim,
+        carryTree: false,
+        carryCompute: false,
         unitIndex: i,
         layoutX: layout.x,
         layoutZ: layout.y,
@@ -1510,6 +1604,56 @@ export class BlobEntity extends Entity {
         drawBeam,
         drawBrightBeam,
       });
+
+      if (this.blob.unitType === UnitType.VILLAGER && i < carriedDisplayCount) {
+        if (this.blob.carriedResourceType === CarriedResourceType.MATERIAL) {
+          const source = this.getGatherTreeSourcePosition(i);
+          const dropoffTarget = this.getNearestOwnedDropoffCenter(worldX, worldZ);
+          carriedResourceInstances.push(
+            createDraggedTreeInstance({
+              localX: worldX,
+              localZ: worldZ,
+              baseY: unitTerrainY,
+              forwardX: stepForwardX,
+              forwardZ: stepForwardZ,
+              sideX,
+              sideZ,
+              scale: unitRules.visualScale,
+            })
+          );
+          const inst = carriedResourceInstances[carriedResourceInstances.length - 1]!;
+          inst.growT = 1;
+          inst.pickupT = pickupProgress;
+          inst.throwT = dropoffProgress;
+          inst.sourceX = source?.x;
+          inst.sourceY = source?.y;
+          inst.sourceZ = source?.z;
+          inst.targetX = dropoffTarget?.x;
+          inst.targetY = dropoffTarget?.y;
+          inst.targetZ = dropoffTarget?.z;
+        } else if (this.blob.carriedResourceType === CarriedResourceType.COMPUTE) {
+          const dropoffTarget = this.getNearestOwnedDropoffCenter(worldX, worldZ);
+          carriedResourceInstances.push(
+            createDraggedComputeInstance({
+              localX: worldX,
+              localZ: worldZ,
+              baseY: unitTerrainY,
+              forwardX: stepForwardX,
+              forwardZ: stepForwardZ,
+              sideX,
+              sideZ,
+              scale: unitRules.visualScale,
+            })
+          );
+          const inst = carriedResourceInstances[carriedResourceInstances.length - 1]!;
+          inst.growT = 1;
+          inst.pickupT = pickupProgress;
+          inst.throwT = dropoffProgress;
+          inst.targetX = dropoffTarget?.x;
+          inst.targetY = dropoffTarget?.y;
+          inst.targetZ = dropoffTarget?.z;
+        }
+      }
     }
     for (const m of this.unitsAgent) m.instanceMatrix.needsUpdate = true;
     for (const m of this.unitsArcher) m.instanceMatrix.needsUpdate = true;
@@ -1517,6 +1661,7 @@ export class BlobEntity extends Entity {
     this.unitsCentaur.instanceMatrix.needsUpdate = true;
     this.unitShield.instanceMatrix.needsUpdate = true;
     for (const m of this.unitsWarband) m.instanceMatrix.needsUpdate = true;
+    this.carriedResources.sync(carriedResourceInstances);
 
     this.updatePathLine(teamTint);
     this.updateTargetIndicator(Math.min(0.05, dt), terrainY);
@@ -1706,13 +1851,19 @@ export class BlobEntity extends Entity {
     const carryingCompute =
       this.blob.carriedAmount > 0 && this.blob.carriedResourceType === CarriedResourceType.COMPUTE;
     const isGathering = this.blob.unitType === UnitType.VILLAGER && this.blob.gatherTargetKey.length > 0;
-    const statusSuffix = carryingMaterial
-      ? ` · Returning ${this.blob.carriedAmount} material`
-      : carryingCompute
-        ? ` · Returning ${this.blob.carriedAmount} compute`
-        : isGathering
-          ? " · Harvesting"
-          : "";
+    const carryCap = this.blob.unitType === UnitType.VILLAGER ? Math.max(1, this.blob.unitCount) * VILLAGER_CARRY_DISPLAY_CHUNK : 0;
+    const statusSuffix =
+      this.blob.gatherPhase === BlobGatherPhase.PICKING_UP
+        ? " · Picking up"
+        : this.blob.gatherPhase === BlobGatherPhase.DROPPING_OFF
+          ? " · Dropping off"
+          : carryingMaterial
+            ? ` · Carry ${this.blob.carriedAmount}/${carryCap} material`
+            : carryingCompute
+              ? ` · Carry ${this.blob.carriedAmount}/${carryCap} compute`
+              : isGathering
+                ? " · Harvesting"
+                : "";
     const stanceActions = this.isMine()
       ? [
           { id: "aggro:active", label: "Active", active: isActive },

@@ -62,6 +62,16 @@ export const CarriedResourceType = {
 
 export type CarriedResourceType = (typeof CarriedResourceType)[keyof typeof CarriedResourceType];
 
+export const BlobGatherPhase = {
+  NONE: 0,
+  MOVING_TO_RESOURCE: 1,
+  PICKING_UP: 2,
+  RETURNING: 3,
+  DROPPING_OFF: 4,
+} as const;
+
+export type BlobGatherPhase = (typeof BlobGatherPhase)[keyof typeof BlobGatherPhase];
+
 export type GatherMessage = {
   blobId: string;
   tileKey: string;
