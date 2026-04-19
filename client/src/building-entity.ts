@@ -157,8 +157,8 @@ export class BuildingEntity extends Entity {
       FARM_RADIAL.set(Math.cos(slot.yaw), 0, Math.sin(slot.yaw));
       FARM_SIDE.set(-Math.sin(slot.yaw), 0, Math.cos(slot.yaw));
       const leafJitter = Math.sin(this.localAge * 5.8 + slot.jitter * 1.2) * 0.08 * motion;
-      const leafLength = 0.8 + eased * 1.15;
-      const leafThickness = 0.28 + eased * 0.18;
+      const leafLength = eased * 1.95;
+      const leafThickness = Math.max(0.02, eased * 0.4);
 
       this.setFarmLeafSegment(FARM_BASE, FARM_TOP, FARM_RADIAL, FARM_SIDE, 0.36, leafLength, leafThickness, 0.18, leafJitter, leavesA, i * 2);
       this.setFarmLeafSegment(FARM_BASE, FARM_TOP, FARM_RADIAL, FARM_SIDE, 0.48, leafLength * 0.92, leafThickness * 0.94, -0.34, -leafJitter * 0.7, leavesA, i * 2 + 1);
@@ -205,6 +205,14 @@ export class BuildingEntity extends Entity {
     mesh: THREE.InstancedMesh,
     index: number
   ): void {
+    if (length <= 0.001 || thickness <= 0.001) {
+      DUMMY.scale.set(0.0001, 0.0001, 0.0001);
+      DUMMY.position.copy(stemBase);
+      DUMMY.rotation.set(0, 0, 0);
+      DUMMY.updateMatrix();
+      mesh.setMatrixAt(index, DUMMY.matrix);
+      return;
+    }
     FARM_START.copy(stemBase).lerp(stemTop, alongT);
     const outwardX = radial.x * Math.cos(angle) + side.x * Math.sin(angle);
     const outwardZ = radial.z * Math.cos(angle) + side.z * Math.sin(angle);
