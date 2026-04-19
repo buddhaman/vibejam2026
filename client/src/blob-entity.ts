@@ -44,7 +44,7 @@ import {
   createDraggedTreeInstance,
   type CarriedResourceInstance,
 } from "./carried-resource-renderer.js";
-import { ensureTreeSlots } from "./tile-visuals.js";
+import { ensureComputeSlots, ensureTreeSlots } from "./tile-visuals.js";
 
 const UNIT_GEOM = createUnitBodyGeometry();
 const UNIT_MAT = applyStylizedShading(new THREE.MeshStandardMaterial({
@@ -530,6 +530,20 @@ export class BlobEntity extends Entity {
     const tile = this.game.getTiles().get(this.blob.gatherTargetKey);
     if (!tile) return null;
     const slots = ensureTreeSlots(tile);
+    if (slots.length === 0) return null;
+    const slot = slots[carryIndex % slots.length]!;
+    return {
+      x: slot.x,
+      y: getTerrainHeightAt(slot.x, slot.z, this.game.getTiles()),
+      z: slot.z,
+    };
+  }
+
+  private getGatherComputeSourcePosition(carryIndex: number): { x: number; y: number; z: number } | null {
+    if (!this.blob?.gatherTargetKey) return null;
+    const tile = this.game.getTiles().get(this.blob.gatherTargetKey);
+    if (!tile) return null;
+    const slots = ensureComputeSlots(tile);
     if (slots.length === 0) return null;
     const slot = slots[carryIndex % slots.length]!;
     return {
@@ -1632,6 +1646,7 @@ export class BlobEntity extends Entity {
           inst.targetY = dropoffTarget?.y;
           inst.targetZ = dropoffTarget?.z;
         } else if (this.blob.carriedResourceType === CarriedResourceType.COMPUTE) {
+          const source = this.getGatherComputeSourcePosition(i);
           const dropoffTarget = this.getNearestOwnedDropoffCenter(worldX, worldZ);
           carriedResourceInstances.push(
             createDraggedComputeInstance({
@@ -1649,6 +1664,9 @@ export class BlobEntity extends Entity {
           inst.growT = 1;
           inst.pickupT = pickupProgress;
           inst.throwT = dropoffProgress;
+          inst.sourceX = source?.x;
+          inst.sourceY = source?.y;
+          inst.sourceZ = source?.z;
           inst.targetX = dropoffTarget?.x;
           inst.targetY = dropoffTarget?.y;
           inst.targetZ = dropoffTarget?.z;

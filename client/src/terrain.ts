@@ -20,6 +20,7 @@ export type TileView = {
   canBuild: boolean;
   canWalk: boolean;
   treeSlots?: TreeSlot[];
+  computeSlots?: ComputeSlot[];
 };
 
 export type TreeSlot = {
@@ -30,6 +31,13 @@ export type TreeSlot = {
   scaleY: number;
   scaleZ: number;
   variantIndex: number;
+};
+
+export type ComputeSlot = {
+  x: number;
+  z: number;
+  rotationY: number;
+  scale: number;
 };
 
 function hash(n: number) {

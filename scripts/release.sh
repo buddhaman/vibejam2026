@@ -22,9 +22,11 @@ ssh "${DEPLOY_HOST}" "mkdir -p '${REMOTE_STATIC_DIR}'"
 rsync -az --delete "${ROOT_DIR}/client/dist/" "${DEPLOY_HOST}:${REMOTE_STATIC_DIR}/"
 
 echo "==> Syncing server bundle to ${DEPLOY_HOST}:${REMOTE_APP_DIR}"
-ssh "${DEPLOY_HOST}" "mkdir -p '${REMOTE_APP_DIR}'"
+ssh "${DEPLOY_HOST}" "mkdir -p '${REMOTE_APP_DIR}/dist'"
 rsync -az --delete \
   "${ROOT_DIR}/dist/" \
+  "${DEPLOY_HOST}:${REMOTE_APP_DIR}/dist/"
+rsync -az \
   "${ROOT_DIR}/package.json" \
   "${ROOT_DIR}/package-lock.json" \
   "${DEPLOY_HOST}:${REMOTE_APP_DIR}/"

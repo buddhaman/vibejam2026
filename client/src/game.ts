@@ -499,6 +499,34 @@ export class Game {
     return counts;
   }
 
+  public getCarriedComputeCountByTile(): Map<string, number> {
+    const counts = new Map<string, number>();
+    this.room.state.blobs.forEach((raw) => {
+      const blob = raw as {
+        unitType?: number;
+        gatherTargetKey?: string;
+        carriedResourceType?: number;
+        carriedAmount?: number;
+        unitCount?: number;
+      };
+      if (
+        blob.unitType === UnitType.VILLAGER &&
+        typeof blob.gatherTargetKey === "string" &&
+        blob.gatherTargetKey.length > 0 &&
+        blob.carriedResourceType === CarriedResourceType.COMPUTE &&
+        (blob.carriedAmount ?? 0) > 0
+      ) {
+        const perCarrier = 12;
+        const carriers = Math.min(
+          Math.max(1, blob.unitCount ?? 1),
+          Math.ceil((blob.carriedAmount ?? 0) / perCarrier)
+        );
+        counts.set(blob.gatherTargetKey, (counts.get(blob.gatherTargetKey) ?? 0) + carriers);
+      }
+    });
+    return counts;
+  }
+
   public consumeTileVisualDirty(): { all: boolean; layers: Set<"forest" | "datacenters"> } {
     const dirty = {
       all: this._allTileVisualsDirty,

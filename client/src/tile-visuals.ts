@@ -4,7 +4,7 @@ import { TileType, getTileCenter } from "../../shared/game-rules.js";
 import { createInstancedVariantSet, syncInstancedVariantSet, type InstancedTransform, type InstancedVariant } from "./instancing.js";
 import type { Game } from "./game.js";
 import { applyStylizedShading, isStylizedLitMaterial } from "./stylized-shading.js";
-import type { TileView, TreeSlot } from "./terrain.js";
+import type { ComputeSlot, TileView, TreeSlot } from "./terrain.js";
 
 const DATACENTER_GLB = "/models/buildings/datacenter.glb";
 const DATACENTER_TARGET_HEIGHT = 10.5;
@@ -20,6 +20,11 @@ type TileVisualLayer = {
 };
 
 type RegrowingTree = {
+  slotIndex: number;
+  startedAt: number;
+};
+
+type RegrowingCompute = {
   slotIndex: number;
   startedAt: number;
 };
@@ -124,6 +129,33 @@ function createDatacenterFallbackVariant(): InstancedVariant {
   };
 }
 
+function createComputeShardVariant(): InstancedVariant {
+  const crystalMat = applyStylizedShading(
+    new THREE.MeshStandardMaterial({
+      color: 0x83ecff,
+      emissive: 0x2dc4ef,
+      emissiveIntensity: 0.55,
+      roughness: 0.22,
+      metalness: 0.08,
+    })
+  );
+  const baseMat = applyStylizedShading(
+    new THREE.MeshStandardMaterial({ color: 0x91a7b2, roughness: 0.78, metalness: 0.08 })
+  );
+  return {
+    parts: [
+      {
+        geometry: new THREE.OctahedronGeometry(0.42, 0).scale(0.9, 1.8, 0.9).translate(0, 0.82, 0),
+        material: crystalMat,
+      },
+      {
+        geometry: new THREE.CylinderGeometry(0.16, 0.22, 0.28, 6).translate(0, 0.14, 0),
+        material: baseMat,
+      },
+    ],
+  };
+}
+
 function createTreeVariants(): InstancedVariant[] {
   const trunkMat = applyStylizedShading(new THREE.MeshStandardMaterial({ color: 0x6d4324, roughness: 1, metalness: 0 }));
   const foliageMatA = applyStylizedShading(new THREE.MeshStandardMaterial({ color: 0x4c7f38, roughness: 0.96, metalness: 0 }));
@@ -209,6 +241,32 @@ export function ensureTreeSlots(tile: TileView): TreeSlot[] {
   }
 
   tile.treeSlots = slots;
+  return slots;
+}
+
+export function ensureComputeSlots(tile: TileView): ComputeSlot[] {
+  if (tile.computeSlots) return tile.computeSlots;
+
+  const center = getTileCenter(tile.tx, tile.tz);
+  const slots: ComputeSlot[] = [];
+  const slotCount = 6;
+  const tileSeed = tile.tx * 4517.19 + tile.tz * 7759.61 + tile.maxCompute * 0.19;
+
+  for (let i = 0; i < slotCount; i++) {
+    const a = treeJitter(tileSeed, i * 3 + 1);
+    const b = treeJitter(tileSeed, i * 3 + 2);
+    const c = treeJitter(tileSeed, i * 3 + 3);
+    const radius = 1.5 + b * 2.2;
+    const angle = a * Math.PI * 2;
+    slots.push({
+      x: center.x + Math.cos(angle) * radius,
+      z: center.z + Math.sin(angle) * radius,
+      rotationY: c * Math.PI * 2,
+      scale: 0.88 + b * 0.45,
+    });
+  }
+
+  tile.computeSlots = slots;
   return slots;
 }
 
@@ -311,26 +369,98 @@ function createForestLayer(): TileVisualLayer {
 }
 
 function createDatacenterLayer(): TileVisualLayer {
-  const set = createInstancedVariantSet([datacenterVariantTemplate ?? createDatacenterFallbackVariant()], 64);
+  const set = createInstancedVariantSet(
+    [datacenterVariantTemplate ?? createDatacenterFallbackVariant(), createComputeShardVariant()],
+    64
+  );
+  let lastCarrySignature = "";
+  const previousCarriedByTile = new Map<string, number>();
+  const regrowingByTile = new Map<string, RegrowingCompute[]>();
+  const REGROW_DURATION = 0.9;
 
   return {
     id: "datacenters",
     set,
-    rebuild(tiles, _game) {
-      const transforms: InstancedTransform[] = [];
+    shouldRebuild(game) {
+      const now = performance.now() / 1000;
+      const carried = game.getCarriedComputeCountByTile();
+      const signature = Array.from(carried.entries())
+        .sort((a, b) => a[0].localeCompare(b[0]))
+        .map(([key, count]) => `${key}:${count}`)
+        .join("|");
+      const changed = signature !== lastCarrySignature;
+      lastCarrySignature = signature;
+      let animating = false;
+      for (const [tileKey, entries] of Array.from(regrowingByTile.entries())) {
+        const active = entries.filter((entry) => now - entry.startedAt < REGROW_DURATION);
+        if (active.length > 0) {
+          animating = true;
+          regrowingByTile.set(tileKey, active);
+        } else {
+          regrowingByTile.delete(tileKey);
+        }
+      }
+      return changed || animating;
+    },
+    rebuild(tiles, game) {
+      const now = performance.now() / 1000;
+      const buildingTransforms: InstancedTransform[] = [];
+      const shardTransforms: InstancedTransform[] = [];
+      const carried = game.getCarriedComputeCountByTile();
       for (const tile of tiles) {
         const maxC = tile.maxCompute ?? 0;
         const c = tile.compute ?? 0;
         if (tile.isMountain || maxC <= 0 || c <= 0) continue;
         const center = getTileCenter(tile.tx, tile.tz);
         const scale = 0.92 + hash01(tile.tx, tile.tz, 8811) * 0.14;
-        transforms.push({
+        buildingTransforms.push({
           position: new THREE.Vector3(center.x, tile.height + 0.04, center.z),
           rotationY: hash01(tile.tx, tile.tz, 6021) * Math.PI * 2,
           scale: new THREE.Vector3(scale, scale, scale),
         });
+
+        const fill = Math.max(0.15, c / maxC);
+        const baseVisibleCount = Math.max(1, Math.round(1 + fill * 5));
+        const hiddenCount = carried.get(tile.key) ?? 0;
+        const previousHiddenCount = previousCarriedByTile.get(tile.key) ?? 0;
+        previousCarriedByTile.set(tile.key, hiddenCount);
+        const slots = ensureComputeSlots(tile);
+        const clampedHiddenCount = Math.min(hiddenCount, slots.length);
+        const visibleCount = Math.max(0, Math.min(baseVisibleCount, slots.length) - clampedHiddenCount);
+        const previousVisibleCount = Math.max(0, Math.min(baseVisibleCount, slots.length) - Math.min(previousHiddenCount, slots.length));
+
+        if (visibleCount > previousVisibleCount) {
+          const entries = regrowingByTile.get(tile.key) ?? [];
+          for (let i = previousVisibleCount; i < visibleCount; i++) {
+            entries.push({ slotIndex: i, startedAt: now });
+          }
+          regrowingByTile.set(tile.key, entries);
+        } else if (visibleCount < previousVisibleCount) {
+          const entries = regrowingByTile.get(tile.key)?.filter((entry) => entry.slotIndex < visibleCount) ?? [];
+          if (entries.length > 0) regrowingByTile.set(tile.key, entries);
+          else regrowingByTile.delete(tile.key);
+        }
+
+        const regrowing = regrowingByTile.get(tile.key) ?? [];
+        const regrowingBySlot = new Map<number, number>();
+        for (const entry of regrowing) {
+          const t = Math.min(1, Math.max(0, (now - entry.startedAt) / REGROW_DURATION));
+          if (t >= 1) continue;
+          regrowingBySlot.set(entry.slotIndex, t);
+        }
+
+        for (let i = 0; i < Math.min(visibleCount, slots.length); i++) {
+          const slot = slots[i]!;
+          const regrowT = regrowingBySlot.get(i) ?? 1;
+          const growth = regrowT >= 1 ? 1 : (0.22 + regrowT * regrowT * 0.78);
+          shardTransforms.push({
+            position: new THREE.Vector3(slot.x, tile.height + 0.05, slot.z),
+            rotationY: slot.rotationY,
+            scale: new THREE.Vector3(slot.scale * growth, slot.scale * growth, slot.scale * growth),
+          });
+        }
       }
-      syncInstancedVariantSet(set, [transforms]);
+      syncInstancedVariantSet(set, [buildingTransforms, shardTransforms]);
     },
   };
 }
