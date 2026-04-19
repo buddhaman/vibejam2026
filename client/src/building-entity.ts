@@ -20,8 +20,8 @@ import {
   secondaryTeamHexFromPrimary,
 } from "./render-texture-recolor.js";
 
-const ORB_RADIUS = 1.05;
-const ORB_Y_ABOVE_ROOF = 1.25;
+const ORB_RADIUS = 0.525;
+const ORB_Y_ABOVE_ROOF = 1.55;
 const DUMMY = new THREE.Object3D();
 const FARM_UP = new THREE.Vector3(0, 1, 0);
 const FARM_BASE = new THREE.Vector3();
