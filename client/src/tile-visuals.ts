@@ -1,4 +1,5 @@
 import * as THREE from "three";
+import { publicAssetUrl } from "./asset-url.js";
 import { createGLTFLoader } from "./gltf-loader.js";
 import { TileType, getTileCenter } from "../../shared/game-rules.js";
 import { createInstancedVariantSet, syncInstancedVariantSet, type InstancedTransform, type InstancedVariant } from "./instancing.js";
@@ -6,7 +7,7 @@ import type { Game } from "./game.js";
 import { applyStylizedShading, isStylizedLitMaterial } from "./stylized-shading.js";
 import type { ComputeSlot, TileView, TreeSlot } from "./terrain.js";
 
-const DATACENTER_GLB = "/models/buildings/datacenter.glb";
+const DATACENTER_GLB = publicAssetUrl("models/buildings/datacenter.glb");
 const DATACENTER_TARGET_HEIGHT = 10.5;
 const TREE_VARIANT_COUNT = 3;
 

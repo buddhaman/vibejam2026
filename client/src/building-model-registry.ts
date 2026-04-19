@@ -1,5 +1,6 @@
 import * as THREE from "three";
 import { BuildingType, getBuildingRules, type BuildingType as BuildingTypeValue } from "../../shared/game-rules.js";
+import { publicAssetUrl } from "./asset-url.js";
 import { createGLTFLoader } from "./gltf-loader.js";
 import { createProceduralBuildingSet, type BuildingSet, type BuildingVariant, type TintableMaterial } from "./building-visuals.js";
 import { applyStylizedShading, isStylizedLitMaterial, stylizeObjectMaterials } from "./stylized-shading.js";
@@ -10,9 +11,9 @@ import { applyStylizedShading, isStylizedLitMaterial, stylizeObjectMaterials } f
  * Omit a type or leave a path unused to keep the procedural placeholder for that type.
  */
 export const BUILDING_GLB_PATHS: Partial<Record<BuildingTypeValue, string>> = {
-  [BuildingType.BARRACKS]: "/models/buildings/armory.glb",
-  [BuildingType.TOWER]: "/models/buildings/tower.glb",
-  [BuildingType.TOWN_CENTER]: "/models/buildings/town_center.glb",
+  [BuildingType.BARRACKS]: publicAssetUrl("models/buildings/armory.glb"),
+  [BuildingType.TOWER]: publicAssetUrl("models/buildings/tower.glb"),
+  [BuildingType.TOWN_CENTER]: publicAssetUrl("models/buildings/town_center.glb"),
 };
 
 /** One prototype per building type (never added to the scene; clone per `BuildingEntity`). */

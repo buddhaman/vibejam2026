@@ -24,6 +24,7 @@ export type CarriedResourceInstance = {
   growT?: number;
   pickupT?: number;
   throwT?: number;
+  bobPhase?: number;
 };
 
 type MeshBank = {
@@ -168,6 +169,9 @@ export class CarriedResourceRenderer {
         Math.min(GAME_RULES.UNIT_HEIGHT * 3.4, throwDistance * 0.28)
       );
       const arcY = throwT > 0 ? Math.sin(throwEase * Math.PI) * arcPeak : 0;
+      const bobPhase = instance.bobPhase ?? 0;
+      const bobWave = Math.abs(Math.sin(bobPhase));
+      const bobY = throwT > 0 ? 0 : bobWave * GAME_RULES.UNIT_HEIGHT * 0.18;
       const carryTiltX =
         instance.kind === "tree"
           ? THREE.MathUtils.lerp(-0.72, instance.tiltX, pickupEase)
@@ -180,7 +184,7 @@ export class CarriedResourceRenderer {
         throwT > 0 && instance.kind === "tree"
           ? THREE.MathUtils.lerp(carryTiltX, -1.02, throwEase)
           : carryTiltX;
-      DUMMY.position.set(posX, posYBase + arcY, posZ);
+      DUMMY.position.set(posX, posYBase + arcY + bobY, posZ);
       DUMMY.rotation.set(throwTiltX, carryRotationY + throwEase * 1.1, instance.tiltZ ?? 0);
       DUMMY.scale.setScalar(instance.scale * growT);
       DUMMY.updateMatrix();
@@ -209,17 +213,15 @@ export function createDraggedTreeInstance(params: {
   sideZ: number;
   scale: number;
 }): CarriedResourceInstance {
-  const dragBack = GAME_RULES.UNIT_RADIUS * 2.35 * params.scale;
-  const dragSide = GAME_RULES.UNIT_RADIUS * 0.58 * params.scale;
   return {
     kind: "tree",
-    localX: params.localX - params.forwardX * dragBack + params.sideX * dragSide,
-    localY: params.baseY,
-    localZ: params.localZ - params.forwardZ * dragBack + params.sideZ * dragSide,
+    localX: params.localX + params.sideX * GAME_RULES.UNIT_RADIUS * 0.12 * params.scale,
+    localY: params.baseY + GAME_RULES.UNIT_HEIGHT * 1.5 * params.scale,
+    localZ: params.localZ + params.sideZ * GAME_RULES.UNIT_RADIUS * 0.12 * params.scale,
     rotationY: Math.atan2(params.forwardX, params.forwardZ),
-    tiltX: -0.18,
+    tiltX: 0.08,
     tiltZ: 0,
-    scale: 1.18,
+    scale: 0.92,
   };
 }
 
@@ -235,11 +237,11 @@ export function createDraggedComputeInstance(params: {
 }): CarriedResourceInstance {
   return {
     kind: "compute",
-    localX: params.localX - params.forwardX * GAME_RULES.UNIT_RADIUS * 0.9 * params.scale + params.sideX * GAME_RULES.UNIT_RADIUS * 0.2 * params.scale,
-    localY: params.baseY + GAME_RULES.UNIT_HEIGHT * 0.18 * params.scale,
-    localZ: params.localZ - params.forwardZ * GAME_RULES.UNIT_RADIUS * 0.9 * params.scale + params.sideZ * GAME_RULES.UNIT_RADIUS * 0.2 * params.scale,
+    localX: params.localX + params.sideX * GAME_RULES.UNIT_RADIUS * 0.1 * params.scale,
+    localY: params.baseY + GAME_RULES.UNIT_HEIGHT * 1.42 * params.scale,
+    localZ: params.localZ + params.sideZ * GAME_RULES.UNIT_RADIUS * 0.1 * params.scale,
     rotationY: Math.atan2(params.forwardX, params.forwardZ),
-    tiltX: Math.PI * 0.08,
-    scale: 0.78 * params.scale,
+    tiltX: Math.PI * 0.03,
+    scale: 1.55 * params.scale,
   };
 }

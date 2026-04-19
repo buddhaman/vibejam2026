@@ -1,5 +1,6 @@
 import * as THREE from "three";
 import { GAME_RULES, UnitType, getUnitRules } from "../../shared/game-rules.js";
+import { publicAssetUrl } from "./asset-url.js";
 import { createGLTFLoader } from "./gltf-loader.js";
 import { TEAM_FACTION_TEX_MARK, textureLikelyHasBrightFactionColors } from "./render-texture-recolor.js";
 import { applyStylizedShading } from "./stylized-shading.js";
@@ -12,10 +13,10 @@ export type UnitPartTemplate = {
 export type UnitModelSlot = "hoplite" | "agent" | "archer" | "synthaur";
 
 const GLB_URL: Record<UnitModelSlot, string> = {
-  hoplite: "/models/units/hoplite.glb",
-  agent: "/models/units/agent.glb",
-  archer: "/models/units/archer.glb",
-  synthaur: "/models/units/synthaur.glb",
+  hoplite: publicAssetUrl("models/units/hoplite.glb"),
+  agent: publicAssetUrl("models/units/agent.glb"),
+  archer: publicAssetUrl("models/units/archer.glb"),
+  synthaur: publicAssetUrl("models/units/synthaur.glb"),
 };
 
 const templates: Record<UnitModelSlot, UnitPartTemplate[] | null> = {

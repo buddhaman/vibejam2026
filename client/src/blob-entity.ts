@@ -1639,6 +1639,7 @@ export class BlobEntity extends Entity {
           inst.growT = 1;
           inst.pickupT = pickupProgress;
           inst.throwT = dropoffProgress;
+          inst.bobPhase = this.combatAnimT * 15.6 + i * 0.7;
           inst.sourceX = source?.x;
           inst.sourceY = source?.y;
           inst.sourceZ = source?.z;
@@ -1664,6 +1665,7 @@ export class BlobEntity extends Entity {
           inst.growT = 1;
           inst.pickupT = pickupProgress;
           inst.throwT = dropoffProgress;
+          inst.bobPhase = this.combatAnimT * 15.6 + i * 0.7;
           inst.sourceX = source?.x;
           inst.sourceY = source?.y;
           inst.sourceZ = source?.z;
