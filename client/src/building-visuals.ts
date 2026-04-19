@@ -174,6 +174,101 @@ function createStableVariant(): BuildingVariant {
   return { root, tintMaterials, accentMaterials };
 }
 
+function createFarmVariant(): BuildingVariant {
+  const rules = getBuildingRules(BuildingType.FARM);
+  const root = new THREE.Group();
+  const tintMaterials = [
+    createMaterial(0x7a5a2e, 0.98, 0.01),
+  ];
+  const accentMaterials = [
+    createMaterial(0x60411b, 1, 0),
+    createMaterial(0x6bb84a, 0.94, 0.01),
+    createMaterial(0x8bdf62, 0.9, 0),
+  ];
+
+  const dirtGeom = new THREE.CylinderGeometry(1, 1, 0.06, 18);
+  const dirtOffsets = [
+    { x: 0, z: 0, s: 4.6 },
+    { x: -2.3, z: -1.8, s: 2.9 },
+    { x: 2.1, z: -1.6, s: 2.7 },
+    { x: -2.0, z: 1.9, s: 2.6 },
+    { x: 2.4, z: 1.8, s: 3.0 },
+    { x: 0.2, z: -2.7, s: 2.5 },
+  ];
+  for (const patch of dirtOffsets) {
+    const mesh = new THREE.Mesh(dirtGeom, tintMaterials[0]);
+    mesh.position.set(patch.x, 0.03, patch.z);
+    mesh.scale.set(patch.s, 1, patch.s * (0.86 + (patch.x + patch.z) * 0.01));
+    mesh.castShadow = true;
+    mesh.receiveShadow = true;
+    root.add(mesh);
+  }
+
+  const ridgeGeom = new THREE.CylinderGeometry(0.24, 0.28, 0.09, 10);
+  for (let gx = -1; gx <= 1; gx++) {
+    for (let gz = -1; gz <= 1; gz++) {
+      const ridge = new THREE.Mesh(ridgeGeom, accentMaterials[0]);
+      ridge.position.set(gx * 2.55, 0.05, gz * 2.55);
+      ridge.scale.set(6.2, 1, 1.1);
+      ridge.rotation.y = (gz & 1) === 0 ? 0.12 : -0.12;
+      ridge.castShadow = true;
+      ridge.receiveShadow = true;
+      root.add(ridge);
+    }
+  }
+
+  const stemMat = accentMaterials[1];
+  const leafMatA = accentMaterials[1];
+  const leafMatB = accentMaterials[2];
+  const stemGeom = new THREE.CylinderGeometry(0.045, 0.11, 1, 6).translate(0, 0.5, 0);
+  const leafGeom = new THREE.CylinderGeometry(0.26, 0.26, 0.09, 12)
+    .scale(2.2, 1, 0.28)
+    .rotateZ(Math.PI * 0.5)
+    .translate(0.62, 0, 0);
+
+  const stemCount = 9;
+  const stems = new THREE.InstancedMesh(stemGeom, stemMat, stemCount);
+  stems.name = "farm_stems";
+  stems.castShadow = true;
+  stems.receiveShadow = true;
+  stems.frustumCulled = false;
+  stems.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+  stems.userData.farmSlots = Array.from({ length: stemCount }, (_, index) => {
+    const gx = (index % 3) - 1;
+    const gz = Math.floor(index / 3) - 1;
+    return {
+      x: gx * 2.55,
+      z: gz * 2.55,
+      yaw: ((gx + gz * 2) * 0.23),
+      jitter: index * 0.73,
+    };
+  });
+  root.add(stems);
+
+  const leafCount = stemCount * 2;
+  const leavesA = new THREE.InstancedMesh(leafGeom, leafMatA, leafCount);
+  leavesA.name = "farm_leaves_a";
+  leavesA.castShadow = true;
+  leavesA.receiveShadow = true;
+  leavesA.frustumCulled = false;
+  leavesA.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+  leavesA.userData.farmLeafSign = 1;
+  leavesA.userData.farmSlots = stems.userData.farmSlots;
+  root.add(leavesA);
+
+  const leavesB = new THREE.InstancedMesh(leafGeom, leafMatB, leafCount);
+  leavesB.name = "farm_leaves_b";
+  leavesB.castShadow = true;
+  leavesB.receiveShadow = true;
+  leavesB.frustumCulled = false;
+  leavesB.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+  leavesB.userData.farmLeafSign = -1;
+  leavesB.userData.farmSlots = stems.userData.farmSlots;
+  root.add(leavesB);
+
+  return { root, tintMaterials, accentMaterials };
+}
+
 export function createProceduralBuildingSet(): BuildingSet {
   return {
     [BuildingType.BARRACKS]: createBarracksVariant(),
@@ -181,5 +276,6 @@ export function createProceduralBuildingSet(): BuildingSet {
     [BuildingType.TOWN_CENTER]: createTownCenterVariant(),
     [BuildingType.ARCHERY_RANGE]: createArcheryRangeVariant(),
     [BuildingType.STABLE]: createStableVariant(),
+    [BuildingType.FARM]: createFarmVariant(),
   };
 }

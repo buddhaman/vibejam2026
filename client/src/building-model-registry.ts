@@ -144,6 +144,7 @@ function mergeTemplateSet(gltf: Partial<Record<BuildingTypeValue, BuildingVarian
     [BuildingType.TOWN_CENTER]: gltf[BuildingType.TOWN_CENTER] ?? procedural[BuildingType.TOWN_CENTER],
     [BuildingType.ARCHERY_RANGE]: gltf[BuildingType.ARCHERY_RANGE] ?? procedural[BuildingType.ARCHERY_RANGE],
     [BuildingType.STABLE]: gltf[BuildingType.STABLE] ?? procedural[BuildingType.STABLE],
+    [BuildingType.FARM]: gltf[BuildingType.FARM] ?? procedural[BuildingType.FARM],
   };
 }
 
@@ -168,6 +169,7 @@ export function instantiateBuildingSet(templates: BuildingSet): BuildingSet {
     [BuildingType.TOWN_CENTER]: cloneBuildingVariant(templates[BuildingType.TOWN_CENTER]),
     [BuildingType.ARCHERY_RANGE]: cloneBuildingVariant(templates[BuildingType.ARCHERY_RANGE]),
     [BuildingType.STABLE]: cloneBuildingVariant(templates[BuildingType.STABLE]),
+    [BuildingType.FARM]: cloneBuildingVariant(templates[BuildingType.FARM]),
   };
 }
 

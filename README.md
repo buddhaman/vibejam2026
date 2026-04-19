@@ -231,20 +231,20 @@ No deep `systems/` tree — add files only when they earn their place.
 Keep the architecture **boring on the wire**, **expressive on the GPU**.
 
 ### TODO:
- - Villagers gather resources
  - Farms
  - Behavior trees (behavior of all units)
  - Villagers build buildings
- - Buildings can be demolished
 
- - Build walls.
- - Make trees cuttable and collectable
- - Bows
+ - Build walls
  - Add water
  - In game text 
  - Music
  - Sounds and voiceover
+ - Game rooms
+ - Full map generation
+ - Fog of war
  - User chat
+ - Show blob state clearly
  - Score per user, realtime leaderboards
  - Nice icons for everything
 
@@ -258,7 +258,11 @@ Keep the architecture **boring on the wire**, **expressive on the GPU**.
  - Sync map
 
 ### Done
+ - Make trees cuttable and collectable
+ - Bows
+ - Buildings can be demolished
  - Give health to buildings
+ - Villagers gather resources
  - Buildings produce units that auto join in blobs
  - Design attack mechanics
  - Villagers join in blobs

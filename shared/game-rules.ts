@@ -8,6 +8,7 @@ export const BuildingType = {
   TOWN_CENTER: 3,
   ARCHERY_RANGE: 4,
   STABLE: 5,
+  FARM: 6,
 } as const;
 
 export type BuildingType = (typeof BuildingType)[keyof typeof BuildingType];
@@ -50,7 +51,8 @@ export function isBuildingType(value: unknown): value is BuildingType {
     value === BuildingType.TOWER ||
     value === BuildingType.TOWN_CENTER ||
     value === BuildingType.ARCHERY_RANGE ||
-    value === BuildingType.STABLE
+    value === BuildingType.STABLE ||
+    value === BuildingType.FARM
   );
 }
 
@@ -109,6 +111,7 @@ export const GAME_RULES = {
   BARRACKS_HEALTH: 200,
   ARCHERY_RANGE_HEALTH: 190,
   STABLE_HEALTH: 240,
+  FARM_HEALTH: 120,
   TOWER_HEALTH: 300,
   TOWN_CENTER_HEALTH: 950,
   MAX_BUILDINGS_PER_PLAYER: 8,
@@ -204,6 +207,20 @@ export const BUILDING_RULES = {
     height: 6.8,
     trainSpawnOffsetX: GAME_RULES.TILE_SIZE,
     producibleUnits: [UnitType.SYNTHAUR],
+  },
+  [BuildingType.FARM]: {
+    label: "Kleros",
+    detail: "Food field",
+    health: GAME_RULES.FARM_HEALTH,
+    buildable: true,
+    cost: { biomass: 0, material: 70, compute: 0 },
+    footprintWidth: GAME_RULES.TILE_SIZE,
+    footprintDepth: GAME_RULES.TILE_SIZE,
+    selectionWidth: GAME_RULES.TILE_SIZE,
+    selectionDepth: GAME_RULES.TILE_SIZE,
+    height: 2.2,
+    trainSpawnOffsetX: GAME_RULES.TILE_SIZE,
+    producibleUnits: [],
   },
 } as const;
 

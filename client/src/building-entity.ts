@@ -1,5 +1,6 @@
 import * as THREE from "three";
 import {
+  BuildingType,
   canAfford,
   getBuildingRules,
   getUnitRules,
@@ -20,6 +21,8 @@ import {
 
 const ORB_RADIUS = 1.05;
 const ORB_Y_ABOVE_ROOF = 1.25;
+const FARM_GROWTH_SECONDS = 10;
+const DUMMY = new THREE.Object3D();
 
 export class BuildingEntity extends Entity {
   /** Cloned only for the one building type this entity actually uses. Set after first sync(). */
@@ -29,6 +32,7 @@ export class BuildingEntity extends Entity {
   /** Single unlit sphere — full-brightness player palette color. */
   private ownerOrb!: THREE.Mesh;
   private ownerOrbMaterial!: THREE.MeshBasicMaterial;
+  private localAge = 0;
 
   private building: {
     x: number;
@@ -84,6 +88,7 @@ export class BuildingEntity extends Entity {
 
   public render(_dt: number): void {
     if (!this.building || !this.variant) return;
+    this.localAge += _dt;
 
     const terrainY = getTerrainHeightAt(
       this.building.x,
@@ -108,6 +113,96 @@ export class BuildingEntity extends Entity {
     }
 
     this.mesh.position.set(this.building.x, terrainY, this.building.y);
+    if (this.building.buildingType === BuildingType.FARM) {
+      this.updateFarmGrowth();
+    }
+  }
+
+  private updateFarmGrowth(): void {
+    if (!this.variant) return;
+    const growthT = Math.min(1, this.localAge / FARM_GROWTH_SECONDS);
+    const eased = 1 - Math.pow(1 - growthT, 2.1);
+    const motion = Math.max(0, 1 - growthT);
+    const stemMesh = this.variant.root.getObjectByName("farm_stems") as THREE.InstancedMesh | null;
+    const leavesA = this.variant.root.getObjectByName("farm_leaves_a") as THREE.InstancedMesh | null;
+    const leavesB = this.variant.root.getObjectByName("farm_leaves_b") as THREE.InstancedMesh | null;
+    const slots = (stemMesh?.userData.farmSlots as Array<{ x: number; z: number; yaw: number; jitter: number }> | undefined) ?? [];
+    if (!stemMesh || !leavesA || !leavesB || slots.length === 0) return;
+
+    const stemHeight = 2.4 + eased * 2.8;
+    for (let i = 0; i < slots.length; i++) {
+      const slot = slots[i]!;
+      const tipYawJitter = Math.sin(this.localAge * 7.4 + slot.jitter) * 0.08 * motion;
+      const tipPitchX = Math.sin(this.localAge * 8.2 + slot.jitter * 1.7) * 0.14 * motion;
+      const tipPitchZ = Math.cos(this.localAge * 7.8 + slot.jitter * 1.3) * 0.14 * motion;
+      DUMMY.position.set(slot.x, 0.06, slot.z);
+      DUMMY.rotation.set(tipPitchX, slot.yaw + tipYawJitter, tipPitchZ);
+      DUMMY.scale.set(1, stemHeight * eased, 1);
+      DUMMY.updateMatrix();
+      stemMesh.setMatrixAt(i, DUMMY.matrix);
+
+      const tipY = 0.06 + stemHeight * eased;
+      const radialX = Math.cos(slot.yaw);
+      const radialZ = Math.sin(slot.yaw);
+      const sideX = -radialZ;
+      const sideZ = radialX;
+      const leafMotionYaw = Math.sin(this.localAge * 5.4 + slot.jitter) * 0.09 * motion;
+      const leafLift = Math.sin(this.localAge * 6.1 + slot.jitter * 0.8) * 0.08 * motion;
+      const leafScaleX = 0.78 + eased * 1.7;
+      const leafScaleY = 0.34 + eased * 0.82;
+      const leafScaleZ = 0.5 + eased * 0.72;
+      const attachOut = 0.18 + eased * 0.22;
+      const attachDown = 0.42 + eased * 0.18;
+      const leafPitch = 0.98;
+      const leafRoll = 0.24;
+
+      DUMMY.position.set(
+        slot.x + radialX * attachOut,
+        tipY - attachDown + leafLift,
+        slot.z + radialZ * attachOut
+      );
+      DUMMY.rotation.set(0, slot.yaw + leafMotionYaw, leafPitch);
+      DUMMY.scale.set(leafScaleX, leafScaleY, leafScaleZ);
+      DUMMY.updateMatrix();
+      leavesA.setMatrixAt(i * 2, DUMMY.matrix);
+
+      DUMMY.position.set(
+        slot.x - sideX * attachOut * 0.8,
+        tipY - attachDown * 0.8 - leafLift * 0.3,
+        slot.z - sideZ * attachOut * 0.8
+      );
+      DUMMY.rotation.set(leafRoll, slot.yaw + Math.PI * 0.52 + leafMotionYaw, -leafPitch * 0.86);
+      DUMMY.scale.set(leafScaleX * 0.92, leafScaleY * 0.92, leafScaleZ * 0.92);
+      DUMMY.updateMatrix();
+      leavesA.setMatrixAt(i * 2 + 1, DUMMY.matrix);
+
+      DUMMY.position.set(
+        slot.x - radialX * attachOut,
+        tipY - attachDown * 1.05,
+        slot.z - radialZ * attachOut
+      );
+      DUMMY.rotation.set(0, slot.yaw + Math.PI + leafMotionYaw, -leafPitch);
+      DUMMY.scale.set(leafScaleX * 0.96, leafScaleY, leafScaleZ);
+      DUMMY.updateMatrix();
+      leavesB.setMatrixAt(i * 2, DUMMY.matrix);
+
+      DUMMY.position.set(
+        slot.x + sideX * attachOut * 0.8,
+        tipY - attachDown * 0.72 + leafLift * 0.25,
+        slot.z + sideZ * attachOut * 0.8
+      );
+      DUMMY.rotation.set(-leafRoll, slot.yaw + Math.PI * 1.48 + leafMotionYaw, leafPitch * 0.82);
+      DUMMY.scale.set(leafScaleX * 0.88, leafScaleY * 0.9, leafScaleZ * 0.9);
+      DUMMY.updateMatrix();
+      leavesB.setMatrixAt(i * 2 + 1, DUMMY.matrix);
+    }
+
+    stemMesh.count = slots.length;
+    leavesA.count = slots.length * 2;
+    leavesB.count = slots.length * 2;
+    stemMesh.instanceMatrix.needsUpdate = true;
+    leavesA.instanceMatrix.needsUpdate = true;
+    leavesB.instanceMatrix.needsUpdate = true;
   }
 
   public isStale(): boolean {

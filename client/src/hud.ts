@@ -19,12 +19,14 @@ const BUILD_ITEM_THEME: Record<BuildingType, { icon: string; color: string; colo
   [BuildingType.TOWN_CENTER]: { icon: "⌂", color: "#6D4D1D", colorLight: "#D5A04A", glow: "#FFD27A" },
   [BuildingType.ARCHERY_RANGE]: { icon: "🏹", color: "#5C3B15", colorLight: "#B7752E", glow: "#FFC16A" },
   [BuildingType.STABLE]: { icon: "♞", color: "#3D244F", colorLight: "#7B51A6", glow: "#D0A6FF" },
+  [BuildingType.FARM]: { icon: "☘", color: "#5D4116", colorLight: "#8F6A2B", glow: "#8BDB65" },
 };
 
 const BUILD_MENU_TYPES = [
   BuildingType.BARRACKS,
   BuildingType.ARCHERY_RANGE,
   BuildingType.STABLE,
+  BuildingType.FARM,
   BuildingType.TOWER,
 ] as const;
 
