@@ -8,6 +8,7 @@
     "dev:server": "NODE_ENV=development tsx watch --tsconfig tsconfig.server.json server/src/index.ts",
     "dev:client:wait": "node scripts/compress-gltf.mjs && node scripts/wait-for-colyseus.mjs && vite client",
     "dev:client": "vite client",
+    "release": "./scripts/release.sh",
     "build": "npm run build:server && npm run build:client",
     "build:server": "tsc -p tsconfig.server.json && node -e \"require('fs').writeFileSync('dist/server/package.json', JSON.stringify({ type: 'commonjs' }))\"",
     "build:client": "node scripts/compress-gltf.mjs && vite build client",

@@ -3,10 +3,12 @@ import { defineConfig } from "vite";
 /** Must match the Colyseus server port (see `server/src/config.ts` / `PORT`). */
 const colyseusPort = process.env.VITE_COLYSEUS_PORT ?? process.env.PORT ?? "2567";
 const colyseusTarget = `http://127.0.0.1:${colyseusPort}`;
+const publicBase = process.env.VITE_PUBLIC_BASE ?? "/";
 
 export default defineConfig({
   root: ".",
   publicDir: "public",
+  base: publicBase,
   server: {
     port: 5173,
     open: true,

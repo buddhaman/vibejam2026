@@ -1,23 +1,25 @@
 import { Client, type Room } from "@colyseus/sdk";
 
+function normalizedBasePath(): string {
+  const raw = import.meta.env.BASE_URL || "/";
+  const withLeadingSlash = raw.startsWith("/") ? raw : `/${raw}`;
+  return withLeadingSlash.endsWith("/") ? withLeadingSlash : `${withLeadingSlash}/`;
+}
+
 /**
  * In dev, talk to Colyseus through the Vite proxy (`/colyseus` → game server) so
  * `/matchmake` requests are same-origin and avoid CORS + `credentials: "include"`.
- * In production, use the real game server origin (same host + port).
+ * In production, keep Colyseus behind the same public base path so deployments
+ * under a subpath (for example `/agi/`) do not need a separate public port.
  */
 function colyseusEndpoint(): string {
-  const port =
-    typeof import.meta.env.VITE_COLYSEUS_PORT === "string" &&
-    import.meta.env.VITE_COLYSEUS_PORT.length > 0
-      ? import.meta.env.VITE_COLYSEUS_PORT
-      : "2567";
+  const basePath = normalizedBasePath();
 
   if (import.meta.env.DEV) {
     return `${window.location.origin}/colyseus`;
   }
 
-  const { protocol, hostname } = window.location;
-  return `${protocol}//${hostname}:${port}`;
+  return new URL(`${basePath}colyseus`, window.location.origin).toString().replace(/\/$/, "");
 }
 
 export async function joinBattle(): Promise<Room> {
@@ -40,7 +42,7 @@ export function waitForSyncedGameState(room: Room): Promise<void> {
     const t = setTimeout(() => {
       reject(
         new Error(
-          "Timed out waiting for room state. Is the Colyseus server running on the same port as this client?"
+          "Timed out waiting for room state. Is the Colyseus server reachable from this page under the expected base path?"
         )
       );
     }, 15_000);

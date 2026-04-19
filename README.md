@@ -186,6 +186,14 @@ Production server (after `npm run build:server`):
 npm start
 ```
 
+Production publish to `trussner.com/agi`:
+
+```bash
+npm run release
+```
+
+Deployment details live in [docs/release.md](docs/release.md).
+
 The compiled output under `dist/server` ships a tiny `package.json` with `"type": "commonjs"` so the TypeScript emit loads cleanly under Node while the repo root stays ESM for Vite.
 
 ## Controls (MVP)
