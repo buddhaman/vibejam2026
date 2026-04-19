@@ -1,6 +1,7 @@
 import * as THREE from "three";
 import {
   BuildingType,
+  GAME_RULES,
   canAfford,
   getBuildingRules,
   getUnitRules,
@@ -21,8 +22,16 @@ import {
 
 const ORB_RADIUS = 1.05;
 const ORB_Y_ABOVE_ROOF = 1.25;
-const FARM_GROWTH_SECONDS = 10;
 const DUMMY = new THREE.Object3D();
+const FARM_UP = new THREE.Vector3(0, 1, 0);
+const FARM_BASE = new THREE.Vector3();
+const FARM_TOP = new THREE.Vector3();
+const FARM_START = new THREE.Vector3();
+const FARM_END = new THREE.Vector3();
+const FARM_DIR = new THREE.Vector3();
+const FARM_QUAT = new THREE.Quaternion();
+const FARM_RADIAL = new THREE.Vector3();
+const FARM_SIDE = new THREE.Vector3();
 
 export class BuildingEntity extends Entity {
   /** Cloned only for the one building type this entity actually uses. Set after first sync(). */
@@ -42,6 +51,7 @@ export class BuildingEntity extends Entity {
     ownerId: string;
     productionQueue: UnitTypeValue[];
     productionProgressMs: number;
+    farmGrowth: number;
   } | null = null;
 
   public constructor(game: Game, id: string) {
@@ -68,6 +78,7 @@ export class BuildingEntity extends Entity {
     ownerId: string;
     productionQueue: ArrayLike<UnitTypeValue>;
     productionProgressMs: number;
+    farmGrowth: number;
   }): void {
     const firstSync = this.building === null;
     this.building = {
@@ -84,6 +95,10 @@ export class BuildingEntity extends Entity {
         this.mesh.add(this.variant.root);
       }, 0);
     }
+  }
+
+  public getBuildingType(): BuildingTypeValue | null {
+    return this.building?.buildingType ?? null;
   }
 
   public render(_dt: number): void {
@@ -120,7 +135,7 @@ export class BuildingEntity extends Entity {
 
   private updateFarmGrowth(): void {
     if (!this.variant) return;
-    const growthT = Math.min(1, this.localAge / FARM_GROWTH_SECONDS);
+    const growthT = THREE.MathUtils.clamp(this.building?.farmGrowth ?? 0, 0, 1);
     const eased = 1 - Math.pow(1 - growthT, 2.1);
     const motion = Math.max(0, 1 - growthT);
     const stemMesh = this.variant.root.getObjectByName("farm_stems") as THREE.InstancedMesh | null;
@@ -129,72 +144,26 @@ export class BuildingEntity extends Entity {
     const slots = (stemMesh?.userData.farmSlots as Array<{ x: number; z: number; yaw: number; jitter: number }> | undefined) ?? [];
     if (!stemMesh || !leavesA || !leavesB || slots.length === 0) return;
 
-    const stemHeight = 2.4 + eased * 2.8;
+    const stemHeight = 1.9 + eased * 3.3;
     for (let i = 0; i < slots.length; i++) {
       const slot = slots[i]!;
-      const tipYawJitter = Math.sin(this.localAge * 7.4 + slot.jitter) * 0.08 * motion;
-      const tipPitchX = Math.sin(this.localAge * 8.2 + slot.jitter * 1.7) * 0.14 * motion;
-      const tipPitchZ = Math.cos(this.localAge * 7.8 + slot.jitter * 1.3) * 0.14 * motion;
-      DUMMY.position.set(slot.x, 0.06, slot.z);
-      DUMMY.rotation.set(tipPitchX, slot.yaw + tipYawJitter, tipPitchZ);
-      DUMMY.scale.set(1, stemHeight * eased, 1);
-      DUMMY.updateMatrix();
-      stemMesh.setMatrixAt(i, DUMMY.matrix);
+      const swayX = Math.sin(this.localAge * 8.2 + slot.jitter * 1.7) * 0.34 * motion;
+      const swayZ = Math.cos(this.localAge * 7.8 + slot.jitter * 1.3) * 0.34 * motion;
+      FARM_BASE.set(slot.x, 0.06, slot.z);
+      FARM_TOP.set(slot.x + swayX, 0.06 + stemHeight * eased, slot.z + swayZ);
+      this.setFarmBeamMatrix(FARM_BASE, FARM_TOP, 0.92 + eased * 0.16, stemMesh, i);
 
-      const tipY = 0.06 + stemHeight * eased;
-      const radialX = Math.cos(slot.yaw);
-      const radialZ = Math.sin(slot.yaw);
-      const sideX = -radialZ;
-      const sideZ = radialX;
-      const leafMotionYaw = Math.sin(this.localAge * 5.4 + slot.jitter) * 0.09 * motion;
-      const leafLift = Math.sin(this.localAge * 6.1 + slot.jitter * 0.8) * 0.08 * motion;
-      const leafScaleX = 0.78 + eased * 1.7;
-      const leafScaleY = 0.34 + eased * 0.82;
-      const leafScaleZ = 0.5 + eased * 0.72;
-      const attachOut = 0.18 + eased * 0.22;
-      const attachDown = 0.42 + eased * 0.18;
-      const leafPitch = 0.98;
-      const leafRoll = 0.24;
+      FARM_DIR.subVectors(FARM_TOP, FARM_BASE).normalize();
+      FARM_RADIAL.set(Math.cos(slot.yaw), 0, Math.sin(slot.yaw));
+      FARM_SIDE.set(-Math.sin(slot.yaw), 0, Math.cos(slot.yaw));
+      const leafJitter = Math.sin(this.localAge * 5.8 + slot.jitter * 1.2) * 0.08 * motion;
+      const leafLength = 0.8 + eased * 1.15;
+      const leafThickness = 0.28 + eased * 0.18;
 
-      DUMMY.position.set(
-        slot.x + radialX * attachOut,
-        tipY - attachDown + leafLift,
-        slot.z + radialZ * attachOut
-      );
-      DUMMY.rotation.set(0, slot.yaw + leafMotionYaw, leafPitch);
-      DUMMY.scale.set(leafScaleX, leafScaleY, leafScaleZ);
-      DUMMY.updateMatrix();
-      leavesA.setMatrixAt(i * 2, DUMMY.matrix);
-
-      DUMMY.position.set(
-        slot.x - sideX * attachOut * 0.8,
-        tipY - attachDown * 0.8 - leafLift * 0.3,
-        slot.z - sideZ * attachOut * 0.8
-      );
-      DUMMY.rotation.set(leafRoll, slot.yaw + Math.PI * 0.52 + leafMotionYaw, -leafPitch * 0.86);
-      DUMMY.scale.set(leafScaleX * 0.92, leafScaleY * 0.92, leafScaleZ * 0.92);
-      DUMMY.updateMatrix();
-      leavesA.setMatrixAt(i * 2 + 1, DUMMY.matrix);
-
-      DUMMY.position.set(
-        slot.x - radialX * attachOut,
-        tipY - attachDown * 1.05,
-        slot.z - radialZ * attachOut
-      );
-      DUMMY.rotation.set(0, slot.yaw + Math.PI + leafMotionYaw, -leafPitch);
-      DUMMY.scale.set(leafScaleX * 0.96, leafScaleY, leafScaleZ);
-      DUMMY.updateMatrix();
-      leavesB.setMatrixAt(i * 2, DUMMY.matrix);
-
-      DUMMY.position.set(
-        slot.x + sideX * attachOut * 0.8,
-        tipY - attachDown * 0.72 + leafLift * 0.25,
-        slot.z + sideZ * attachOut * 0.8
-      );
-      DUMMY.rotation.set(-leafRoll, slot.yaw + Math.PI * 1.48 + leafMotionYaw, leafPitch * 0.82);
-      DUMMY.scale.set(leafScaleX * 0.88, leafScaleY * 0.9, leafScaleZ * 0.9);
-      DUMMY.updateMatrix();
-      leavesB.setMatrixAt(i * 2 + 1, DUMMY.matrix);
+      this.setFarmLeafSegment(FARM_BASE, FARM_TOP, FARM_RADIAL, FARM_SIDE, 0.36, leafLength, leafThickness, 0.18, leafJitter, leavesA, i * 2);
+      this.setFarmLeafSegment(FARM_BASE, FARM_TOP, FARM_RADIAL, FARM_SIDE, 0.48, leafLength * 0.92, leafThickness * 0.94, -0.34, -leafJitter * 0.7, leavesA, i * 2 + 1);
+      this.setFarmLeafSegment(FARM_BASE, FARM_TOP, FARM_RADIAL, FARM_SIDE, 0.62, leafLength * 0.98, leafThickness, Math.PI + 0.22, leafJitter * 0.85, leavesB, i * 2);
+      this.setFarmLeafSegment(FARM_BASE, FARM_TOP, FARM_RADIAL, FARM_SIDE, 0.74, leafLength * 0.88, leafThickness * 0.9, Math.PI - 0.4, -leafJitter * 0.5, leavesB, i * 2 + 1);
     }
 
     stemMesh.count = slots.length;
@@ -203,6 +172,48 @@ export class BuildingEntity extends Entity {
     stemMesh.instanceMatrix.needsUpdate = true;
     leavesA.instanceMatrix.needsUpdate = true;
     leavesB.instanceMatrix.needsUpdate = true;
+  }
+
+  private setFarmBeamMatrix(
+    start: THREE.Vector3,
+    end: THREE.Vector3,
+    thickness: number,
+    mesh: THREE.InstancedMesh,
+    index: number
+  ): void {
+    FARM_DIR.subVectors(end, start);
+    const length = Math.max(0.001, FARM_DIR.length());
+    FARM_DIR.divideScalar(length);
+    FARM_QUAT.setFromUnitVectors(FARM_UP, FARM_DIR);
+    DUMMY.position.copy(start);
+    DUMMY.quaternion.copy(FARM_QUAT);
+    DUMMY.scale.set(thickness, length, thickness * 0.78);
+    DUMMY.updateMatrix();
+    mesh.setMatrixAt(index, DUMMY.matrix);
+  }
+
+  private setFarmLeafSegment(
+    stemBase: THREE.Vector3,
+    stemTop: THREE.Vector3,
+    radial: THREE.Vector3,
+    side: THREE.Vector3,
+    alongT: number,
+    length: number,
+    thickness: number,
+    angle: number,
+    jitter: number,
+    mesh: THREE.InstancedMesh,
+    index: number
+  ): void {
+    FARM_START.copy(stemBase).lerp(stemTop, alongT);
+    const outwardX = radial.x * Math.cos(angle) + side.x * Math.sin(angle);
+    const outwardZ = radial.z * Math.cos(angle) + side.z * Math.sin(angle);
+    FARM_END.set(
+      FARM_START.x + outwardX * length + jitter,
+      FARM_START.y + 0.1 + length * 0.12,
+      FARM_START.z + outwardZ * length
+    );
+    this.setFarmBeamMatrix(FARM_START, FARM_END, thickness, mesh, index);
   }
 
   public isStale(): boolean {

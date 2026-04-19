@@ -41,6 +41,7 @@ import {
 import {
   CarriedResourceRenderer,
   createDraggedComputeInstance,
+  createDraggedPlantsInstance,
   createDraggedTreeInstance,
   type CarriedResourceInstance,
 } from "./carried-resource-renderer.js";
@@ -179,6 +180,7 @@ type BlobRenderView = {
   spread: SquadSpreadValue;
   unitType: UnitTypeValue;
   gatherTargetKey: string;
+  gatherTargetBuildingId: string;
   gatherPhase: number;
   gatherTimerMs: number;
   carriedResourceType: number;
@@ -387,6 +389,7 @@ export class BlobEntity extends Entity {
     const gatherPhaseChanged =
       this.gatherVisualPhase !== blob.gatherPhase ||
       (this.blobSnapshot?.gatherTargetKey ?? "") !== blob.gatherTargetKey ||
+      (this.blobSnapshot?.gatherTargetBuildingId ?? "") !== blob.gatherTargetBuildingId ||
       (this.blobSnapshot?.carriedResourceType ?? CarriedResourceType.NONE) !== blob.carriedResourceType;
     if (gatherPhaseChanged) {
       this.gatherVisualPhase = blob.gatherPhase;
@@ -421,6 +424,7 @@ export class BlobEntity extends Entity {
       spread: blob.spread,
       unitType: blob.unitType,
       gatherTargetKey: blob.gatherTargetKey,
+      gatherTargetBuildingId: blob.gatherTargetBuildingId,
       gatherPhase: blob.gatherPhase,
       gatherTimerMs: blob.gatherTimerMs,
       carriedResourceType: blob.carriedResourceType,
@@ -550,6 +554,20 @@ export class BlobEntity extends Entity {
       x: slot.x,
       y: getTerrainHeightAt(slot.x, slot.z, this.game.getTiles()),
       z: slot.z,
+    };
+  }
+
+  private getGatherFarmSourcePosition(carryIndex: number): { x: number; y: number; z: number } | null {
+    if (!this.blob?.gatherTargetBuildingId) return null;
+    const entity = this.game.findEntity(this.blob.gatherTargetBuildingId);
+    if (!(entity instanceof BuildingEntity)) return null;
+    const center = entity.getWorldCenter();
+    const angle = (carryIndex / Math.max(1, this.getUnitCount())) * Math.PI * 2;
+    const radius = GAME_RULES.TILE_SIZE * 0.18;
+    return {
+      x: center.x + Math.cos(angle) * radius,
+      y: getTerrainHeightAt(center.x, center.z, this.game.getTiles()) + 0.95,
+      z: center.z + Math.sin(angle) * radius,
     };
   }
 
@@ -1672,6 +1690,32 @@ export class BlobEntity extends Entity {
           inst.targetX = dropoffTarget?.x;
           inst.targetY = dropoffTarget?.y;
           inst.targetZ = dropoffTarget?.z;
+        } else if (this.blob.carriedResourceType === CarriedResourceType.BIOMASS) {
+          const source = this.getGatherFarmSourcePosition(i);
+          const dropoffTarget = this.getNearestOwnedDropoffCenter(worldX, worldZ);
+          carriedResourceInstances.push(
+            createDraggedPlantsInstance({
+              localX: worldX,
+              localZ: worldZ,
+              baseY: unitTerrainY,
+              forwardX: stepForwardX,
+              forwardZ: stepForwardZ,
+              sideX,
+              sideZ,
+              scale: unitRules.visualScale,
+            })
+          );
+          const inst = carriedResourceInstances[carriedResourceInstances.length - 1]!;
+          inst.growT = 1;
+          inst.pickupT = pickupProgress;
+          inst.throwT = dropoffProgress;
+          inst.bobPhase = this.combatAnimT * 15.6 + i * 0.7;
+          inst.sourceX = source?.x;
+          inst.sourceY = source?.y;
+          inst.sourceZ = source?.z;
+          inst.targetX = dropoffTarget?.x;
+          inst.targetY = dropoffTarget?.y;
+          inst.targetZ = dropoffTarget?.z;
         }
       }
     }
@@ -1870,7 +1914,11 @@ export class BlobEntity extends Entity {
       this.blob.carriedAmount > 0 && this.blob.carriedResourceType === CarriedResourceType.MATERIAL;
     const carryingCompute =
       this.blob.carriedAmount > 0 && this.blob.carriedResourceType === CarriedResourceType.COMPUTE;
-    const isGathering = this.blob.unitType === UnitType.VILLAGER && this.blob.gatherTargetKey.length > 0;
+    const carryingBiomass =
+      this.blob.carriedAmount > 0 && this.blob.carriedResourceType === CarriedResourceType.BIOMASS;
+    const isGathering =
+      this.blob.unitType === UnitType.VILLAGER &&
+      (this.blob.gatherTargetKey.length > 0 || this.blob.gatherTargetBuildingId.length > 0);
     const carryCap = this.blob.unitType === UnitType.VILLAGER ? Math.max(1, this.blob.unitCount) * VILLAGER_CARRY_DISPLAY_CHUNK : 0;
     const statusSuffix =
       this.blob.gatherPhase === BlobGatherPhase.PICKING_UP
@@ -1881,6 +1929,8 @@ export class BlobEntity extends Entity {
             ? ` · Carry ${this.blob.carriedAmount}/${carryCap} material`
             : carryingCompute
               ? ` · Carry ${this.blob.carriedAmount}/${carryCap} compute`
+              : carryingBiomass
+                ? ` · Carry ${this.blob.carriedAmount}/${carryCap} biomass`
               : isGathering
                 ? " · Harvesting"
                 : "";

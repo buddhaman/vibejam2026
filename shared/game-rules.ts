@@ -108,6 +108,7 @@ export const GAME_RULES = {
   START_ARCHER_UNIT_COUNT: 60,
   START_SYNTHAUR_UNIT_COUNT: 24,
   START_CENTAUR_UNIT_COUNT: 24,
+  FARM_GROWTH_MS: 10000,
   BARRACKS_HEALTH: 200,
   ARCHERY_RANGE_HEALTH: 190,
   STABLE_HEALTH: 240,
@@ -150,6 +151,7 @@ export const BUILDING_RULES = {
     selectionDepth: GAME_RULES.TILE_SIZE,
     height: 6.2,
     trainSpawnOffsetX: GAME_RULES.TILE_SIZE,
+    blocksWalk: true,
     producibleUnits: [UnitType.WARBAND],
   },
   [BuildingType.TOWER]: {
@@ -164,6 +166,7 @@ export const BUILDING_RULES = {
     selectionDepth: GAME_RULES.TILE_SIZE,
     height: 15.5,
     trainSpawnOffsetX: GAME_RULES.TILE_SIZE,
+    blocksWalk: true,
     producibleUnits: [],
   },
   [BuildingType.TOWN_CENTER]: {
@@ -178,6 +181,7 @@ export const BUILDING_RULES = {
     selectionDepth: GAME_RULES.TILE_SIZE,
     height: 8.8,
     trainSpawnOffsetX: GAME_RULES.TILE_SIZE,
+    blocksWalk: true,
     producibleUnits: [UnitType.VILLAGER],
   },
   [BuildingType.ARCHERY_RANGE]: {
@@ -192,6 +196,7 @@ export const BUILDING_RULES = {
     selectionDepth: GAME_RULES.TILE_SIZE,
     height: 5.9,
     trainSpawnOffsetX: GAME_RULES.TILE_SIZE,
+    blocksWalk: true,
     producibleUnits: [UnitType.ARCHER],
   },
   [BuildingType.STABLE]: {
@@ -206,6 +211,7 @@ export const BUILDING_RULES = {
     selectionDepth: GAME_RULES.TILE_SIZE,
     height: 6.8,
     trainSpawnOffsetX: GAME_RULES.TILE_SIZE,
+    blocksWalk: true,
     producibleUnits: [UnitType.SYNTHAUR],
   },
   [BuildingType.FARM]: {
@@ -220,6 +226,7 @@ export const BUILDING_RULES = {
     selectionDepth: GAME_RULES.TILE_SIZE,
     height: 2.2,
     trainSpawnOffsetX: GAME_RULES.TILE_SIZE,
+    blocksWalk: false,
     producibleUnits: [],
   },
 } as const;

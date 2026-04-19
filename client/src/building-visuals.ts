@@ -220,11 +220,10 @@ function createFarmVariant(): BuildingVariant {
   const stemMat = accentMaterials[1];
   const leafMatA = accentMaterials[1];
   const leafMatB = accentMaterials[2];
-  const stemGeom = new THREE.CylinderGeometry(0.045, 0.11, 1, 6).translate(0, 0.5, 0);
-  const leafGeom = new THREE.CylinderGeometry(0.26, 0.26, 0.09, 12)
-    .scale(2.2, 1, 0.28)
-    .rotateZ(Math.PI * 0.5)
-    .translate(0.62, 0, 0);
+  const stemGeom = new THREE.CylinderGeometry(0.06, 0.135, 1, 6).translate(0, 0.5, 0);
+  const leafGeom = new THREE.CylinderGeometry(0.22, 0.12, 1, 10)
+    .scale(1.8, 1, 0.18)
+    .translate(0, 0.5, 0);
 
   const stemCount = 9;
   const stems = new THREE.InstancedMesh(stemGeom, stemMat, stemCount);

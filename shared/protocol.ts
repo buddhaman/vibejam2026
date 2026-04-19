@@ -58,6 +58,7 @@ export const CarriedResourceType = {
   NONE: 0,
   MATERIAL: 1,
   COMPUTE: 2,
+  BIOMASS: 3,
 } as const;
 
 export type CarriedResourceType = (typeof CarriedResourceType)[keyof typeof CarriedResourceType];
@@ -74,7 +75,8 @@ export type BlobGatherPhase = (typeof BlobGatherPhase)[keyof typeof BlobGatherPh
 
 export type GatherMessage = {
   blobId: string;
-  tileKey: string;
+  tileKey?: string;
+  buildingId?: string;
 };
 
 export type BuildMessage = {

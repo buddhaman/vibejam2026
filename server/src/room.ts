@@ -87,6 +87,7 @@ export class BattleRoom extends Room<{ state: GameState }> {
   private tileChunks: TileData[][] = [];
   /** How many building footprints cover each tile (any owner). */
   private buildingTileOcc = new Map<string, number>();
+  private walkBlockingBuildingTileOcc = new Map<string, number>();
   /** Active A* paths per blob — server-side only, not part of schema. */
   private blobPaths = new Map<string, { waypoints: Waypoint[]; index: number }>();
   /** Pairwise "do not instantly re-engage" locks, used when fast units break contact. */
@@ -186,14 +187,18 @@ export class BattleRoom extends Room<{ state: GameState }> {
 
     this.onMessage(MessageType.GATHER, (client, raw) => {
       const msg = raw as GatherMessage;
-      if (typeof msg?.blobId !== "string" || typeof msg.tileKey !== "string") return;
+      if (typeof msg?.blobId !== "string") return;
       const blob = this.state.blobs.get(msg.blobId);
       if (!blob || blob.ownerId !== client.sessionId || blob.unitType !== UnitType.VILLAGER) return;
-      const tile = this.tileData.get(msg.tileKey);
-      if (!tile || tile.isMountain || (tile.material <= 0 && tile.compute <= 0)) return;
+      const tile = typeof msg.tileKey === "string" ? this.tileData.get(msg.tileKey) : null;
+      const building = typeof msg.buildingId === "string" ? this.state.buildings.get(msg.buildingId) : null;
+      if (!tile && !building) return;
+      if (tile && (tile.isMountain || (tile.material <= 0 && tile.compute <= 0))) return;
+      if (building && (building.ownerId !== client.sessionId || building.buildingType !== BuildingType.FARM)) return;
       this.combatRetreatTargets.delete(blob.id);
       this.clearBlobAttackTarget(blob);
-      blob.gatherTargetKey = msg.tileKey;
+      blob.gatherTargetKey = tile?.key ?? "";
+      blob.gatherTargetBuildingId = building?.id ?? "";
       blob.gatherPhase = BlobGatherPhase.MOVING_TO_RESOURCE;
       blob.gatherTimerMs = 0;
     });
@@ -350,6 +355,7 @@ export class BattleRoom extends Room<{ state: GameState }> {
 
   private clearBlobGatherTarget(blob: Blob): void {
     blob.gatherTargetKey = "";
+    blob.gatherTargetBuildingId = "";
     blob.gatherPhase = BlobGatherPhase.NONE;
     blob.gatherTimerMs = 0;
   }
@@ -1189,6 +1195,9 @@ export class BattleRoom extends Room<{ state: GameState }> {
     const touched = new Set<string>();
     forEachTileKeyUnderFootprint(building.x, building.y, r.footprintWidth, r.footprintDepth, (key) => {
       this.buildingTileOcc.set(key, (this.buildingTileOcc.get(key) ?? 0) + 1);
+      if (r.blocksWalk !== false) {
+        this.walkBlockingBuildingTileOcc.set(key, (this.walkBlockingBuildingTileOcc.get(key) ?? 0) + 1);
+      }
       touched.add(key);
     });
     for (const key of touched) this.syncTileNavForKey(key);
@@ -1201,6 +1210,11 @@ export class BattleRoom extends Room<{ state: GameState }> {
       const n = (this.buildingTileOcc.get(key) ?? 0) - 1;
       if (n <= 0) this.buildingTileOcc.delete(key);
       else this.buildingTileOcc.set(key, n);
+      if (r.blocksWalk !== false) {
+        const wn = (this.walkBlockingBuildingTileOcc.get(key) ?? 0) - 1;
+        if (wn <= 0) this.walkBlockingBuildingTileOcc.delete(key);
+        else this.walkBlockingBuildingTileOcc.set(key, wn);
+      }
       touched.add(key);
     });
     for (const key of touched) this.syncTileNavForKey(key);
@@ -1212,7 +1226,8 @@ export class BattleRoom extends Room<{ state: GameState }> {
     const terrainWalkOk = !tile.isMountain;
     const terrainBuildOk = !tile.isMountain;
     const occ = this.buildingTileOcc.get(key) ?? 0;
-    const nextWalk = terrainWalkOk && occ === 0;
+    const walkOcc = this.walkBlockingBuildingTileOcc.get(key) ?? 0;
+    const nextWalk = terrainWalkOk && walkOcc === 0;
     const nextBuild = terrainBuildOk && occ === 0;
     if (tile.canWalk === nextWalk && tile.canBuild === nextBuild) return;
     tile.canWalk = nextWalk;
@@ -1298,11 +1313,15 @@ export class BattleRoom extends Room<{ state: GameState }> {
   }
 
   private stepVillagerGatherOrder(blob: Blob, dt: number): boolean {
-    if (blob.unitType !== UnitType.VILLAGER || blob.gatherTargetKey.length === 0) return false;
+    if (
+      blob.unitType !== UnitType.VILLAGER ||
+      (blob.gatherTargetKey.length === 0 && blob.gatherTargetBuildingId.length === 0)
+    ) return false;
 
     const player = this.state.players.get(blob.ownerId);
     if (!player) return false;
     const targetTile = this.tileData.get(blob.gatherTargetKey) ?? null;
+    const targetBuilding = this.state.buildings.get(blob.gatherTargetBuildingId) ?? null;
     const carryCapacity = this.getVillagerCarryCapacity(blob);
     const dtMs = dt * 1000;
 
@@ -1322,10 +1341,14 @@ export class BattleRoom extends Room<{ state: GameState }> {
 
       if (blob.carriedResourceType === CarriedResourceType.MATERIAL) player.material += blob.carriedAmount;
       else if (blob.carriedResourceType === CarriedResourceType.COMPUTE) player.compute += blob.carriedAmount;
+      else if (blob.carriedResourceType === CarriedResourceType.BIOMASS) player.biomass += blob.carriedAmount;
       blob.carriedAmount = 0;
       blob.carriedResourceType = CarriedResourceType.NONE;
       blob.gatherTimerMs = 0;
-      if (!targetTile || this.getTileGatherResourceType(targetTile) === CarriedResourceType.NONE) {
+      if (
+        (!targetTile || this.getTileGatherResourceType(targetTile) === CarriedResourceType.NONE) &&
+        (!targetBuilding || targetBuilding.buildingType !== BuildingType.FARM)
+      ) {
         this.clearBlobGatherTarget(blob);
       } else {
         blob.gatherPhase = BlobGatherPhase.MOVING_TO_RESOURCE;
@@ -1349,6 +1372,47 @@ export class BattleRoom extends Room<{ state: GameState }> {
         blob.gatherPhase = BlobGatherPhase.RETURNING;
         this.steerBlobTo(blob, dropoff.x, dropoff.y, true);
       }
+      return true;
+    }
+
+    if (targetBuilding && targetBuilding.buildingType === BuildingType.FARM) {
+      const centerX = targetBuilding.x;
+      const centerY = targetBuilding.y;
+      const distance = Math.hypot(blob.x - centerX, blob.y - centerY);
+      const farmReach = GAME_RULES.TILE_SIZE * 0.26;
+      if (distance > farmReach) {
+        blob.gatherPhase = BlobGatherPhase.MOVING_TO_RESOURCE;
+        this.steerBlobTo(blob, centerX, centerY, true);
+        return true;
+      }
+
+      if (targetBuilding.farmGrowth < 0.999) {
+        blob.gatherPhase = BlobGatherPhase.MOVING_TO_RESOURCE;
+        blob.targetX = blob.x;
+        blob.targetY = blob.y;
+        blob.vx = 0;
+        blob.vy = 0;
+        this.clearBlobPath(blob);
+        return true;
+      }
+
+      blob.targetX = blob.x;
+      blob.targetY = blob.y;
+      blob.vx = 0;
+      blob.vy = 0;
+      this.clearBlobPath(blob);
+      const freeCapacity = Math.max(0, carryCapacity - blob.carriedAmount);
+      if (freeCapacity <= 0) return true;
+      blob.gatherPhase = BlobGatherPhase.PICKING_UP;
+      blob.gatherTimerMs = Math.min(VILLAGER_PICKUP_MS, blob.gatherTimerMs + dtMs);
+      if (blob.gatherTimerMs < VILLAGER_PICKUP_MS) return true;
+      blob.gatherTimerMs = 0;
+      targetBuilding.farmGrowth = 0;
+      blob.carriedAmount += freeCapacity;
+      blob.carriedResourceType = CarriedResourceType.BIOMASS;
+      const dropoff = this.getNearestDropoffBuilding(blob.ownerId, blob.x, blob.y);
+      blob.gatherPhase = BlobGatherPhase.RETURNING;
+      if (dropoff) this.steerBlobTo(blob, dropoff.x, dropoff.y, true);
       return true;
     }
 
@@ -1409,6 +1473,9 @@ export class BattleRoom extends Room<{ state: GameState }> {
   }
 
   private stepBuildingProduction(building: Building, dtMs: number) {
+    if (building.buildingType === BuildingType.FARM) {
+      building.farmGrowth = Math.min(1, building.farmGrowth + dtMs / GAME_RULES.FARM_GROWTH_MS);
+    }
     if (building.productionQueue.length === 0) {
       building.productionProgressMs = 0;
       return;
@@ -1477,6 +1544,15 @@ export class BattleRoom extends Room<{ state: GameState }> {
       const receiverHasTarget = receiver.gatherTargetKey.length > 0;
       const donorHasTarget = donor.gatherTargetKey.length > 0;
       if (receiverHasTarget && donorHasTarget && receiver.gatherTargetKey !== donor.gatherTargetKey) return false;
+      const receiverHasBuildingTarget = receiver.gatherTargetBuildingId.length > 0;
+      const donorHasBuildingTarget = donor.gatherTargetBuildingId.length > 0;
+      if (
+        receiverHasBuildingTarget &&
+        donorHasBuildingTarget &&
+        receiver.gatherTargetBuildingId !== donor.gatherTargetBuildingId
+      ) {
+        return false;
+      }
     }
     return true;
   }
@@ -1487,6 +1563,11 @@ export class BattleRoom extends Room<{ state: GameState }> {
     if (receiver.unitType === UnitType.VILLAGER) {
       if (receiver.gatherTargetKey.length === 0 && donor.gatherTargetKey.length > 0) {
         receiver.gatherTargetKey = donor.gatherTargetKey;
+        receiver.gatherPhase = donor.gatherPhase;
+        receiver.gatherTimerMs = donor.gatherTimerMs;
+      }
+      if (receiver.gatherTargetBuildingId.length === 0 && donor.gatherTargetBuildingId.length > 0) {
+        receiver.gatherTargetBuildingId = donor.gatherTargetBuildingId;
         receiver.gatherPhase = donor.gatherPhase;
         receiver.gatherTimerMs = donor.gatherTimerMs;
       }

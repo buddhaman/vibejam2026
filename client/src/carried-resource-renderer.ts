@@ -4,7 +4,7 @@ import { applyStylizedShading } from "./stylized-shading.js";
 
 const DUMMY = new THREE.Object3D();
 
-export type CarriedResourceKind = "tree" | "compute";
+export type CarriedResourceKind = "tree" | "compute" | "plants";
 
 export type CarriedResourceInstance = {
   kind: CarriedResourceKind;
@@ -84,6 +84,29 @@ function buildComputeMeshes(capacity: number): THREE.InstancedMesh[] {
   });
 }
 
+function buildPlantMeshes(capacity: number): THREE.InstancedMesh[] {
+  const stemMat = applyStylizedShading(
+    new THREE.MeshStandardMaterial({ color: 0x5ca23a, roughness: 0.92, metalness: 0.01 })
+  );
+  const leafMat = applyStylizedShading(
+    new THREE.MeshStandardMaterial({ color: 0x92df62, roughness: 0.88, metalness: 0 })
+  );
+  const parts = [
+    { geometry: new THREE.CylinderGeometry(0.06, 0.1, 1.4, 6).translate(0, 0.7, 0), material: stemMat },
+    { geometry: new THREE.CylinderGeometry(0.2, 0.2, 0.08, 10).scale(1.7, 1, 0.28).rotateZ(Math.PI * 0.5).translate(0.45, 0.76, 0), material: leafMat },
+    { geometry: new THREE.CylinderGeometry(0.2, 0.2, 0.08, 10).scale(1.5, 1, 0.28).rotateZ(Math.PI * 0.5).translate(-0.38, 1.02, 0), material: leafMat },
+  ];
+  return parts.map((part) => {
+    const mesh = new THREE.InstancedMesh(part.geometry, part.material, capacity);
+    mesh.count = 0;
+    mesh.castShadow = true;
+    mesh.receiveShadow = true;
+    mesh.frustumCulled = false;
+    mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+    return mesh;
+  });
+}
+
 function createBank(buildMeshes: (capacity: number) => THREE.InstancedMesh[], capacity: number): MeshBank {
   return { meshes: buildMeshes(capacity), capacity };
 }
@@ -110,23 +133,29 @@ export class CarriedResourceRenderer {
   public readonly root = new THREE.Group();
   private readonly treeBank: MeshBank;
   private readonly computeBank: MeshBank;
+  private readonly plantsBank: MeshBank;
 
   public constructor(capacity: number) {
     this.treeBank = createBank(buildTreeMeshes, capacity);
     this.computeBank = createBank(buildComputeMeshes, capacity);
+    this.plantsBank = createBank(buildPlantMeshes, capacity);
     for (const mesh of this.treeBank.meshes) this.root.add(mesh);
     for (const mesh of this.computeBank.meshes) this.root.add(mesh);
+    for (const mesh of this.plantsBank.meshes) this.root.add(mesh);
   }
 
   public sync(instances: CarriedResourceInstance[]): void {
     const treeInstances = instances.filter((instance) => instance.kind === "tree");
     const computeInstances = instances.filter((instance) => instance.kind === "compute");
+    const plantsInstances = instances.filter((instance) => instance.kind === "plants");
 
     ensureCapacity(this.treeBank, treeInstances.length, buildTreeMeshes, this.root);
     ensureCapacity(this.computeBank, computeInstances.length, buildComputeMeshes, this.root);
+    ensureCapacity(this.plantsBank, plantsInstances.length, buildPlantMeshes, this.root);
 
     this.syncBank(this.treeBank.meshes, treeInstances);
     this.syncBank(this.computeBank.meshes, computeInstances);
+    this.syncBank(this.plantsBank.meshes, plantsInstances);
   }
 
   private syncBank(meshes: THREE.InstancedMesh[], instances: CarriedResourceInstance[]): void {
@@ -243,5 +272,26 @@ export function createDraggedComputeInstance(params: {
     rotationY: Math.atan2(params.forwardX, params.forwardZ),
     tiltX: Math.PI * 0.03,
     scale: 1.55 * params.scale,
+  };
+}
+
+export function createDraggedPlantsInstance(params: {
+  localX: number;
+  localZ: number;
+  baseY: number;
+  forwardX: number;
+  forwardZ: number;
+  sideX: number;
+  sideZ: number;
+  scale: number;
+}): CarriedResourceInstance {
+  return {
+    kind: "plants",
+    localX: params.localX + params.sideX * GAME_RULES.UNIT_RADIUS * 0.08 * params.scale,
+    localY: params.baseY + GAME_RULES.UNIT_HEIGHT * 1.36 * params.scale,
+    localZ: params.localZ + params.sideZ * GAME_RULES.UNIT_RADIUS * 0.08 * params.scale,
+    rotationY: Math.atan2(params.forwardX, params.forwardZ),
+    tiltX: Math.PI * 0.04,
+    scale: 1.28 * params.scale,
   };
 }

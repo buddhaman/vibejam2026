@@ -1,6 +1,6 @@
 import * as THREE from "three";
 import { RoomEnvironment } from "three/examples/jsm/environments/RoomEnvironment.js";
-import { GAME_RULES, UnitType, getTileCenter, snapWorldToTileCenter } from "../../shared/game-rules.js";
+import { BuildingType, GAME_RULES, UnitType, getTileCenter, snapWorldToTileCenter } from "../../shared/game-rules.js";
 import { AttackTargetType } from "../../shared/protocol.js";
 import type { Game } from "./game.js";
 import { BeamDrawer } from "./beam-drawer.js";
@@ -425,6 +425,17 @@ export function startRender(game: Game) {
       pointPicked;
     if (picked) {
       cancelPendingMove();
+      if (
+        selectedBlob &&
+        picked.isOwnedByMe() &&
+        picked instanceof BuildingEntity &&
+        picked.getBuildingType() === BuildingType.FARM &&
+        selectedBlob.getUnitType() === UnitType.VILLAGER
+      ) {
+        game.sendGatherBuildingIntent(selectedBlob.id, picked.id);
+        lastGroundTap.t = 0;
+        return;
+      }
       if (selectedBlob && !picked.isOwnedByMe() && (picked instanceof BlobEntity || picked instanceof BuildingEntity)) {
         game.sendAttackIntent(
           selectedBlob.id,

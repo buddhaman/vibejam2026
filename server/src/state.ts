@@ -42,6 +42,7 @@ export class Blob extends Schema {
   @type("uint8") spread: SquadSpread = 0 as SquadSpread;
   @type("uint8") unitType: UnitType = 0 as UnitType;
   @type("string") gatherTargetKey: string = "";
+  @type("string") gatherTargetBuildingId: string = "";
   @type("uint8") gatherPhase: BlobGatherPhase = 0 as BlobGatherPhase;
   @type("uint16") gatherTimerMs: number = 0;
   @type("uint8") carriedResourceType: CarriedResourceType = 0 as CarriedResourceType;
@@ -58,6 +59,7 @@ export class Building extends Schema {
   @type("number") health: number = 0;
   @type(["uint8"]) productionQueue = new ArraySchema<UnitType>();
   @type("number") productionProgressMs: number = 0;
+  @type("number") farmGrowth: number = 0;
 }
 
 /** Authoritative world — gameplay truth only. Tiles are streamed separately. */

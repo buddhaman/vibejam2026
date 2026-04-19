@@ -219,6 +219,7 @@ export class Game {
         spread: SquadSpreadValue;
         unitType: UnitTypeValue;
         gatherTargetKey: string;
+        gatherTargetBuildingId: string;
         gatherPhase: number;
         gatherTimerMs: number;
         carriedResourceType: number;
@@ -239,6 +240,7 @@ export class Game {
         ownerId: string;
         productionQueue: ArrayLike<UnitTypeValue>;
         productionProgressMs: number;
+        farmGrowth: number;
       });
       this._buildingSnapshots.set(id as string, {
         x: building.x,
@@ -667,6 +669,10 @@ export class Game {
 
   public sendGatherIntent(blobId: string, tileKey: string): void {
     this.room.send(MessageType.GATHER, { blobId, tileKey } satisfies GatherMessage);
+  }
+
+  public sendGatherBuildingIntent(blobId: string, buildingId: string): void {
+    this.room.send(MessageType.GATHER, { blobId, buildingId } satisfies GatherMessage);
   }
 
   public sendBuildIntent(type: BuildMessage["type"], worldX: number, worldZ: number): void {
