@@ -11,9 +11,11 @@ import { applyStylizedShading, isStylizedLitMaterial, stylizeObjectMaterials } f
  * Omit a type or leave a path unused to keep the procedural placeholder for that type.
  */
 export const BUILDING_GLB_PATHS: Partial<Record<BuildingTypeValue, string>> = {
-  [BuildingType.BARRACKS]: publicAssetUrl("models/buildings/armory.glb"),
+  [BuildingType.BARRACKS]: publicAssetUrl("models/buildings/hoplite_training_forge.glb"),
   [BuildingType.TOWER]: publicAssetUrl("models/buildings/tower.glb"),
   [BuildingType.TOWN_CENTER]: publicAssetUrl("models/buildings/town_center.glb"),
+  [BuildingType.ARCHERY_RANGE]: publicAssetUrl("models/buildings/archery_training_range.glb"),
+  [BuildingType.STABLE]: publicAssetUrl("models/buildings/synthaur_training_stable.glb"),
 };
 
 /** One prototype per building type (never added to the scene; clone per `BuildingEntity`). */

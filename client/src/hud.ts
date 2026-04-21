@@ -7,7 +7,7 @@
  * Ancient Greek marble aesthetics fused with post-AGI radiance.
  */
 
-import { BuildingType, formatResourceCost, getBuildingRules, type ResourceCost } from "../../shared/game-rules.js";
+import { BuildingType, formatResourceCost, getBuildingRules, type BuildingType as BuildingTypeValue, type ResourceCost } from "../../shared/game-rules.js";
 import { CarriedResourceType } from "../../shared/protocol.js";
 import type { SelectionInfo } from "./entity.js";
 import type { TileView } from "./terrain.js";
@@ -41,17 +41,12 @@ const BUILD_ITEMS = BUILD_MENU_TYPES.map((type) => ({
 export type BuildAction = (typeof BUILD_ITEMS)[number]["type"];
 
 export type HudState = {
-  buildMenu: {
-    visible: boolean;
-    screenX: number;
-    screenY: number;
-    worldX: number;
-    worldZ: number;
-  };
+  buildPanelOpen: boolean;
+  activeBuildType: BuildingTypeValue | null;
   _cardKey: string;
   _cardEnterT: number;
-  _menuWasVisible: boolean;
-  _menuOpenT: number;
+  _panelWasVisible: boolean;
+  _panelOpenT: number;
   _moveMarkers: Array<{ sx: number; sy: number; born: number }>;
   _resourceBounce: { biomass: number; material: number; compute: number };
   _prevResources: { biomass: number; material: number; compute: number };
@@ -70,6 +65,13 @@ const ACTION_SIZE  = 60;
 const ACTION_GAP   = 8;
 const RESOURCE_W   = 96;
 const RESOURCE_H   = 32;
+const BUILD_BTN_W  = 82;
+const BUILD_BTN_H  = 34;
+const BUILD_PANEL_ITEM_W   = 100;
+const BUILD_PANEL_ITEM_H   = 82;
+const BUILD_PANEL_PAD      = 14;
+const BUILD_PANEL_GAP      = 8;
+const BUILD_PANEL_TITLE_H  = 32;
 
 // ─── Neo-Hellas palette ──────────────────────────────────────────────────────
 
@@ -118,11 +120,12 @@ const F_BODY_XS     = "10px system-ui, sans-serif";
 
 export function createHudState(): HudState {
   return {
-    buildMenu: { visible: false, screenX: 0, screenY: 0, worldX: 0, worldZ: 0 },
+    buildPanelOpen: false,
+    activeBuildType: null,
     _cardKey: "",
     _cardEnterT: -999,
-    _menuWasVisible: false,
-    _menuOpenT: -999,
+    _panelWasVisible: false,
+    _panelOpenT: -999,
     _moveMarkers: [],
     _resourceBounce: { biomass: -999, material: -999, compute: -999 },
     _prevResources: { biomass: 0, material: 0, compute: 0 },
