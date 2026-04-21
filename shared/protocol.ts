@@ -137,6 +137,11 @@ export type TileUpdateMessage = {
   compute?: number;
   canWalk?: boolean;
   canBuild?: boolean;
+  h00?: number;
+  h10?: number;
+  h11?: number;
+  h01?: number;
+  height?: number;
 };
 
 /** Server → Client (owner only): A* path computed after a move intent. Empty waypoints = no path / direct move. */

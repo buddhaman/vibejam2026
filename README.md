@@ -231,7 +231,6 @@ No deep `systems/` tree — add files only when they earn their place.
 Keep the architecture **boring on the wire**, **expressive on the GPU**.
 
 ### TODO:
- - Farms
  - Behavior trees (behavior of all units)
  - Villagers build buildings
 
@@ -258,6 +257,7 @@ Keep the architecture **boring on the wire**, **expressive on the GPU**.
  - Sync map
 
 ### Done
+ - Farms
  - Make trees cuttable and collectable
  - Bows
  - Buildings can be demolished

@@ -1200,7 +1200,11 @@ export class BattleRoom extends Room<{ state: GameState }> {
       }
       touched.add(key);
     });
-    for (const key of touched) this.syncTileNavForKey(key);
+    for (const key of touched) {
+      this.flattenTileForBuilding(key);
+      this.syncTileNavForKey(key);
+      this.broadcastTileUpdate(key);
+    }
   }
 
   private removeBuildingFootprint(building: Building): void {
@@ -1280,7 +1284,23 @@ export class BattleRoom extends Room<{ state: GameState }> {
       key,
       material: tile.material,
       compute: tile.compute,
+      h00: tile.h00,
+      h10: tile.h10,
+      h11: tile.h11,
+      h01: tile.h01,
+      height: tile.height,
     } satisfies TileUpdateMessage);
+  }
+
+  private flattenTileForBuilding(key: string): void {
+    const tile = this.tileData.get(key);
+    if (!tile) return;
+    const avg = (tile.h00 + tile.h10 + tile.h11 + tile.h01) * 0.25;
+    tile.h00 = avg;
+    tile.h10 = avg;
+    tile.h11 = avg;
+    tile.h01 = avg;
+    tile.height = avg;
   }
 
   /** Villagers idle on a tile harvest material (forest) or compute (data center). */

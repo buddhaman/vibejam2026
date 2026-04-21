@@ -115,7 +115,7 @@ export const GAME_RULES = {
   FARM_HEALTH: 120,
   TOWER_HEALTH: 300,
   TOWN_CENTER_HEALTH: 950,
-  MAX_BUILDINGS_PER_PLAYER: 8,
+  MAX_BUILDINGS_PER_PLAYER: 64,
   FOREST_WOOD_MAX: 2400,
   /** Per-site compute vein size; placement is global + spaced (see `assignDatacenterSites`). */
   DATACENTER_COMPUTE_MAX: 300,

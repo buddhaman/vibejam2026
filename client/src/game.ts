@@ -42,6 +42,8 @@ import type { BuildingDestructionFxSystem } from "./building-destruction-fx.js";
 import { type TileView } from "./terrain.js";
 
 export class Game {
+  private static readonly FLOATING_RESOURCE_TEXT_LIFE = 1.15;
+
   public room: Room;
   public scene: THREE.Scene;
   public entities: Entity[] = [];
@@ -66,8 +68,24 @@ export class Game {
   private _dirtyTileVisualLayers = new Set<"forest" | "datacenters">(["forest", "datacenters"]);
   private _allTileVisualsDirty = true;
   private _walkabilityDirty = true;
+  private _terrainDirty = true;
   /** A* paths received from server per blob (owner client only). */
   private _blobPaths = new Map<string, { x: number; y: number }[]>();
+  private _blobCarrySnapshots = new Map<string, {
+    ownerId: string;
+    x: number;
+    y: number;
+    carriedAmount: number;
+    carriedResourceType: number;
+    gatherPhase: number;
+  }>();
+  private _floatingResourceTexts: Array<{
+    x: number;
+    z: number;
+    amount: number;
+    resourceType: number;
+    bornAt: number;
+  }> = [];
 
   /** Updated every frame by `render.ts` for zoom-dependent squad affordances. */
   private _orbitCameraDistance = 165;
@@ -121,6 +139,7 @@ export class Game {
       this._dirtyTileVisualLayers.add("forest");
       this._dirtyTileVisualLayers.add("datacenters");
       this._walkabilityDirty = true;
+      this._terrainDirty = true;
       this._streamResolve?.();
       this._streamResolve = null;
     }
@@ -142,6 +161,34 @@ export class Game {
       this._walkabilityDirty = true;
     }
     if (typeof msg.canBuild === "boolean") tile.canBuild = msg.canBuild;
+    let heightChanged = false;
+    if (typeof msg.h00 === "number" && tile.h00 !== msg.h00) {
+      tile.h00 = msg.h00;
+      heightChanged = true;
+    }
+    if (typeof msg.h10 === "number" && tile.h10 !== msg.h10) {
+      tile.h10 = msg.h10;
+      heightChanged = true;
+    }
+    if (typeof msg.h11 === "number" && tile.h11 !== msg.h11) {
+      tile.h11 = msg.h11;
+      heightChanged = true;
+    }
+    if (typeof msg.h01 === "number" && tile.h01 !== msg.h01) {
+      tile.h01 = msg.h01;
+      heightChanged = true;
+    }
+    if (typeof msg.height === "number" && tile.height !== msg.height) {
+      tile.height = msg.height;
+      heightChanged = true;
+    }
+    if (heightChanged) {
+      this._terrainDirty = true;
+      this._allTileVisualsDirty = true;
+      this._dirtyTileVisualLayers.add("forest");
+      this._dirtyTileVisualLayers.add("datacenters");
+      this._walkabilityDirty = true;
+    }
   }
 
   public getPlayerColor(ownerId: string): number {
@@ -194,7 +241,21 @@ export class Game {
   }
 
   public sync(): void {
+    const nowSec = performance.now() / 1000;
     this.room.state.blobs.forEach((blob, id) => {
+      const blobId = id as string;
+      const prev = this._blobCarrySnapshots.get(blobId);
+      const next = {
+        ownerId: blob.ownerId,
+        x: blob.x,
+        y: blob.y,
+        carriedAmount: blob.carriedAmount,
+        carriedResourceType: blob.carriedResourceType,
+        gatherPhase: blob.gatherPhase,
+      };
+      this.maybeQueueFloatingResourceText(prev, next, nowSec);
+      this._blobCarrySnapshots.set(blobId, next);
+
       let entity = this.findBlobEntity(id as string);
       if (!entity) entity = new BlobEntity(this, id as string);
       entity.sync(blob as {
@@ -267,9 +328,57 @@ export class Game {
     for (const entity of [...this.entities]) {
       if (entity.isStale()) {
         this._blobPaths.delete(entity.id);
+        this._blobCarrySnapshots.delete(entity.id);
         entity.destroy();
       }
     }
+
+    this._floatingResourceTexts = this._floatingResourceTexts.filter(
+      (text) => nowSec - text.bornAt < Game.FLOATING_RESOURCE_TEXT_LIFE
+    );
+  }
+
+  private maybeQueueFloatingResourceText(
+    prev:
+      | {
+          ownerId: string;
+          x: number;
+          y: number;
+          carriedAmount: number;
+          carriedResourceType: number;
+          gatherPhase: number;
+        }
+      | undefined,
+    next: {
+      ownerId: string;
+      x: number;
+      y: number;
+      carriedAmount: number;
+      carriedResourceType: number;
+      gatherPhase: number;
+    },
+    nowSec: number
+  ): void {
+    if (next.ownerId !== this.room.sessionId || !prev) return;
+    if (prev.carriedAmount <= 0) return;
+    if (prev.carriedResourceType === CarriedResourceType.NONE) return;
+    if (next.carriedAmount > 0) return;
+    if (prev.gatherPhase !== BlobGatherPhase.DROPPING_OFF) return;
+    if (
+      next.gatherPhase !== BlobGatherPhase.MOVING_TO_RESOURCE &&
+      next.gatherPhase !== BlobGatherPhase.PICKING_UP &&
+      next.gatherPhase !== BlobGatherPhase.RETURNING &&
+      next.gatherPhase !== BlobGatherPhase.NONE
+    ) {
+      return;
+    }
+    this._floatingResourceTexts.push({
+      x: prev.x,
+      z: prev.y,
+      amount: prev.carriedAmount,
+      resourceType: prev.carriedResourceType,
+      bornAt: nowSec,
+    });
   }
 
   public getSelectedEntity(): Entity | null {
@@ -545,6 +654,12 @@ export class Game {
     return dirty;
   }
 
+  public consumeTerrainDirty(): boolean {
+    const dirty = this._terrainDirty;
+    this._terrainDirty = false;
+    return dirty;
+  }
+
   public getTileAtWorld(x: number, z: number): TileView | null {
     const { tx, tz } = getTileCoordsFromWorld(x, z);
     return this._tiles.get(getTileKey(tx, tz)) ?? null;
@@ -553,6 +668,24 @@ export class Game {
   public getSelectedTile(): TileView | null {
     if (!this.selectedTileKey) return null;
     return this._tiles.get(this.selectedTileKey) ?? null;
+  }
+
+  public getFloatingResourceTexts(nowSec: number): Array<{
+    x: number;
+    z: number;
+    amount: number;
+    resourceType: number;
+    age: number;
+  }> {
+    return this._floatingResourceTexts
+      .map((text) => ({
+        x: text.x,
+        z: text.z,
+        amount: text.amount,
+        resourceType: text.resourceType,
+        age: nowSec - text.bornAt,
+      }))
+      .filter((text) => text.age >= 0 && text.age < Game.FLOATING_RESOURCE_TEXT_LIFE);
   }
 
   public getMyTownCenterPosition(): { x: number; z: number } | null {

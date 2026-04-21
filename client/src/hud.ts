@@ -8,6 +8,7 @@
  */
 
 import { BuildingType, formatResourceCost, getBuildingRules, type ResourceCost } from "../../shared/game-rules.js";
+import { CarriedResourceType } from "../../shared/protocol.js";
 import type { SelectionInfo } from "./entity.js";
 import type { TileView } from "./terrain.js";
 
@@ -268,6 +269,54 @@ export function drawHUD(
   if (hud.buildMenu.visible) drawBuildMenu(ctx, menuLayout(hud.buildMenu.screenX, hud.buildMenu.screenY), t, hud._menuOpenT);
 }
 
+export function drawFloatingResourceTexts(
+  canvas: HTMLCanvasElement,
+  texts: Array<{
+    sx: number;
+    sy: number;
+    amount: number;
+    resourceType: number;
+    age: number;
+  }>
+): void {
+  if (texts.length === 0) return;
+  const ctx = canvas.getContext("2d")!;
+  for (const text of texts) {
+    const life = 1.15;
+    const u = Math.max(0, Math.min(1, text.age / life));
+    const rise = u * 42;
+    const alpha = u < 0.15 ? u / 0.15 : 1 - (u - 0.15) / 0.85;
+    const scale = 0.92 + Math.sin(Math.min(1, u / 0.24) * Math.PI) * 0.08;
+    const icon = resourceGlyph(text.resourceType);
+    const color = resourceColor(text.resourceType);
+    const label = `+${text.amount} ${resourceLabel(text.resourceType)}`;
+    const x = text.sx;
+    const y = text.sy - rise;
+
+    ctx.save();
+    ctx.globalAlpha = Math.max(0, alpha);
+    ctx.translate(x, y);
+    ctx.scale(scale, scale);
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+
+    ctx.font = F_NUM_LG;
+    ctx.lineWidth = 4;
+    ctx.strokeStyle = "rgba(6, 12, 28, 0.78)";
+    ctx.strokeText(label, 0, 0);
+    ctx.fillStyle = MARBLE_TEXT;
+    ctx.fillText(label, 0, 0);
+
+    ctx.font = "700 18px system-ui, sans-serif";
+    ctx.lineWidth = 3;
+    ctx.strokeStyle = "rgba(6, 12, 28, 0.85)";
+    ctx.strokeText(icon, 0, -18);
+    ctx.fillStyle = color;
+    ctx.fillText(icon, 0, -18);
+    ctx.restore();
+  }
+}
+
 // ─── Move markers — divine cyan ripples ──────────────────────────────────────
 
 function drawMoveMarkers(ctx: CanvasRenderingContext2D, hud: HudState, t: number): void {
@@ -300,6 +349,33 @@ function drawMoveMarkers(ctx: CanvasRenderingContext2D, hud: HudState, t: number
       ctx.fill();
     }
     ctx.restore();
+  }
+}
+
+function resourceLabel(resourceType: number): string {
+  switch (resourceType) {
+    case CarriedResourceType.MATERIAL: return "material";
+    case CarriedResourceType.COMPUTE: return "compute";
+    case CarriedResourceType.BIOMASS: return "biomass";
+    default: return "resource";
+  }
+}
+
+function resourceGlyph(resourceType: number): string {
+  switch (resourceType) {
+    case CarriedResourceType.MATERIAL: return "◼";
+    case CarriedResourceType.COMPUTE: return "◈";
+    case CarriedResourceType.BIOMASS: return "✿";
+    default: return "+";
+  }
+}
+
+function resourceColor(resourceType: number): string {
+  switch (resourceType) {
+    case CarriedResourceType.MATERIAL: return "#D4A84C";
+    case CarriedResourceType.COMPUTE: return DIVINE_CYAN;
+    case CarriedResourceType.BIOMASS: return "#59B96A";
+    default: return MARBLE_TEXT;
   }
 }
 
