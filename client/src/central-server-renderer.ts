@@ -2,6 +2,10 @@ import * as THREE from "three";
 import { publicAssetUrl } from "./asset-url.js";
 import { createGLTFLoader } from "./gltf-loader.js";
 import { stylizeObjectMaterials } from "./stylized-shading.js";
+import {
+  applyTeamColorTexturesToObject3D,
+  secondaryTeamHexFromPrimary,
+} from "./render-texture-recolor.js";
 
 const GLB_URL = publicAssetUrl("models/buildings/central_server.glb");
 const TARGET_HEIGHT = 18.0;
@@ -43,9 +47,8 @@ export class CentralServerRenderer {
 
       this.model = root;
       this.root.add(root);
-      // Force tint on first render
+      // Force recolor on first render
       this.lastOwnerColor = undefined;
-      this.syncOwner(null);
 
       console.log("[central-server] GLB loaded OK");
     } catch (err) {
@@ -58,28 +61,18 @@ export class CentralServerRenderer {
     this.root.position.set(0, y, 0);
   }
 
-  /** Tint the model to the owner's team color; null = unowned (neutral, no glow). */
+  /**
+   * Recolor the model to the owner's team color using the same hue-remap system
+   * as buildings and units. null = unowned (keeps whatever the last color was,
+   * or the raw GLB colors on first load — neutral until someone captures).
+   */
   syncOwner(ownerColor: number | null): void {
     if (!this.model || ownerColor === this.lastOwnerColor) return;
     this.lastOwnerColor = ownerColor;
-    this.model.traverse((obj) => {
-      if (!(obj instanceof THREE.Mesh)) return;
-      const mats = Array.isArray(obj.material) ? obj.material : [obj.material];
-      for (const m of mats) {
-        if (
-          m instanceof THREE.MeshStandardMaterial ||
-          m instanceof THREE.MeshPhysicalMaterial
-        ) {
-          if (ownerColor !== null) {
-            m.emissive.setHex(ownerColor);
-            m.emissiveIntensity = 0.45;
-          } else {
-            m.emissive.setHex(0x000000);
-            m.emissiveIntensity = 0;
-          }
-          m.needsUpdate = true;
-        }
-      }
+    if (ownerColor === null) return; // leave as-is when uncontested
+    const secondary = secondaryTeamHexFromPrimary(ownerColor);
+    applyTeamColorTexturesToObject3D(this.model, ownerColor, secondary, {
+      blueChannelUsesSecondary: false,
     });
   }
 }

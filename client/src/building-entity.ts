@@ -39,12 +39,6 @@ const FARM_RADIAL = new THREE.Vector3();
 const FARM_SIDE = new THREE.Vector3();
 const TOWER_BEAM_START = new THREE.Vector3();
 const TOWER_BEAM_END = new THREE.Vector3();
-const TOWER_ARC_A = new THREE.Vector3();
-const TOWER_ARC_B = new THREE.Vector3();
-const TOWER_OFFSET_A = new THREE.Vector3();
-const TOWER_OFFSET_B = new THREE.Vector3();
-const TOWER_SPARK_A = new THREE.Vector3();
-const TOWER_SPARK_B = new THREE.Vector3();
 const TOWER_PATH_POINT = new THREE.Vector3();
 const TOWER_PREV_POINT = new THREE.Vector3();
 const TOWER_NEXT_POINT = new THREE.Vector3();
@@ -181,23 +175,9 @@ export class BuildingEntity extends Entity {
     TOWER_BEAM_END.set(targetCenter.x, targetTerrainY + GAME_RULES.UNIT_HEIGHT * 0.65, targetCenter.z);
 
     const seedBase = this.hashBeamSeed(this.building.attackTargetBlobId);
-    this.drawLightningPath(TOWER_BEAM_START, TOWER_BEAM_END, seedBase, TOWER_CORE_COLOR, TOWER_GLOW_COLOR, 1);
-
-    const time = performance.now() * 0.001;
-    const sway = Math.sin(time * 15.2 + seedBase * 4.1) * 5.4;
-    const side = Math.cos(time * 11.4 + seedBase * 7.7) * 4.6;
-    TOWER_OFFSET_A.set(sway, 0, side);
-    TOWER_OFFSET_B.set(-side * 0.7, 0, sway * 0.6);
-    TOWER_ARC_A.copy(TOWER_BEAM_START).lerp(TOWER_BEAM_END, 0.32).add(TOWER_OFFSET_A);
-    TOWER_ARC_B.copy(TOWER_BEAM_START).lerp(TOWER_BEAM_END, 0.68).add(TOWER_OFFSET_B);
-    this.drawLightningPath(TOWER_BEAM_START, TOWER_ARC_A, seedBase + 5.2, TOWER_GLOW_COLOR, TOWER_WHITE, 0.45);
-    this.drawLightningPath(TOWER_ARC_B, TOWER_BEAM_END, seedBase + 8.4, TOWER_GLOW_COLOR, TOWER_WHITE, 0.42);
-
-    const impactRadius = 1.9 + Math.sin(time * 24 + seedBase) * 0.25;
-    TOWER_SPARK_A.set(TOWER_BEAM_END.x + impactRadius, TOWER_BEAM_END.y + 0.4, TOWER_BEAM_END.z - impactRadius * 0.35);
-    TOWER_SPARK_B.set(TOWER_BEAM_END.x - impactRadius * 0.7, TOWER_BEAM_END.y + 0.9, TOWER_BEAM_END.z + impactRadius * 0.55);
-    this.drawLightningPath(TOWER_BEAM_END, TOWER_SPARK_A, seedBase + 11.4, TOWER_WHITE, TOWER_WHITE, 0.24);
-    this.drawLightningPath(TOWER_BEAM_END, TOWER_SPARK_B, seedBase + 14.2, TOWER_WHITE, TOWER_WHITE, 0.22);
+    const snapFrame = Math.floor(performance.now() / 45);
+    this.drawLightningPath(TOWER_BEAM_START, TOWER_BEAM_END, seedBase + snapFrame * 19.7, TOWER_CORE_COLOR, TOWER_GLOW_COLOR, 1);
+    this.drawLightningPath(TOWER_BEAM_START, TOWER_BEAM_END, seedBase + 77.3 + snapFrame * 23.1, TOWER_WHITE, TOWER_GLOW_COLOR, 0.62);
   }
 
   private drawLightningPath(
