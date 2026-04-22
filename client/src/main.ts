@@ -21,21 +21,9 @@ function createBootShell() {
   shell.innerHTML = `
     <div style="width:min(420px, calc(100vw - 40px));padding:24px 22px;border:1px solid rgba(201,145,30,0.35);border-radius:18px;background:rgba(10,18,34,0.72);box-shadow:0 20px 60px rgba(0,0,0,0.35);backdrop-filter:blur(10px);">
       <div style="font:700 24px Cinzel,serif;letter-spacing:0.08em;color:#f0c060;margin-bottom:8px;">AGI of Mythology</div>
-      <div style="font-size:14px;line-height:1.5;color:rgba(242,237,215,0.72);margin-bottom:18px;">Joining battle...</div>
-      <div style="height:6px;border-radius:999px;background:rgba(255,255,255,0.08);overflow:hidden;">
-        <div id="boot-shell-bar" style="height:100%;width:38%;border-radius:999px;background:linear-gradient(90deg, #1b6ca8, #00d4ff, #f0c060);transform-origin:left center;animation:boot-shell-pulse 1.15s ease-in-out infinite;"></div>
-      </div>
+      <div style="font-size:14px;line-height:1.5;color:rgba(242,237,215,0.72);">Joining battle...</div>
     </div>
   `;
-  const style = document.createElement("style");
-  style.textContent = `
-    @keyframes boot-shell-pulse {
-      0% { transform: translateX(-18%) scaleX(0.72); opacity: 0.72; }
-      50% { transform: translateX(88%) scaleX(1.02); opacity: 1; }
-      100% { transform: translateX(210%) scaleX(0.72); opacity: 0.72; }
-    }
-  `;
-  document.head.appendChild(style);
   document.body.appendChild(shell);
   const status = shell.querySelector("div div:nth-child(2)") as HTMLDivElement | null;
   return {
@@ -44,7 +32,6 @@ function createBootShell() {
     },
     remove() {
       shell.remove();
-      style.remove();
     },
   };
 }
