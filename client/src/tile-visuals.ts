@@ -1,14 +1,18 @@
 import * as THREE from "three";
 import { publicAssetUrl } from "./asset-url.js";
 import { createGLTFLoader } from "./gltf-loader.js";
-import { TileType, getTileCenter } from "../../shared/game-rules.js";
+import { TileType, GAME_RULES, getTileCenter } from "../../shared/game-rules.js";
 import { createInstancedVariantSet, syncInstancedVariantSet, type InstancedTransform, type InstancedVariant } from "./instancing.js";
 import type { Game } from "./game.js";
 import { applyStylizedShading, isStylizedLitMaterial } from "./stylized-shading.js";
 import type { ComputeSlot, TileView, TreeSlot } from "./terrain.js";
 
-const DATACENTER_GLB = publicAssetUrl("models/buildings/datacenter.glb");
-const DATACENTER_TARGET_HEIGHT = 10.5;
+const COMPUTE_MINE_GLB = publicAssetUrl("models/buildings/compute_mine.glb");
+const CENTRAL_SERVER_GLB = publicAssetUrl("models/buildings/central_server.glb");
+const COMPUTE_MINE_TARGET_HEIGHT = 8.0;
+const CENTRAL_SERVER_TARGET_HEIGHT = 16.0;
+/** Only the exact center tile (maxCompute == KOTH_CENTER_SERVER_COMPUTE) shows the central server model. */
+const CENTRAL_SERVER_THRESHOLD = GAME_RULES.KOTH_CENTER_SERVER_COMPUTE;
 const TREE_VARIANT_COUNT = 3;
 
 type TileVisualLayerId = "forest" | "datacenters";
@@ -30,7 +34,8 @@ type RegrowingCompute = {
   startedAt: number;
 };
 
-let datacenterVariantTemplate: InstancedVariant | null = null;
+let computeMineVariantTemplate: InstancedVariant | null = null;
+let centralServerVariantTemplate: InstancedVariant | null = null;
 
 function hash(n: number) {
   const x = Math.sin(n * 127.1) * 43758.5453123;
@@ -271,17 +276,32 @@ export function ensureComputeSlots(tile: TileView): ComputeSlot[] {
   return slots;
 }
 
-async function loadDatacenterVariant(): Promise<InstancedVariant> {
+async function loadComputeMineVariant(): Promise<InstancedVariant> {
   const loader = createGLTFLoader();
   try {
-    const gltf = await loader.loadAsync(DATACENTER_GLB);
+    const gltf = await loader.loadAsync(COMPUTE_MINE_GLB);
     const root = gltf.scene.clone(true) as THREE.Group;
-    fitGroundAndCenterXZ(root, DATACENTER_TARGET_HEIGHT);
+    fitGroundAndCenterXZ(root, COMPUTE_MINE_TARGET_HEIGHT);
     const parts = meshPartsFromObject(root);
     if (parts.length > 0) return { parts };
-    console.warn(`[tile-visuals] Datacenter GLB had no mesh parts, using fallback: ${DATACENTER_GLB}`);
+    console.warn(`[tile-visuals] Compute mine GLB had no mesh parts, using fallback: ${COMPUTE_MINE_GLB}`);
   } catch (err) {
-    console.warn(`[tile-visuals] Could not load datacenter GLB, using fallback: ${DATACENTER_GLB}`, err);
+    console.warn(`[tile-visuals] Could not load compute mine GLB, using fallback: ${COMPUTE_MINE_GLB}`, err);
+  }
+  return createDatacenterFallbackVariant();
+}
+
+async function loadCentralServerVariant(): Promise<InstancedVariant> {
+  const loader = createGLTFLoader();
+  try {
+    const gltf = await loader.loadAsync(CENTRAL_SERVER_GLB);
+    const root = gltf.scene.clone(true) as THREE.Group;
+    fitGroundAndCenterXZ(root, CENTRAL_SERVER_TARGET_HEIGHT);
+    const parts = meshPartsFromObject(root);
+    if (parts.length > 0) return { parts };
+    console.warn(`[tile-visuals] Central server GLB had no mesh parts, using fallback: ${CENTRAL_SERVER_GLB}`);
+  } catch (err) {
+    console.warn(`[tile-visuals] Could not load central server GLB, using fallback: ${CENTRAL_SERVER_GLB}`, err);
   }
   return createDatacenterFallbackVariant();
 }
@@ -371,7 +391,11 @@ function createForestLayer(): TileVisualLayer {
 
 function createDatacenterLayer(): TileVisualLayer {
   const set = createInstancedVariantSet(
-    [datacenterVariantTemplate ?? createDatacenterFallbackVariant(), createComputeShardVariant()],
+    [
+      computeMineVariantTemplate ?? createDatacenterFallbackVariant(),
+      createComputeShardVariant(),
+      centralServerVariantTemplate ?? createDatacenterFallbackVariant(),
+    ],
     64
   );
   let lastCarrySignature = "";
@@ -405,16 +429,18 @@ function createDatacenterLayer(): TileVisualLayer {
     },
     rebuild(tiles, game) {
       const now = performance.now() / 1000;
-      const buildingTransforms: InstancedTransform[] = [];
+      const mineTransforms: InstancedTransform[] = [];
       const shardTransforms: InstancedTransform[] = [];
+      const serverTransforms: InstancedTransform[] = [];
       const carried = game.getCarriedComputeCountByTile();
       for (const tile of tiles) {
         const maxC = tile.maxCompute ?? 0;
         const c = tile.compute ?? 0;
         if (tile.isMountain || maxC <= 0 || c <= 0) continue;
         const center = getTileCenter(tile.tx, tile.tz);
+        const isCentralServer = maxC === CENTRAL_SERVER_THRESHOLD;
         const scale = 0.92 + hash01(tile.tx, tile.tz, 8811) * 0.14;
-        buildingTransforms.push({
+        (isCentralServer ? serverTransforms : mineTransforms).push({
           position: new THREE.Vector3(center.x, tile.height + 0.04, center.z),
           rotationY: hash01(tile.tx, tile.tz, 6021) * Math.PI * 2,
           scale: new THREE.Vector3(scale, scale, scale),
@@ -461,14 +487,17 @@ function createDatacenterLayer(): TileVisualLayer {
           });
         }
       }
-      syncInstancedVariantSet(set, [buildingTransforms, shardTransforms]);
+      syncInstancedVariantSet(set, [mineTransforms, shardTransforms, serverTransforms]);
     },
   };
 }
 
 export async function ensureTileVisualAssetsLoaded(): Promise<void> {
-  if (datacenterVariantTemplate) return;
-  datacenterVariantTemplate = await loadDatacenterVariant();
+  if (computeMineVariantTemplate && centralServerVariantTemplate) return;
+  [computeMineVariantTemplate, centralServerVariantTemplate] = await Promise.all([
+    loadComputeMineVariant(),
+    loadCentralServerVariant(),
+  ]);
 }
 
 export class TileVisualManager {

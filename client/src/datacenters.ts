@@ -4,9 +4,9 @@ import { createGLTFLoader } from "./gltf-loader.js";
 import { getTileCenter } from "../../shared/game-rules.js";
 import type { TileView } from "./terrain.js";
 
-const DATACENTER_GLB = publicAssetUrl("models/buildings/datacenter.glb");
+const DATACENTER_GLB = publicAssetUrl("models/buildings/compute_mine.glb");
 /** Visual height after scaling — comparable to medium buildings. */
-const DATACENTER_TARGET_HEIGHT = 10.5;
+const DATACENTER_TARGET_HEIGHT = 8.0;
 
 let template: THREE.Group | null = null;
 
