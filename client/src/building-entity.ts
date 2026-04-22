@@ -32,6 +32,11 @@ const FARM_DIR = new THREE.Vector3();
 const FARM_QUAT = new THREE.Quaternion();
 const FARM_RADIAL = new THREE.Vector3();
 const FARM_SIDE = new THREE.Vector3();
+const UNIT_TRAIN_TIME_MULTIPLIER = import.meta.env.DEV ? 0.1 : GAME_RULES.UNIT_TRAIN_TIME_MULTIPLIER;
+
+function getEffectiveUnitTrainTimeMs(unitType: UnitTypeValue): number {
+  return Math.max(1, Math.ceil(getUnitTrainTimeMs(unitType) * UNIT_TRAIN_TIME_MULTIPLIER));
+}
 
 export class BuildingEntity extends Entity {
   /** Cloned only for the one building type this entity actually uses. Set after first sync(). */
@@ -275,7 +280,7 @@ export class BuildingEntity extends Entity {
         ? rules.producibleUnits.map((unitType) => {
             const unitRules = getUnitRules(unitType);
             const trainCost = getUnitTrainCost(unitType);
-            const trainTimeMs = getUnitTrainTimeMs(unitType);
+            const trainTimeMs = getEffectiveUnitTrainTimeMs(unitType);
             const count = this.building!.productionQueue.filter((queuedType) => queuedType === unitType).length;
             return {
               id: `train:${unitType}`,
@@ -292,8 +297,8 @@ export class BuildingEntity extends Entity {
           ? {
               label: currentUnitRules.label,
               queueCount,
-              remainingMs: Math.max(0, getUnitTrainTimeMs(currentUnitType) - this.building.productionProgressMs),
-              progress: Math.max(0, Math.min(1, this.building.productionProgressMs / getUnitTrainTimeMs(currentUnitType))),
+              remainingMs: Math.max(0, getEffectiveUnitTrainTimeMs(currentUnitType) - this.building.productionProgressMs),
+              progress: Math.max(0, Math.min(1, this.building.productionProgressMs / getEffectiveUnitTrainTimeMs(currentUnitType))),
             }
           : null,
     };

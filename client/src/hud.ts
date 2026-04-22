@@ -536,7 +536,7 @@ function drawBottomBar(
   const r = (color >> 16) & 0xff;
   const g = (color >> 8)  & 0xff;
   const b =  color        & 0xff;
-  const cx = 28;
+  const cx = 58; // shifted right to leave room for chat button on the left
   const dotR = 11;
   ctx.save();
   ctx.beginPath();
@@ -560,7 +560,7 @@ function drawBottomBar(
   ctx.fillStyle = MARBLE_TEXT;
   ctx.textBaseline = "middle";
   ctx.letterSpacing = "0.5px";
-  ctx.fillText(`${count} ${count !== 1 ? "Squads" : "Squad"}`, 50, rowMid);
+  ctx.fillText(`${count} ${count !== 1 ? "Squads" : "Squad"}`, 80, rowMid);
   ctx.restore();
 
   // Resource pills — spaced at 164, 268, 372

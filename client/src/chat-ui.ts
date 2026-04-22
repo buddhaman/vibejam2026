@@ -16,31 +16,30 @@ const css = (strings: TemplateStringsArray, ...values: unknown[]) =>
   strings.reduce((acc, s, i) => acc + s + (values[i] ?? ""), "").trim();
 
 export function createChatUi(game: Game): ChatUi {
-  // ── Toggle button ──────────────────────────────────────────────
+  // ── Toggle button — sits inside the bottom bar on the left ────
   const toggleBtn = document.createElement("button");
   toggleBtn.type = "button";
   toggleBtn.setAttribute("aria-label", "Toggle chat");
+  // Matches the bottom bar's lapis style + gold border like the BUILD button
   toggleBtn.style.cssText = css`
     position:fixed;
-    left:12px;
-    bottom:12px;
+    left:8px;
+    bottom:14px;
     z-index:32;
-    width:50px;
-    height:50px;
-    border-radius:50%;
-    border:2px solid rgba(212,175,94,0.45);
-    background:rgba(6,14,26,0.88);
-    backdrop-filter:blur(10px);
+    width:34px;
+    height:34px;
+    border-radius:3px;
+    border:1px solid #C9911E;
+    background:rgba(10,20,42,0.90);
     cursor:pointer;
     display:flex;
     align-items:center;
     justify-content:center;
-    box-shadow:0 4px 18px rgba(0,0,0,0.45);
     touch-action:manipulation;
-    transition:border-color 0.2s,background 0.2s,transform 0.15s;
+    transition:border-color 0.15s,background 0.15s;
     padding:0;
   `;
-  toggleBtn.innerHTML = `<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#d4af5e" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:block;flex-shrink:0;">
+  toggleBtn.innerHTML = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#F0C060" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:block;flex-shrink:0;">
     <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
   </svg>`;
 
@@ -49,29 +48,28 @@ export function createChatUi(game: Game): ChatUi {
   badge.style.cssText = css`
     display:none;
     position:absolute;
-    top:-4px;
-    right:-4px;
-    min-width:18px;
-    height:18px;
-    padding:0 5px;
-    border-radius:9px;
+    top:-5px;
+    right:-5px;
+    min-width:16px;
+    height:16px;
+    padding:0 4px;
+    border-radius:8px;
     background:#c9611e;
     color:#fff;
-    font:700 10px/18px system-ui;
+    font:700 9px/16px system-ui;
     text-align:center;
     pointer-events:none;
   `;
-  toggleBtn.style.position = "fixed"; // ensure relative context
   toggleBtn.appendChild(badge);
 
-  // ── Panel ──────────────────────────────────────────────────────
+  // ── Panel — opens above the bottom bar ────────────────────────
   const panel = document.createElement("div");
   panel.style.cssText = css`
     position:fixed;
-    left:12px;
-    bottom:74px;
+    left:8px;
+    bottom:76px;
     z-index:31;
-    width:min(340px, calc(100vw - 24px));
+    width:min(340px, calc(100vw - 16px));
     max-height:min(70vh, 480px);
     background:rgba(6,14,26,0.94);
     border:1px solid rgba(214,185,112,0.28);
@@ -306,8 +304,10 @@ export function createChatUi(game: Game): ChatUi {
     panel.style.transform = "translateY(0) scale(1)";
     panel.style.opacity = "1";
     panel.style.pointerEvents = "auto";
-    toggleBtn.style.borderColor = "rgba(212,175,94,0.85)";
-    toggleBtn.style.background = "rgba(28,46,72,0.95)";
+    toggleBtn.style.borderColor = "#C9911E";
+    toggleBtn.style.background = "#C9911E";
+    const svg = toggleBtn.querySelector("svg");
+    if (svg) svg.setAttribute("stroke", "#08102A");
     // Clear unread
     unreadCount = 0;
     badge.style.display = "none";
@@ -320,8 +320,10 @@ export function createChatUi(game: Game): ChatUi {
     panel.style.transform = "translateY(12px) scale(0.97)";
     panel.style.opacity = "0";
     panel.style.pointerEvents = "none";
-    toggleBtn.style.borderColor = "rgba(212,175,94,0.45)";
-    toggleBtn.style.background = "rgba(6,14,26,0.88)";
+    toggleBtn.style.borderColor = "#C9911E";
+    toggleBtn.style.background = "rgba(10,20,42,0.90)";
+    const svg = toggleBtn.querySelector("svg");
+    if (svg) svg.setAttribute("stroke", "#F0C060");
     closeNameEditor();
   }
 

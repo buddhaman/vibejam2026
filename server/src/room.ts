@@ -1616,7 +1616,10 @@ export class BattleRoom extends Room<{ state: GameState }> {
         continue;
       }
 
-      const unitTrainTimeMs = getUnitTrainTimeMs(currentType);
+      const unitTrainTimeMs = Math.max(
+        1,
+        Math.ceil(getUnitTrainTimeMs(currentType) * CONFIG.UNIT_TRAIN_TIME_MULTIPLIER)
+      );
       if (building.productionProgressMs < unitTrainTimeMs) break;
 
       building.productionProgressMs -= unitTrainTimeMs;
@@ -1924,6 +1927,7 @@ export class BattleRoom extends Room<{ state: GameState }> {
   }
 
   private spawnStartingBlob(building: Building, unitType: UnitType, unitCount: number, slotIndex: number): void {
+    if (unitCount <= 0) return;
     const angle = slotIndex * (Math.PI * 0.5) - Math.PI * 0.75;
     const radius = GAME_RULES.TILE_SIZE * 1.65;
     const spawnX = clamp(building.x + Math.cos(angle) * radius, CONFIG.WORLD_MIN, CONFIG.WORLD_MAX);

@@ -110,12 +110,14 @@ export const GAME_RULES = {
   START_BIOMASS: 500,
   START_MATERIAL: 300,
   START_COMPUTE: 200,
-  /** Free starting squads spawned with your first town center. */
+  /** Free starting squads spawned with your first town center (release defaults). */
   START_AGENT_UNIT_COUNT: 3,
-  START_WARBAND_UNIT_COUNT: 800,
-  START_ARCHER_UNIT_COUNT: 60,
-  START_SYNTHAUR_UNIT_COUNT: 24,
-  START_CENTAUR_UNIT_COUNT: 24,
+  START_WARBAND_UNIT_COUNT: 0,
+  START_ARCHER_UNIT_COUNT: 0,
+  START_SYNTHAUR_UNIT_COUNT: 0,
+  START_CENTAUR_UNIT_COUNT: 0,
+  /** Release uses longer production; dev can override this to be much faster. */
+  UNIT_TRAIN_TIME_MULTIPLIER: 1.8,
   FARM_GROWTH_MS: 10000,
   BARRACKS_HEALTH: 200,
   ARCHERY_RANGE_HEALTH: 190,
