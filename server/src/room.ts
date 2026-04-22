@@ -382,6 +382,7 @@ export class BattleRoom extends Room<{ state: GameState }> {
     player.biomass = CONFIG.START_BIOMASS;
     player.material = CONFIG.START_MATERIAL;
     player.compute = CONFIG.START_COMPUTE;
+    player.kothTimeMs = CONFIG.KOTH_START_TIME_MS;
     this.state.players.set(client.sessionId, player);
     this.playerSpawnSlots.set(client.sessionId, playerIndex);
 
@@ -1121,9 +1122,30 @@ export class BattleRoom extends Room<{ state: GameState }> {
     } satisfies PathMessage);
   }
 
+  private stepKOTH(dtMs: number): void {
+    // Find blob closest to world center (0,0) within capture radius
+    let closestDist: number = GAME_RULES.KOTH_CAPTURE_RADIUS;
+    let closestOwnerId = "";
+    for (const blob of this.state.blobs.values()) {
+      const dist = Math.hypot(blob.x, blob.y);
+      if (dist < closestDist) {
+        closestDist = dist;
+        closestOwnerId = blob.ownerId;
+      }
+    }
+    this.state.kothOwner = closestOwnerId;
+    if (closestOwnerId) {
+      const owner = this.state.players.get(closestOwnerId);
+      if (owner) {
+        owner.kothTimeMs = Math.max(0, owner.kothTimeMs - dtMs);
+      }
+    }
+  }
+
   private tick(dtMs: number) {
     const dt = dtMs / 1000;
     this.pruneDisengageLocks();
+    this.stepKOTH(dtMs);
 
     for (const building of this.state.buildings.values()) {
       this.stepBuildingProduction(building, dtMs);
@@ -1213,6 +1235,7 @@ export class BattleRoom extends Room<{ state: GameState }> {
       this.refreshBlobActionState(blob);
     }
 
+    this.resolveTowerCombat(dt);
     this.resolveRangedBlobCombat(dt);
     this.resolveBlobCombat(dt);
     this.rebalanceFriendlyBlobs();
@@ -1872,6 +1895,11 @@ export class BattleRoom extends Room<{ state: GameState }> {
         this.clearBlobCombatState(blob);
       }
     }
+    for (const building of this.state.buildings.values()) {
+      if (deadIds.has(building.attackTargetBlobId)) {
+        building.attackTargetBlobId = "";
+      }
+    }
     for (const deadId of deadIds) this.combatRetreatTargets.delete(deadId);
   }
 
@@ -1893,6 +1921,64 @@ export class BattleRoom extends Room<{ state: GameState }> {
         this.clearBlobPath(blob);
       }
     }
+  }
+
+  private getTowerAttackRange(building: Building, target: Blob): number {
+    const rules = getBuildingRules(building.buildingType);
+    return rules.attackRange + Math.max(0, target.radius);
+  }
+
+  private isTowerTargetWithinRange(building: Building, target: Blob, padding = 0): boolean {
+    const distance = Math.hypot(target.x - building.x, target.y - building.y);
+    return distance <= this.getTowerAttackRange(building, target) + padding;
+  }
+
+  private findTowerTarget(building: Building): Blob | null {
+    let best: Blob | null = null;
+    let bestDistance = Infinity;
+    for (const blob of this.state.blobs.values()) {
+      if (blob.ownerId === building.ownerId) continue;
+      if (!this.isTowerTargetWithinRange(building, blob)) continue;
+      const distance = Math.hypot(blob.x - building.x, blob.y - building.y);
+      if (distance < bestDistance) {
+        best = blob;
+        bestDistance = distance;
+      }
+    }
+    return best;
+  }
+
+  private resolveTowerCombat(dt: number): void {
+    const deadBlobIds = new Set<string>();
+
+    for (const building of this.state.buildings.values()) {
+      const rules = getBuildingRules(building.buildingType);
+      if (rules.damagePerSec <= 0 || rules.attackRange <= 0) {
+        building.attackTargetBlobId = "";
+        continue;
+      }
+
+      let target = building.attackTargetBlobId ? this.state.blobs.get(building.attackTargetBlobId) ?? null : null;
+      if (target && (target.ownerId === building.ownerId || !this.isTowerTargetWithinRange(building, target, 6))) {
+        target = null;
+      }
+      if (!target) {
+        target = this.findTowerTarget(building);
+      }
+      building.attackTargetBlobId = target?.id ?? "";
+      if (!target) continue;
+
+      target.health -= rules.damagePerSec * dt;
+      this.syncBlobHealthToUnitCount(target);
+      if (target.unitCount <= 0 || target.health <= 0) deadBlobIds.add(target.id);
+    }
+
+    if (deadBlobIds.size === 0) return;
+    for (const deadId of deadBlobIds) {
+      this.blobPaths.delete(deadId);
+      this.state.blobs.delete(deadId);
+    }
+    this.clearDeadBlobTargetRefs(deadBlobIds);
   }
 
   private spawnProducedUnit(building: Building, unitType: UnitType, unitCountOverride?: number) {

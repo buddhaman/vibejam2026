@@ -40,6 +40,7 @@ import { BlobEntity } from "./blob-entity.js";
 import { BuildingEntity } from "./building-entity.js";
 import type { BeamDrawer } from "./beam-drawer.js";
 import type { BrightBeamDrawer } from "./bright-beam-drawer.js";
+import type { LightningBeamDrawer } from "./lightning-beam-drawer.js";
 import type { RagdollFxSystem } from "./ragdoll-fx.js";
 import type { ArrowFxSystem } from "./arrow-fx.js";
 import type { BuildingDestructionFxSystem } from "./building-destruction-fx.js";
@@ -56,6 +57,7 @@ export class Game {
   public selectedTileKey: string | null = null;
   private beamDrawer: BeamDrawer | null = null;
   private brightBeamDrawer: BrightBeamDrawer | null = null;
+  private lightningBeamDrawer: LightningBeamDrawer | null = null;
   private ragdollFx: RagdollFxSystem | null = null;
   private arrowFx: ArrowFxSystem | null = null;
   private buildingDestructionFx: BuildingDestructionFxSystem | null = null;
@@ -337,6 +339,7 @@ export class Game {
         productionQueue: ArrayLike<UnitTypeValue>;
         productionProgressMs: number;
         farmGrowth: number;
+        attackTargetBlobId: string;
       });
       this._buildingSnapshots.set(id as string, {
         x: building.x,
@@ -762,6 +765,10 @@ export class Game {
     this.brightBeamDrawer = brightBeamDrawer;
   }
 
+  public setLightningBeamDrawer(lightningBeamDrawer: LightningBeamDrawer): void {
+    this.lightningBeamDrawer = lightningBeamDrawer;
+  }
+
   public setRagdollFxSystem(ragdollFx: RagdollFxSystem): void {
     this.ragdollFx = ragdollFx;
   }
@@ -777,6 +784,7 @@ export class Game {
   public clearBeamDraws(): void {
     this.beamDrawer?.beginFrame();
     this.brightBeamDrawer?.beginFrame();
+    this.lightningBeamDrawer?.beginFrame();
   }
 
   public drawBeam(from: THREE.Vector3, to: THREE.Vector3, width: number, depth: number, color: THREE.Color): void {
@@ -787,9 +795,21 @@ export class Game {
     (this.brightBeamDrawer ?? this.beamDrawer)?.drawBeam(from, to, width, depth, color);
   }
 
+  public drawLightningBeam(
+    from: THREE.Vector3,
+    to: THREE.Vector3,
+    width: number,
+    depth: number,
+    color: THREE.Color,
+    seed = 0
+  ): void {
+    this.lightningBeamDrawer?.drawBeam(from, to, width, depth, color, seed);
+  }
+
   public flushBeamDraws(): void {
     this.beamDrawer?.finishFrame();
     this.brightBeamDrawer?.finishFrame();
+    this.lightningBeamDrawer?.finishFrame();
   }
 
   public updateRagdollFx(dt: number): void {
@@ -946,6 +966,37 @@ export class Game {
       enemies,
       allies,
       totalUnitCount,
+    };
+  }
+
+  public getKothState(): {
+    ownerSessionId: string;
+    ownerName: string;
+    ownerColor: number;
+    entries: Array<{ sessionId: string; name: string; color: number; timeMs: number }>;
+  } {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const state = this.room.state as any;
+    const ownerSid: string = state.kothOwner ?? "";
+    const entries: Array<{ sessionId: string; name: string; color: number; timeMs: number }> = [];
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    this.room.state.players.forEach((raw: any) => {
+      const p = raw as { sessionId?: string; name?: string; color?: number; kothTimeMs?: number };
+      entries.push({
+        sessionId: p.sessionId ?? "",
+        name: p.name ?? "",
+        color: p.color ?? 0xffffff,
+        timeMs: p.kothTimeMs ?? 0,
+      });
+    });
+    // Sort ascending: least time remaining = closest to winning (longest time in the zone)
+    entries.sort((a, b) => a.timeMs - b.timeMs);
+    const ownerEntry = entries.find((e) => e.sessionId === ownerSid);
+    return {
+      ownerSessionId: ownerSid,
+      ownerName: ownerEntry?.name ?? "",
+      ownerColor: ownerEntry?.color ?? 0,
+      entries,
     };
   }
 }

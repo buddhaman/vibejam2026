@@ -17,6 +17,8 @@ export class Player extends Schema {
   @type("uint16") biomass: number = 0;
   @type("uint16") material: number = 0;
   @type("uint16") compute: number = 0;
+  /** KOTH countdown in ms — starts at KOTH_START_TIME_MS, ticks down while owning the server. */
+  @type("uint32") kothTimeMs: number = 0;
 }
 
 export class Blob extends Schema {
@@ -61,6 +63,7 @@ export class Building extends Schema {
   @type(["uint8"]) productionQueue = new ArraySchema<UnitType>();
   @type("number") productionProgressMs: number = 0;
   @type("number") farmGrowth: number = 0;
+  @type("string") attackTargetBlobId: string = "";
 }
 
 /** Authoritative world — gameplay truth only. Tiles are streamed separately. */
@@ -69,4 +72,6 @@ export class GameState extends Schema {
   @type({ map: Player }) players = new MapSchema<Player>();
   @type({ map: Blob }) blobs = new MapSchema<Blob>();
   @type({ map: Building }) buildings = new MapSchema<Building>();
+  /** Session ID of the player currently holding the central server, or "" if unowned. */
+  @type("string") kothOwner: string = "";
 }

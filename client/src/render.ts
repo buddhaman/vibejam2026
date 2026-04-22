@@ -15,6 +15,7 @@ import {
   hitTestBuildButton,
   hitTestBuildPanel,
   showWarning,
+  type KothState,
 } from "./hud.js";
 import type { SelectionInfo } from "./entity.js";
 import { getTerrainHeightAt, type TileView } from "./terrain.js";
@@ -35,7 +36,7 @@ export function startRender(game: Game) {
   const netPerf = attachDevNetworkPerf(game.room);
   const world = createRenderWorld(game);
   const { scene } = game;
-  const { renderer, canvas, cameraRig, walkabilityOverlay, tileDebug, tileVisuals, buildingDestructionFx, beamDrawer, brightBeamDrawer, sunLight } = world;
+  const { renderer, canvas, cameraRig, walkabilityOverlay, tileDebug, tileVisuals, buildingDestructionFx, beamDrawer, brightBeamDrawer, sunLight, centralServer } = world;
   const camera = cameraRig.camera;
   let tileDebugInspected: TileView | null = null;
   let devModeVisible = false;
@@ -533,8 +534,12 @@ export function startRender(game: Game) {
     const myResources = game.getMyResources();
     const selectedInfo: SelectionInfo | null = game.getSelectedEntity()?.getSelectionInfo() ?? null;
     const selectedTile: TileView | null = game.getSelectedTile();
+    const kothState: KothState = game.getKothState();
+    // Sync central server model color + terrain height
+    centralServer.syncOwner(kothState.ownerColor || null);
+    centralServer.syncTerrainY(getTerrainHeightAt(0, 0, game.getTiles()));
 
-    drawHUD(hudCanvas, hud, myColor, mySquadCount, myResources, selectedInfo, selectedTile, now / 1000);
+    drawHUD(hudCanvas, hud, myColor, mySquadCount, myResources, selectedInfo, selectedTile, now / 1000, kothState);
     drawFloatingResourceTexts(hudCanvas, projectFloatingResourceTexts(game, camera, hudCanvas, now / 1000));
 
     if (devModeVisible) {

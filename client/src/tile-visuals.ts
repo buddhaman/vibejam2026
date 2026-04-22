@@ -8,11 +8,7 @@ import { applyStylizedShading, isStylizedLitMaterial } from "./stylized-shading.
 import type { ComputeSlot, TileView, TreeSlot } from "./terrain.js";
 
 const COMPUTE_MINE_GLB = publicAssetUrl("models/buildings/compute_mine.glb");
-const CENTRAL_SERVER_GLB = publicAssetUrl("models/buildings/central_server.glb");
 const COMPUTE_MINE_TARGET_HEIGHT = 8.0;
-const CENTRAL_SERVER_TARGET_HEIGHT = 16.0;
-/** Only the exact center tile (maxCompute == KOTH_CENTER_SERVER_COMPUTE) shows the central server model. */
-const CENTRAL_SERVER_THRESHOLD = GAME_RULES.KOTH_CENTER_SERVER_COMPUTE;
 const TREE_VARIANT_COUNT = 3;
 
 type TileVisualLayerId = "forest" | "datacenters";
@@ -35,7 +31,6 @@ type RegrowingCompute = {
 };
 
 let computeMineVariantTemplate: InstancedVariant | null = null;
-let centralServerVariantTemplate: InstancedVariant | null = null;
 
 function hash(n: number) {
   const x = Math.sin(n * 127.1) * 43758.5453123;
@@ -291,20 +286,6 @@ async function loadComputeMineVariant(): Promise<InstancedVariant> {
   return createDatacenterFallbackVariant();
 }
 
-async function loadCentralServerVariant(): Promise<InstancedVariant> {
-  const loader = createGLTFLoader();
-  try {
-    const gltf = await loader.loadAsync(CENTRAL_SERVER_GLB);
-    const root = gltf.scene.clone(true) as THREE.Group;
-    fitGroundAndCenterXZ(root, CENTRAL_SERVER_TARGET_HEIGHT);
-    const parts = meshPartsFromObject(root);
-    if (parts.length > 0) return { parts };
-    console.warn(`[tile-visuals] Central server GLB had no mesh parts, using fallback: ${CENTRAL_SERVER_GLB}`);
-  } catch (err) {
-    console.warn(`[tile-visuals] Could not load central server GLB, using fallback: ${CENTRAL_SERVER_GLB}`, err);
-  }
-  return createDatacenterFallbackVariant();
-}
 
 function createForestLayer(): TileVisualLayer {
   const set = createInstancedVariantSet(createTreeVariants(), 1024);
@@ -394,7 +375,6 @@ function createDatacenterLayer(): TileVisualLayer {
     [
       computeMineVariantTemplate ?? createDatacenterFallbackVariant(),
       createComputeShardVariant(),
-      centralServerVariantTemplate ?? createDatacenterFallbackVariant(),
     ],
     64
   );
@@ -431,16 +411,16 @@ function createDatacenterLayer(): TileVisualLayer {
       const now = performance.now() / 1000;
       const mineTransforms: InstancedTransform[] = [];
       const shardTransforms: InstancedTransform[] = [];
-      const serverTransforms: InstancedTransform[] = [];
       const carried = game.getCarriedComputeCountByTile();
       for (const tile of tiles) {
         const maxC = tile.maxCompute ?? 0;
         const c = tile.compute ?? 0;
         if (tile.isMountain || maxC <= 0 || c <= 0) continue;
+        // Only render mine model on exact player-compute tiles; skip central server cluster
+        if (maxC !== GAME_RULES.KOTH_PLAYER_COMPUTE) continue;
         const center = getTileCenter(tile.tx, tile.tz);
-        const isCentralServer = maxC === CENTRAL_SERVER_THRESHOLD;
         const scale = 0.92 + hash01(tile.tx, tile.tz, 8811) * 0.14;
-        (isCentralServer ? serverTransforms : mineTransforms).push({
+        mineTransforms.push({
           position: new THREE.Vector3(center.x, tile.height + 0.04, center.z),
           rotationY: hash01(tile.tx, tile.tz, 6021) * Math.PI * 2,
           scale: new THREE.Vector3(scale, scale, scale),
@@ -487,17 +467,14 @@ function createDatacenterLayer(): TileVisualLayer {
           });
         }
       }
-      syncInstancedVariantSet(set, [mineTransforms, shardTransforms, serverTransforms]);
+      syncInstancedVariantSet(set, [mineTransforms, shardTransforms]);
     },
   };
 }
 
 export async function ensureTileVisualAssetsLoaded(): Promise<void> {
-  if (computeMineVariantTemplate && centralServerVariantTemplate) return;
-  [computeMineVariantTemplate, centralServerVariantTemplate] = await Promise.all([
-    loadComputeMineVariant(),
-    loadCentralServerVariant(),
-  ]);
+  if (computeMineVariantTemplate) return;
+  computeMineVariantTemplate = await loadComputeMineVariant();
 }
 
 export class TileVisualManager {

@@ -40,6 +40,13 @@ const BUILD_ITEMS = BUILD_MENU_TYPES.map((type) => ({
 
 export type BuildAction = (typeof BUILD_ITEMS)[number]["type"];
 
+export type KothState = {
+  ownerSessionId: string;
+  ownerName: string;
+  ownerColor: number;
+  entries: Array<{ sessionId: string; name: string; color: number; timeMs: number }>;
+};
+
 export type HudState = {
   buildPanelOpen: boolean;
   activeBuildType: BuildingTypeValue | null;
@@ -251,7 +258,8 @@ export function drawHUD(
   resources: ResourceCost,
   selected: SelectionInfo | null,
   selectedTile: TileView | null,
-  t: number
+  t: number,
+  koth: KothState | null,
 ) {
   const ctx = canvas.getContext("2d")!;
   const W = canvas.width;
@@ -275,6 +283,7 @@ export function drawHUD(
   drawMoveMarkers(ctx, hud, t);
   drawWarningToast(ctx, W, H, hud, t);
   drawBottomBar(ctx, W, H, myColor, mySquadCount, resources, hud._resourceBounce, selected !== null, hud, t);
+  if (koth) drawKothPanel(ctx, W, H, koth, t);
   if (selected) drawSelectionCard(ctx, W, H, selected, t, hud._cardEnterT);
   if (!selected && selectedTile) drawTileCard(ctx, W, H, selectedTile);
   if (hud.buildPanelOpen) drawBuildPanel(ctx, W, H, hud, t);
@@ -1058,6 +1067,164 @@ function drawTileCard(ctx: CanvasRenderingContext2D, W: number, H: number, tile:
     statY
   );
   ctx.restore();
+}
+
+// ─── KOTH panel ───────────────────────────────────────────────────────────────
+
+function formatKothTime(ms: number): string {
+  const totalSec = Math.ceil(ms / 1000);
+  const m = Math.floor(totalSec / 60);
+  const s = totalSec % 60;
+  return `${m}:${String(s).padStart(2, "0")}`;
+}
+
+function drawKothPanel(
+  ctx: CanvasRenderingContext2D,
+  W: number,
+  H: number,
+  koth: KothState,
+  t: number,
+): void {
+  const ROW_H = 22;
+  const PAD = 10;
+  const panelW = 188;
+  const headerH = 46;
+  const entryCount = koth.entries.length;
+  const panelH = headerH + entryCount * ROW_H + PAD;
+  const px = W - panelW - 10;
+  const py = 10;
+
+  // Panel background
+  ctx.save();
+  ctx.shadowColor = "rgba(0,0,0,0.75)";
+  ctx.shadowBlur = 24;
+  ctx.fillStyle = LAPIS_MID;
+  rr(ctx, px, py, panelW, panelH, 4); ctx.fill();
+  ctx.restore();
+
+  // Gold border
+  ctx.save();
+  ctx.strokeStyle = GOLD_BRIGHT;
+  ctx.lineWidth = 1.5;
+  rr(ctx, px, py, panelW, panelH, 4); ctx.stroke();
+  ctx.strokeStyle = GOLD_DIM;
+  ctx.lineWidth = 1;
+  rr(ctx, px + 3, py + 3, panelW - 6, panelH - 6, 3); ctx.stroke();
+  ctx.restore();
+
+  // Header: "CENTRAL SERVER" label
+  ctx.save();
+  ctx.font = "700 9px 'Cinzel', serif";
+  ctx.fillStyle = DIVINE_CYAN;
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.letterSpacing = "2px";
+  ctx.shadowColor = DIVINE_CYAN;
+  ctx.shadowBlur = 8;
+  ctx.fillText("CENTRAL SERVER", px + panelW / 2, py + 13);
+  ctx.shadowBlur = 0;
+  ctx.restore();
+
+  // Owner row
+  ctx.save();
+  const owned = koth.ownerSessionId !== "" && koth.ownerColor !== 0;
+  if (owned) {
+    const pulse = 0.7 + 0.3 * Math.sin(t * 4.5);
+    const or = (koth.ownerColor >> 16) & 0xff;
+    const og = (koth.ownerColor >> 8) & 0xff;
+    const ob = koth.ownerColor & 0xff;
+    ctx.shadowColor = `rgb(${or},${og},${ob})`;
+    ctx.shadowBlur = 10 * pulse;
+    ctx.font = "600 9px 'Cinzel', serif";
+    ctx.fillStyle = `rgb(${or},${og},${ob})`;
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.letterSpacing = "0.5px";
+    ctx.fillText(`⬥ ${koth.ownerName} ⬥`, px + panelW / 2, py + 31);
+  } else {
+    ctx.font = "600 9px 'Cinzel', serif";
+    ctx.fillStyle = MARBLE_MUTED;
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.letterSpacing = "1px";
+    ctx.fillText("UNCONTESTED", px + panelW / 2, py + 31);
+  }
+  ctx.restore();
+
+  // Divider
+  ctx.save();
+  ctx.strokeStyle = GOLD_DIM;
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(px + 8, py + headerH - 2);
+  ctx.lineTo(px + panelW - 8, py + headerH - 2);
+  ctx.stroke();
+  ctx.restore();
+
+  // Leaderboard rows
+  for (let i = 0; i < koth.entries.length; i++) {
+    const entry = koth.entries[i];
+    const rowY = py + headerH + i * ROW_H + ROW_H / 2;
+    const er = (entry.color >> 16) & 0xff;
+    const eg = (entry.color >> 8) & 0xff;
+    const eb = entry.color & 0xff;
+    const isOwner = entry.sessionId === koth.ownerSessionId;
+
+    // Row highlight for current owner
+    if (isOwner) {
+      ctx.save();
+      ctx.fillStyle = `rgba(${er},${eg},${eb},0.10)`;
+      ctx.fillRect(px + 4, py + headerH + i * ROW_H + 1, panelW - 8, ROW_H - 2);
+      ctx.restore();
+    }
+
+    // Rank
+    ctx.save();
+    ctx.font = F_NUM_SM;
+    ctx.fillStyle = i === 0 ? GOLD_TEXT : MARBLE_MUTED;
+    ctx.textAlign = "left";
+    ctx.textBaseline = "middle";
+    ctx.fillText(`${i + 1}.`, px + 10, rowY);
+    ctx.restore();
+
+    // Color dot
+    ctx.save();
+    ctx.beginPath();
+    ctx.arc(px + 32, rowY, 5, 0, Math.PI * 2);
+    ctx.fillStyle = `rgb(${er},${eg},${eb})`;
+    ctx.fill();
+    ctx.restore();
+
+    // Player name
+    ctx.save();
+    ctx.font = isOwner ? "700 10px system-ui, sans-serif" : "11px system-ui, sans-serif";
+    ctx.fillStyle = isOwner ? MARBLE_TEXT : MARBLE_DIM;
+    ctx.textAlign = "left";
+    ctx.textBaseline = "middle";
+    // Clip long names
+    const nameMax = 80;
+    let name = entry.name;
+    if (ctx.measureText(name).width > nameMax) {
+      while (name.length > 0 && ctx.measureText(name + "…").width > nameMax) name = name.slice(0, -1);
+      name += "…";
+    }
+    ctx.fillText(name, px + 42, rowY);
+    ctx.restore();
+
+    // Timer — pulsing red when < 30s and owning
+    const isLow = entry.timeMs < 30_000 && isOwner;
+    ctx.save();
+    ctx.font = F_NUM_SM;
+    if (isLow) {
+      ctx.fillStyle = `rgba(220,60,60,${0.7 + 0.3 * Math.sin(t * 7)})`;
+    } else {
+      ctx.fillStyle = isOwner ? DIVINE_CYAN : MARBLE_MUTED;
+    }
+    ctx.textAlign = "right";
+    ctx.textBaseline = "middle";
+    ctx.fillText(formatKothTime(entry.timeMs), px + panelW - 10, rowY);
+    ctx.restore();
+  }
 }
 
 // ─── Utilities ────────────────────────────────────────────────────────────────

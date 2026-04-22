@@ -29,6 +29,7 @@ export const CONFIG = {
         START_SYNTHAUR_UNIT_COUNT: 24,
         START_CENTAUR_UNIT_COUNT: 24,
         UNIT_TRAIN_TIME_MULTIPLIER: 0.1,
+        KOTH_START_TIME_MS: 60_000,
       }
     : {}),
 } as const;

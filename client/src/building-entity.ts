@@ -22,6 +22,11 @@ import {
 
 const ORB_RADIUS = 0.525;
 const ORB_Y_ABOVE_ROOF = 1.55;
+const TOWER_LIGHTNING_Y = 17.4;
+const TOWER_LIGHTNING_CORE_WIDTH = 0.18;
+const TOWER_LIGHTNING_GLOW_WIDTH = 0.52;
+const TOWER_LIGHTNING_SEGMENT_LENGTH = 5.5;
+const TOWER_LIGHTNING_JITTER = 2.8;
 const DUMMY = new THREE.Object3D();
 const FARM_UP = new THREE.Vector3(0, 1, 0);
 const FARM_BASE = new THREE.Vector3();
@@ -32,6 +37,26 @@ const FARM_DIR = new THREE.Vector3();
 const FARM_QUAT = new THREE.Quaternion();
 const FARM_RADIAL = new THREE.Vector3();
 const FARM_SIDE = new THREE.Vector3();
+const TOWER_BEAM_START = new THREE.Vector3();
+const TOWER_BEAM_END = new THREE.Vector3();
+const TOWER_ARC_A = new THREE.Vector3();
+const TOWER_ARC_B = new THREE.Vector3();
+const TOWER_OFFSET_A = new THREE.Vector3();
+const TOWER_OFFSET_B = new THREE.Vector3();
+const TOWER_SPARK_A = new THREE.Vector3();
+const TOWER_SPARK_B = new THREE.Vector3();
+const TOWER_PATH_POINT = new THREE.Vector3();
+const TOWER_PREV_POINT = new THREE.Vector3();
+const TOWER_NEXT_POINT = new THREE.Vector3();
+const TOWER_DIR = new THREE.Vector3();
+const TOWER_PERP_A = new THREE.Vector3();
+const TOWER_PERP_B = new THREE.Vector3();
+const TOWER_CORE_COLOR = new THREE.Color();
+const TOWER_GLOW_COLOR = new THREE.Color();
+const TOWER_ELECTRIC_BASE = new THREE.Color(0xb8f3ff);
+const TOWER_WHITE = new THREE.Color(0xffffff);
+const TOWER_ELECTRIC_GLOW = new THREE.Color(0x49a6ff);
+const TOWER_ALT_AXIS = new THREE.Vector3(1, 0, 0);
 const UNIT_TRAIN_TIME_MULTIPLIER = import.meta.env.DEV ? 0.1 : GAME_RULES.UNIT_TRAIN_TIME_MULTIPLIER;
 
 function getEffectiveUnitTrainTimeMs(unitType: UnitTypeValue): number {
@@ -57,6 +82,7 @@ export class BuildingEntity extends Entity {
     productionQueue: UnitTypeValue[];
     productionProgressMs: number;
     farmGrowth: number;
+    attackTargetBlobId: string;
   } | null = null;
 
   public constructor(game: Game, id: string) {
@@ -84,6 +110,7 @@ export class BuildingEntity extends Entity {
     productionQueue: ArrayLike<UnitTypeValue>;
     productionProgressMs: number;
     farmGrowth: number;
+    attackTargetBlobId: string;
   }): void {
     const firstSync = this.building === null;
     this.building = {
@@ -135,7 +162,94 @@ export class BuildingEntity extends Entity {
     this.mesh.position.set(this.building.x, terrainY, this.building.y);
     if (this.building.buildingType === BuildingType.FARM) {
       this.updateFarmGrowth();
+    } else if (this.building.buildingType === BuildingType.TOWER) {
+      this.renderTowerLightning(terrainY);
     }
+  }
+
+  private renderTowerLightning(terrainY: number): void {
+    if (!this.building?.attackTargetBlobId) return;
+    const target = this.game.findBlobEntity(this.building.attackTargetBlobId);
+    if (!target) return;
+    const targetCenter = target.getPredictedWorldCenter();
+    const targetTerrainY = getTerrainHeightAt(targetCenter.x, targetCenter.z, this.game.getTiles());
+    const playerHex = this.game.getPlayerColor(this.building.ownerId);
+    TOWER_CORE_COLOR.setHex(playerHex).lerp(TOWER_ELECTRIC_BASE, 0.84);
+    TOWER_GLOW_COLOR.copy(TOWER_ELECTRIC_GLOW).lerp(TOWER_CORE_COLOR, 0.45);
+
+    TOWER_BEAM_START.set(this.building.x, terrainY + TOWER_LIGHTNING_Y, this.building.y);
+    TOWER_BEAM_END.set(targetCenter.x, targetTerrainY + GAME_RULES.UNIT_HEIGHT * 0.65, targetCenter.z);
+
+    const seedBase = this.hashBeamSeed(this.building.attackTargetBlobId);
+    this.drawLightningPath(TOWER_BEAM_START, TOWER_BEAM_END, seedBase, TOWER_CORE_COLOR, TOWER_GLOW_COLOR, 1);
+
+    const time = performance.now() * 0.001;
+    const sway = Math.sin(time * 15.2 + seedBase * 4.1) * 5.4;
+    const side = Math.cos(time * 11.4 + seedBase * 7.7) * 4.6;
+    TOWER_OFFSET_A.set(sway, 0, side);
+    TOWER_OFFSET_B.set(-side * 0.7, 0, sway * 0.6);
+    TOWER_ARC_A.copy(TOWER_BEAM_START).lerp(TOWER_BEAM_END, 0.32).add(TOWER_OFFSET_A);
+    TOWER_ARC_B.copy(TOWER_BEAM_START).lerp(TOWER_BEAM_END, 0.68).add(TOWER_OFFSET_B);
+    this.drawLightningPath(TOWER_BEAM_START, TOWER_ARC_A, seedBase + 5.2, TOWER_GLOW_COLOR, TOWER_WHITE, 0.45);
+    this.drawLightningPath(TOWER_ARC_B, TOWER_BEAM_END, seedBase + 8.4, TOWER_GLOW_COLOR, TOWER_WHITE, 0.42);
+
+    const impactRadius = 1.9 + Math.sin(time * 24 + seedBase) * 0.25;
+    TOWER_SPARK_A.set(TOWER_BEAM_END.x + impactRadius, TOWER_BEAM_END.y + 0.4, TOWER_BEAM_END.z - impactRadius * 0.35);
+    TOWER_SPARK_B.set(TOWER_BEAM_END.x - impactRadius * 0.7, TOWER_BEAM_END.y + 0.9, TOWER_BEAM_END.z + impactRadius * 0.55);
+    this.drawLightningPath(TOWER_BEAM_END, TOWER_SPARK_A, seedBase + 11.4, TOWER_WHITE, TOWER_WHITE, 0.24);
+    this.drawLightningPath(TOWER_BEAM_END, TOWER_SPARK_B, seedBase + 14.2, TOWER_WHITE, TOWER_WHITE, 0.22);
+  }
+
+  private drawLightningPath(
+    from: THREE.Vector3,
+    to: THREE.Vector3,
+    seed: number,
+    coreColor: THREE.Color,
+    glowColor: THREE.Color,
+    thicknessScale: number
+  ): void {
+    TOWER_DIR.subVectors(to, from);
+    const length = TOWER_DIR.length();
+    if (length < 0.01) return;
+    TOWER_DIR.multiplyScalar(1 / length);
+    TOWER_PERP_A.crossVectors(Math.abs(TOWER_DIR.y) > 0.92 ? TOWER_ALT_AXIS : FARM_UP, TOWER_DIR).normalize();
+    TOWER_PERP_B.crossVectors(TOWER_DIR, TOWER_PERP_A).normalize();
+
+    const segments = Math.max(5, Math.min(20, Math.round(length / TOWER_LIGHTNING_SEGMENT_LENGTH)));
+    const amplitude = Math.min(length * 0.08, TOWER_LIGHTNING_JITTER * thicknessScale + length * 0.02);
+    TOWER_PREV_POINT.copy(from);
+
+    for (let i = 1; i <= segments; i++) {
+      const t = i / segments;
+      TOWER_NEXT_POINT.copy(from).lerp(to, t);
+      if (i < segments) {
+        const envelope = Math.sin(t * Math.PI);
+        const jitterA = this.hashNoise(seed + i * 1.37 + t * 13.1) * amplitude * envelope;
+        const jitterB = this.hashNoise(seed + i * 2.11 + t * 17.3) * amplitude * 0.55 * envelope;
+        TOWER_PATH_POINT.copy(TOWER_PERP_A).multiplyScalar(jitterA).addScaledVector(TOWER_PERP_B, jitterB);
+        TOWER_NEXT_POINT.add(TOWER_PATH_POINT);
+      }
+      const taper = 1 - t * 0.28;
+      const glow = TOWER_LIGHTNING_GLOW_WIDTH * thicknessScale * taper;
+      const core = TOWER_LIGHTNING_CORE_WIDTH * thicknessScale * taper;
+      this.game.drawBrightBeam(TOWER_PREV_POINT, TOWER_NEXT_POINT, glow, glow * 0.82, glowColor);
+      this.game.drawBrightBeam(TOWER_PREV_POINT, TOWER_NEXT_POINT, core, core * 0.8, coreColor);
+      TOWER_PREV_POINT.copy(TOWER_NEXT_POINT);
+    }
+  }
+
+  private hashBeamSeed(text: string): number {
+    let hash = 2166136261;
+    for (let i = 0; i < text.length; i++) {
+      hash ^= text.charCodeAt(i);
+      hash = Math.imul(hash, 16777619);
+    }
+    return ((hash >>> 0) % 10000) / 1000;
+  }
+
+  private hashNoise(seed: number): number {
+    const value = Math.sin(seed * 127.1 + 311.7) * 43758.5453123;
+    return (value - Math.floor(value)) * 2 - 1;
   }
 
   private updateFarmGrowth(): void {

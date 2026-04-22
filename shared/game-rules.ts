@@ -118,12 +118,18 @@ export const GAME_RULES = {
   START_CENTAUR_UNIT_COUNT: 0,
   /** Release uses longer production; dev can override this to be much faster. */
   UNIT_TRAIN_TIME_MULTIPLIER: 1.8,
+  /** World-unit radius from center (0,0) within which a blob captures the central server. */
+  KOTH_CAPTURE_RADIUS: 40,
+  /** Starting countdown per player in ms (5 minutes). First to reach 0 wins. */
+  KOTH_START_TIME_MS: 300_000,
   FARM_GROWTH_MS: 10000,
   BARRACKS_HEALTH: 200,
   ARCHERY_RANGE_HEALTH: 190,
   STABLE_HEALTH: 240,
   FARM_HEALTH: 120,
   TOWER_HEALTH: 300,
+  TOWER_ATTACK_RANGE: 92,
+  TOWER_DAMAGE_PER_SEC: 18,
   TOWN_CENTER_HEALTH: 950,
   MAX_BUILDINGS_PER_PLAYER: 64,
   FOREST_WOOD_MAX: 2400,
@@ -154,11 +160,13 @@ export const BUILDING_RULES = {
     height: 6.2,
     trainSpawnOffsetX: GAME_RULES.TILE_SIZE,
     blocksWalk: true,
+    attackRange: 0,
+    damagePerSec: 0,
     producibleUnits: [UnitType.WARBAND],
   },
   [BuildingType.TOWER]: {
     label: "Pyrgos",
-    detail: "Defensive structure",
+    detail: "Lightning tower",
     health: GAME_RULES.TOWER_HEALTH,
     buildable: true,
     cost: { biomass: 0, material: 125, compute: 50 },
@@ -169,6 +177,8 @@ export const BUILDING_RULES = {
     height: 15.5,
     trainSpawnOffsetX: GAME_RULES.TILE_SIZE,
     blocksWalk: true,
+    attackRange: GAME_RULES.TOWER_ATTACK_RANGE,
+    damagePerSec: GAME_RULES.TOWER_DAMAGE_PER_SEC,
     producibleUnits: [],
   },
   [BuildingType.TOWN_CENTER]: {
@@ -184,6 +194,8 @@ export const BUILDING_RULES = {
     height: 8.8,
     trainSpawnOffsetX: GAME_RULES.TILE_SIZE,
     blocksWalk: true,
+    attackRange: 0,
+    damagePerSec: 0,
     producibleUnits: [UnitType.VILLAGER],
   },
   [BuildingType.ARCHERY_RANGE]: {
@@ -199,6 +211,8 @@ export const BUILDING_RULES = {
     height: 5.9,
     trainSpawnOffsetX: GAME_RULES.TILE_SIZE,
     blocksWalk: true,
+    attackRange: 0,
+    damagePerSec: 0,
     producibleUnits: [UnitType.ARCHER],
   },
   [BuildingType.STABLE]: {
@@ -214,6 +228,8 @@ export const BUILDING_RULES = {
     height: 6.8,
     trainSpawnOffsetX: GAME_RULES.TILE_SIZE,
     blocksWalk: true,
+    attackRange: 0,
+    damagePerSec: 0,
     producibleUnits: [UnitType.SYNTHAUR],
   },
   [BuildingType.FARM]: {
@@ -229,6 +245,8 @@ export const BUILDING_RULES = {
     height: 2.2,
     trainSpawnOffsetX: GAME_RULES.TILE_SIZE,
     blocksWalk: false,
+    attackRange: 0,
+    damagePerSec: 0,
     producibleUnits: [],
   },
 } as const;
