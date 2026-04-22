@@ -80,6 +80,20 @@ location = /agi {
     return 301 /agi/;
 }
 
+location = /agi/index.html {
+    root /var/www/trussner.com;
+    add_header Cache-Control "no-store, no-cache, must-revalidate, proxy-revalidate, max-age=0" always;
+    expires -1;
+    try_files $uri =404;
+}
+
+location = /agi/ {
+    root /var/www/trussner.com;
+    add_header Cache-Control "no-store, no-cache, must-revalidate, proxy-revalidate, max-age=0" always;
+    expires -1;
+    try_files /agi/index.html =404;
+}
+
 location ^~ /agi/colyseus/ {
     proxy_pass http://127.0.0.1:2567/;
     proxy_http_version 1.1;
@@ -92,13 +106,26 @@ location ^~ /agi/colyseus/ {
     proxy_read_timeout 60s;
 }
 
-location ^~ /agi/ {
+location ^~ /agi/assets/ {
     root /var/www/trussner.com;
-    try_files $uri $uri/ /agi/index.html;
+    add_header Cache-Control "public, max-age=31536000, immutable" always;
+    expires 1y;
+    try_files $uri =404;
+}
+
+location ^~ /agi/models/ {
+    root /var/www/trussner.com;
+    add_header Cache-Control "public, max-age=31536000, immutable" always;
+    expires 1y;
+    try_files $uri =404;
 }
 ```
 
-The `^~` markers matter because the main site also has a generic static-assets regex, and `/agi/` needs to win routing priority.
+The split matters:
+
+- `/agi/` and `/agi/index.html` must not be cached, so clients always fetch the latest entry HTML after a deploy.
+- hashed assets under `/agi/assets/` and static models under `/agi/models/` should be cached aggressively.
+- `/agi/colyseus/` stays proxied to the Node server.
 
 ## Why `dist/package.json` Exists
 

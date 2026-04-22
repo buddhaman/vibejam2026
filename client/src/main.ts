@@ -20,9 +20,14 @@ async function boot() {
 
 boot().catch((err) => {
   console.error(err);
+  const message = String(err?.message ?? err);
+  const extra =
+    /out of date|latest build|refresh/i.test(message)
+      ? "\n\nRefresh this page to load the latest release."
+      : "";
   document.body.innerHTML = `<pre style="color:#f88;padding:16px">Failed to connect: ${String(
-    err?.message ?? err
-  )}
+    message
+  )}${extra}
 
 Common fixes:
 • Free port 2567:  kill $(lsof -ti:2567)

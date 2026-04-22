@@ -76,10 +76,18 @@ export function isSquadSpread(value: unknown): value is SquadSpread {
 
 export const GAME_RULES = {
   TICK_HZ: 20,
-  /** World span is 4× the original 20×20 tile map (now 40×40); bounds drive server clamp + tile grid. */
-  WORLD_MIN: -240,
-  WORLD_MAX: 240,
+  /** Radial KOTH world: bigger map, fixed outer spawns, open center valley. */
+  WORLD_MIN: -360,
+  WORLD_MAX: 360,
   TILE_SIZE: 12,
+  TARGET_PLAYERS_PER_ROOM: 4,
+  KOTH_SPAWN_RADIUS: 258,
+  KOTH_START_CLEAR_RADIUS: 60,
+  KOTH_CENTER_VALLEY_RADIUS: 114,
+  KOTH_PER_PLAYER_FOREST_DISTANCE: 90,
+  KOTH_PER_PLAYER_COMPUTE_DISTANCE: 78,
+  KOTH_CENTER_SERVER_COMPUTE: 1_100,
+  KOTH_PLAYER_COMPUTE: 360,
   BLOB_MOVE_SPEED: 11,
   BLOB_ACCELERATION: 10,
   BLOB_DECELERATION_RADIUS: 14,
@@ -117,19 +125,11 @@ export const GAME_RULES = {
   TOWN_CENTER_HEALTH: 950,
   MAX_BUILDINGS_PER_PLAYER: 64,
   FOREST_WOOD_MAX: 2400,
-  /** Per-site compute vein size; placement is global + spaced (see `assignDatacenterSites`). */
+  /** Per-player compute site size; central server uses a larger dedicated value. */
   DATACENTER_COMPUTE_MAX: 300,
-  /** At least this many data-center tiles per world (non-mountain permitting). */
-  DATACENTER_MIN_SITES_PER_WORLD: 2,
-  /** Cap for rare extra sites beyond the minimum (mean ≈ 2 on a full-sized map). */
-  DATACENTER_MAX_SITES_PER_WORLD: 3,
-  /** Target Chebyshev tile gap between sites; lowered only if the map cannot fit the count. */
-  DATACENTER_MIN_CHEBYSHEV_TILES: 8,
   /** Per second while a villager squad is idle on a resource tile. */
   VILLAGER_GATHER_MATERIAL_PER_SEC: 34,
   VILLAGER_GATHER_COMPUTE_PER_SEC: 28,
-  TERRAIN_HEIGHT_THRESHOLD: 0.62,
-  TERRAIN_HEIGHT_SCALE: 140,
   MOUNTAIN_THRESHOLD: 7.2,
 } as const;
 
@@ -415,6 +415,10 @@ function smoothstep(t: number) {
   return t * t * (3 - 2 * t);
 }
 
+function clamp01(t: number) {
+  return Math.max(0, Math.min(1, t));
+}
+
 function valueNoise2D(x: number, z: number, seed: number) {
   const ix = Math.floor(x);
   const iz = Math.floor(z);
@@ -445,6 +449,92 @@ function fbm2D(x: number, z: number, seed: number, octaves: number) {
   }
 
   return totalAmplitude > 0 ? value / totalAmplitude : 0;
+}
+
+function seededFraction(seed: number, salt: number): number {
+  const x = Math.sin(seed * 12.9898 + salt * 78.233 + salt * salt * 0.001) * 43758.5453123;
+  return x - Math.floor(x);
+}
+
+const TAU = Math.PI * 2;
+
+function wrapAngle(angle: number): number {
+  let wrapped = (angle + Math.PI) % TAU;
+  if (wrapped < 0) wrapped += TAU;
+  return wrapped - Math.PI;
+}
+
+function angleDistance(a: number, b: number): number {
+  return Math.abs(wrapAngle(a - b));
+}
+
+type RadialKothLayout = {
+  playerCount: number;
+  sectorAngle: number;
+  rotation: number;
+  spawnRadius: number;
+  centerValleyRadius: number;
+  startClearRadius: number;
+  forestDistance: number;
+  forestAngleOffset: number;
+  computeDistance: number;
+  computeAngleOffset: number;
+  computeSideSign: -1 | 1;
+  mountainHalfAngle: number;
+};
+
+function getRadialKothLayout(seed: number, playerCount = GAME_RULES.TARGET_PLAYERS_PER_ROOM): RadialKothLayout {
+  const count = Math.max(2, Math.round(playerCount));
+  const sectorAngle = TAU / count;
+  return {
+    playerCount: count,
+    sectorAngle,
+    rotation: seededFraction(seed, 901) * TAU,
+    spawnRadius: GAME_RULES.KOTH_SPAWN_RADIUS,
+    centerValleyRadius: GAME_RULES.KOTH_CENTER_VALLEY_RADIUS,
+    startClearRadius: GAME_RULES.KOTH_START_CLEAR_RADIUS,
+    forestDistance: GAME_RULES.KOTH_PER_PLAYER_FOREST_DISTANCE + Math.round(seededFraction(seed, 902) * 6 - 3),
+    forestAngleOffset: sectorAngle * (0.19 + seededFraction(seed, 903) * 0.05),
+    computeDistance: GAME_RULES.KOTH_PER_PLAYER_COMPUTE_DISTANCE + Math.round(seededFraction(seed, 904) * 6 - 3),
+    computeAngleOffset: sectorAngle * (0.12 + seededFraction(seed, 905) * 0.05),
+    computeSideSign: seededFraction(seed, 906) < 0.5 ? -1 : 1,
+    mountainHalfAngle: sectorAngle * (0.12 + seededFraction(seed, 907) * 0.025),
+  };
+}
+
+function polarToWorld(radius: number, angle: number) {
+  return { x: Math.cos(angle) * radius, z: Math.sin(angle) * radius };
+}
+
+function getSectorAngle(playerIndex: number, layout: RadialKothLayout): number {
+  return layout.rotation + playerIndex * layout.sectorAngle;
+}
+
+function getNearestSpawnDistance(x: number, z: number, layout: RadialKothLayout): number {
+  let best = Infinity;
+  for (let i = 0; i < layout.playerCount; i++) {
+    const p = polarToWorld(layout.spawnRadius, getSectorAngle(i, layout));
+    best = Math.min(best, Math.hypot(x - p.x, z - p.z));
+  }
+  return best;
+}
+
+function getNearestMountainBoundaryDistance(angle: number, layout: RadialKothLayout): number {
+  let best = Infinity;
+  for (let i = 0; i < layout.playerCount; i++) {
+    best = Math.min(best, angleDistance(angle, layout.rotation + (i + 0.5) * layout.sectorAngle));
+  }
+  return best;
+}
+
+export function getPlayerSpawnPoint(
+  playerIndex: number,
+  playerCount = GAME_RULES.TARGET_PLAYERS_PER_ROOM,
+  seed = 0
+) {
+  const layout = getRadialKothLayout(seed, playerCount);
+  const angle = getSectorAngle(playerIndex, layout);
+  return snapWorldToTileCenter(Math.cos(angle) * layout.spawnRadius, Math.sin(angle) * layout.spawnRadius);
 }
 
 export function getTileKey(tx: number, tz: number): string {
@@ -488,8 +578,12 @@ export function forEachTileKeyUnderFootprint(
 }
 
 export function getTileHeight(tx: number, tz: number, seed: number): number {
-  const noise = fbm2D(tx * 0.22 + 11.1, tz * 0.22 - 5.4, seed, 3);
-  return 0.55 + noise * 0.55;
+  const world = getTileCenter(tx, tz);
+  const radius = Math.hypot(world.x, world.z);
+  const layout = getRadialKothLayout(seed);
+  if (radius <= layout.centerValleyRadius) return 0.18;
+  const undulation = fbm2D(world.x * 0.018 + 2.4, world.z * 0.018 - 1.7, seed + 1700, 3);
+  return 0.28 + undulation * 1.35;
 }
 
 export type GeneratedTile = {
@@ -511,18 +605,64 @@ export type GeneratedTile = {
   canWalk: boolean;
 };
 
-export function getTerrainVertexHeight(vx: number, vz: number, seed: number): number {
-  const noise = fbm2D(vx * 0.085 + 11.1, vz * 0.085 - 5.4, seed, 3);
-  if (noise < GAME_RULES.TERRAIN_HEIGHT_THRESHOLD) return 0;
-  const t = (noise - GAME_RULES.TERRAIN_HEIGHT_THRESHOLD) / (1 - GAME_RULES.TERRAIN_HEIGHT_THRESHOLD);
-  return Math.pow(Math.max(0, t), 2.35) * GAME_RULES.TERRAIN_HEIGHT_SCALE;
+export function getTerrainVertexHeight(
+  vx: number,
+  vz: number,
+  seed: number,
+  playerCount = GAME_RULES.TARGET_PLAYERS_PER_ROOM
+): number {
+  const layout = getRadialKothLayout(seed, playerCount);
+  const x = GAME_RULES.WORLD_MIN + vx * GAME_RULES.TILE_SIZE;
+  const z = GAME_RULES.WORLD_MIN + vz * GAME_RULES.TILE_SIZE;
+  const radius = Math.hypot(x, z);
+
+  if (radius <= layout.centerValleyRadius) {
+    const bowl = clamp01(radius / Math.max(1, layout.centerValleyRadius));
+    const floorNoise = fbm2D(x * 0.012 + 9.4, z * 0.012 - 14.8, seed + 1200, 2);
+    return 0.08 + bowl * 0.42 + floorNoise * 0.14;
+  }
+
+  const gentleNoise = fbm2D(x * 0.018 + 2.4, z * 0.018 - 1.7, seed + 1700, 3);
+  const ripple = fbm2D(x * 0.046 - 9.2, z * 0.046 + 14.1, seed + 2200, 2);
+  const outerRise = clamp01((radius - layout.centerValleyRadius) / (layout.spawnRadius + 120 - layout.centerValleyRadius));
+  const openGroundHeight = Math.min(
+    2.35,
+    0.22 + gentleNoise * 1.15 + ripple * 0.45 + outerRise * 0.9
+  );
+
+  const angle = Math.atan2(z, x);
+  const boundaryDistance = getNearestMountainBoundaryDistance(angle, layout);
+  const widthNoise = fbm2D(x * 0.011 + 17.4, z * 0.011 - 31.2, seed + 4400, 2);
+  const boundaryWidth = layout.mountainHalfAngle + (widthNoise - 0.5) * layout.sectorAngle * 0.05;
+  const boundaryStrength = 1 - boundaryDistance / Math.max(0.025, boundaryWidth);
+
+  if (
+    boundaryStrength <= 0 ||
+    radius >= Math.max(Math.abs(GAME_RULES.WORLD_MIN), Math.abs(GAME_RULES.WORLD_MAX)) - 18
+  ) {
+    return openGroundHeight;
+  }
+
+  const spawnDistance = getNearestSpawnDistance(x, z, layout);
+  const spawnGate = smoothstep(clamp01((spawnDistance - layout.startClearRadius) / 30));
+  const centerGate = smoothstep(clamp01((radius - layout.centerValleyRadius) / 28));
+  const ridgeNoise = fbm2D(x * 0.021 + 4.1, z * 0.021 - 7.9, seed + 5100, 3);
+  const ridgeStrength = boundaryStrength * spawnGate * centerGate * (0.84 + ridgeNoise * 0.5);
+
+  if (ridgeStrength <= 0.26) return openGroundHeight;
+  return 9.6 + ridgeStrength * 18 + ridgeNoise * 4.6;
 }
 
-export function generateTile(tx: number, tz: number, seed: number): GeneratedTile {
-  const rawH00 = getTerrainVertexHeight(tx, tz, seed);
-  const rawH10 = getTerrainVertexHeight(tx + 1, tz, seed);
-  const rawH11 = getTerrainVertexHeight(tx + 1, tz + 1, seed);
-  const rawH01 = getTerrainVertexHeight(tx, tz + 1, seed);
+export function generateTile(
+  tx: number,
+  tz: number,
+  seed: number,
+  playerCount = GAME_RULES.TARGET_PLAYERS_PER_ROOM
+): GeneratedTile {
+  const rawH00 = getTerrainVertexHeight(tx, tz, seed, playerCount);
+  const rawH10 = getTerrainVertexHeight(tx + 1, tz, seed, playerCount);
+  const rawH11 = getTerrainVertexHeight(tx + 1, tz + 1, seed, playerCount);
+  const rawH01 = getTerrainVertexHeight(tx, tz + 1, seed, playerCount);
   const rawHeight = (rawH00 + rawH10 + rawH11 + rawH01) * 0.25;
   const isMountain = rawHeight > GAME_RULES.MOUNTAIN_THRESHOLD;
   const h00 = rawH00;
@@ -530,14 +670,6 @@ export function generateTile(tx: number, tz: number, seed: number): GeneratedTil
   const h11 = rawH11;
   const h01 = rawH01;
   const height = rawHeight;
-  const forestField = fbm2D(tx * 0.12 + 40.2, tz * 0.12 - 13.4, seed + 1700, 4);
-  const clusterField = fbm2D(tx * 0.36 - 8.1, tz * 0.36 + 19.6, seed + 8100, 3);
-  const hasForest = !isMountain && forestField > 0.6 && clusterField > 0.52;
-  const maxMaterial = hasForest
-    ? Math.round(
-        GAME_RULES.FOREST_WOOD_MAX * (0.45 + (forestField - 0.6) * 1.1 + (clusterField - 0.52) * 0.8)
-      )
-    : 0;
 
   return {
     key: getTileKey(tx, tz),
@@ -548,9 +680,9 @@ export function generateTile(tx: number, tz: number, seed: number): GeneratedTil
     h11,
     h01,
     height,
-    tileType: hasForest ? TileType.FOREST : TileType.GRASS,
-    material: Math.max(0, maxMaterial),
-    maxMaterial: Math.max(0, maxMaterial),
+    tileType: TileType.GRASS,
+    material: 0,
+    maxMaterial: 0,
     compute: 0,
     maxCompute: 0,
     isMountain,
@@ -559,81 +691,114 @@ export function generateTile(tx: number, tz: number, seed: number): GeneratedTil
   };
 }
 
-function seededFraction(seed: number, salt: number): number {
-  const x = Math.sin(seed * 12.9898 + salt * 78.233 + salt * salt * 0.001) * 43758.5453123;
-  return x - Math.floor(x);
+function setGrassTile(tile: GeneratedTile): void {
+  tile.tileType = TileType.GRASS;
+  tile.material = 0;
+  tile.maxMaterial = 0;
 }
 
-function shuffleTilesInPlace(tiles: GeneratedTile[], seed: number): void {
-  for (let i = tiles.length - 1; i > 0; i--) {
-    const j = Math.floor(seededFraction(seed + i * 167, i) * (i + 1));
-    const t = tiles[i]!;
-    tiles[i] = tiles[j]!;
-    tiles[j] = t;
+function setForestTile(tile: GeneratedTile, amount: number): void {
+  if (tile.isMountain) return;
+  tile.tileType = TileType.FOREST;
+  tile.material = Math.max(tile.material, amount);
+  tile.maxMaterial = Math.max(tile.maxMaterial, amount);
+}
+
+function setComputeTile(tile: GeneratedTile, amount: number): void {
+  if (tile.isMountain) return;
+  tile.compute = Math.max(tile.compute, amount);
+  tile.maxCompute = Math.max(tile.maxCompute, amount);
+}
+
+function stampForestPatch(
+  tiles: Map<string, GeneratedTile>,
+  centerX: number,
+  centerZ: number,
+  amountScale: number
+): void {
+  const { tx, tz } = getTileCoordsFromWorld(centerX, centerZ);
+  const patch = [
+    { dx: 0, dz: 0, weight: 1.0 },
+    { dx: 1, dz: 0, weight: 0.84 },
+    { dx: -1, dz: 0, weight: 0.84 },
+    { dx: 0, dz: 1, weight: 0.84 },
+    { dx: 0, dz: -1, weight: 0.84 },
+    { dx: 1, dz: 1, weight: 0.7 },
+    { dx: -1, dz: 1, weight: 0.7 },
+    { dx: 1, dz: -1, weight: 0.7 },
+    { dx: -1, dz: -1, weight: 0.7 },
+    { dx: 2, dz: 0, weight: 0.54 },
+    { dx: -2, dz: 0, weight: 0.54 },
+    { dx: 0, dz: 2, weight: 0.54 },
+    { dx: 0, dz: -2, weight: 0.54 },
+  ] as const;
+
+  for (const entry of patch) {
+    const tile = tiles.get(getTileKey(tx + entry.dx, tz + entry.dz));
+    if (!tile) continue;
+    const amount = Math.round(GAME_RULES.FOREST_WOOD_MAX * amountScale * entry.weight);
+    setForestTile(tile, Math.max(1, amount));
   }
 }
 
-function tileChebyshev(a: GeneratedTile, b: GeneratedTile): number {
-  return Math.max(Math.abs(a.tx - b.tx), Math.abs(a.tz - b.tz));
+function stampComputeSite(tiles: Map<string, GeneratedTile>, worldX: number, worldZ: number, amount: number): void {
+  const { tx, tz } = getTileCoordsFromWorld(worldX, worldZ);
+  const tile = tiles.get(getTileKey(tx, tz));
+  if (!tile) return;
+  setComputeTile(tile, amount);
 }
 
-function datacenterSiteTarget(seed: number, eligibleCount: number): number {
-  const cap = Math.min(GAME_RULES.DATACENTER_MAX_SITES_PER_WORLD, eligibleCount);
-  if (cap < GAME_RULES.DATACENTER_MIN_SITES_PER_WORLD) return cap;
-  const u = seededFraction(seed, 501);
-  if (u < 0.1 && cap >= 3) return 3;
-  return 2;
-}
+function stampCentralServer(tiles: Map<string, GeneratedTile>): void {
+  const center = snapWorldToTileCenter(0, 0);
+  const { tx, tz } = getTileCoordsFromWorld(center.x, center.z);
+  const cluster = [
+    { dx: 0, dz: 0, weight: 1.0 },
+    { dx: 1, dz: 0, weight: 0.72 },
+    { dx: -1, dz: 0, weight: 0.72 },
+    { dx: 0, dz: 1, weight: 0.72 },
+    { dx: 0, dz: -1, weight: 0.72 },
+  ] as const;
 
-/**
- * After all tiles exist: pick a small, well-separated set of non-mountain tiles for compute sites.
- * No noise blobs — sparse, seed-stable, at least {@link GAME_RULES.DATACENTER_MIN_SITES_PER_WORLD} sites.
- */
-function greedySpacedSites(eligible: GeneratedTile[], wantCount: number, sep: number): GeneratedTile[] {
-  const picked: GeneratedTile[] = [];
-  for (const t of eligible) {
-    if (picked.length >= wantCount) break;
-    if (picked.every((c) => tileChebyshev(c, t) >= sep)) picked.push(t);
+  for (const entry of cluster) {
+    const tile = tiles.get(getTileKey(tx + entry.dx, tz + entry.dz));
+    if (!tile) continue;
+    const amount = Math.round(GAME_RULES.KOTH_CENTER_SERVER_COMPUTE * entry.weight);
+    setComputeTile(tile, amount);
   }
-  return picked;
 }
 
-export function assignDatacenterSites(tiles: Map<string, GeneratedTile>, seed: number): void {
-  const eligible: GeneratedTile[] = [];
+export function decorateRadialKothResources(
+  tiles: Map<string, GeneratedTile>,
+  seed: number,
+  playerCount = GAME_RULES.TARGET_PLAYERS_PER_ROOM
+): void {
+  const layout = getRadialKothLayout(seed, playerCount);
+
   tiles.forEach((t) => {
-    if (!t.isMountain) eligible.push(t);
+    setGrassTile(t);
+    t.compute = 0;
+    t.maxCompute = 0;
   });
 
-  const target = datacenterSiteTarget(seed, eligible.length);
-  if (target <= 0 || eligible.length === 0) return;
+  const forestScale = 0.34 + seededFraction(seed, 921) * 0.08;
+  for (let playerIndex = 0; playerIndex < layout.playerCount; playerIndex++) {
+    const spawnAngle = getSectorAngle(playerIndex, layout);
+    const spawn = polarToWorld(layout.spawnRadius, spawnAngle);
 
-  shuffleTilesInPlace(eligible, seed ^ 0x6f4c_29f3);
-
-  const maxSep = GAME_RULES.DATACENTER_MIN_CHEBYSHEV_TILES;
-  let chosen: GeneratedTile[] = [];
-
-  for (let sep = maxSep; sep >= 1; sep--) {
-    chosen = greedySpacedSites(eligible, target, sep);
-    if (chosen.length >= target) break;
-  }
-
-  if (chosen.length < GAME_RULES.DATACENTER_MIN_SITES_PER_WORLD) {
-    for (let sep = maxSep; sep >= 1; sep--) {
-      chosen = greedySpacedSites(eligible, GAME_RULES.DATACENTER_MIN_SITES_PER_WORLD, sep);
-      if (chosen.length >= GAME_RULES.DATACENTER_MIN_SITES_PER_WORLD) break;
+    for (const dir of [-1, 1] as const) {
+      const forestAngle = spawnAngle + dir * layout.forestAngleOffset;
+      const fx = spawn.x + Math.cos(forestAngle) * layout.forestDistance;
+      const fz = spawn.z + Math.sin(forestAngle) * layout.forestDistance;
+      stampForestPatch(tiles, fx, fz, forestScale);
     }
+
+    const computeAngle = spawnAngle + layout.computeSideSign * layout.computeAngleOffset;
+    const computeX = spawn.x + Math.cos(computeAngle) * layout.computeDistance;
+    const computeZ = spawn.z + Math.sin(computeAngle) * layout.computeDistance;
+    stampComputeSite(tiles, computeX, computeZ, GAME_RULES.KOTH_PLAYER_COMPUTE);
   }
 
-  if (chosen.length < GAME_RULES.DATACENTER_MIN_SITES_PER_WORLD) {
-    chosen = eligible.slice(0, GAME_RULES.DATACENTER_MIN_SITES_PER_WORLD);
-  }
-
-  for (const t of chosen) {
-    const fr = seededFraction(seed + t.tx * 3_571 + t.tz * 8_923, 1);
-    const amount = Math.round(GAME_RULES.DATACENTER_COMPUTE_MAX * (0.52 + fr * 0.42));
-    t.compute = Math.max(1, amount);
-    t.maxCompute = t.compute;
-  }
+  stampCentralServer(tiles);
 }
 
 export function getSquadArea(unitCount: number): number {

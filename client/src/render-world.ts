@@ -71,7 +71,7 @@ export function createRenderWorld(game: Game): RenderWorld {
   const { scene } = game;
   const world = {} as RenderWorld;
   const canvas = document.createElement("canvas");
-  canvas.style.cssText = "display:block;width:100%;height:100%;";
+  canvas.style.cssText = "display:block;width:100%;height:100%;touch-action:none;";
   document.body.appendChild(canvas);
 
   const renderer = new THREE.WebGLRenderer({

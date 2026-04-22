@@ -47,5 +47,18 @@ EOF
 echo "==> Health checks"
 curl --fail --silent --show-error "${DEPLOY_DOMAIN%/}${PUBLIC_BASE}" >/dev/null
 curl --fail --silent --show-error "${DEPLOY_DOMAIN%/}${PUBLIC_BASE}colyseus/" >/dev/null
+INDEX_HEADERS="$(curl -I --silent --show-error "${DEPLOY_DOMAIN%/}${PUBLIC_BASE}")"
+ASSET_PATH="$(cd "${ROOT_DIR}/client/dist/assets" && ls index-*.js | head -n 1)"
+ASSET_HEADERS="$(curl -I --silent --show-error "${DEPLOY_DOMAIN%/}${PUBLIC_BASE}assets/${ASSET_PATH}")"
+
+echo "${INDEX_HEADERS}" | grep -Eiq 'cache-control:.*(no-store|max-age=0)' || {
+  echo "ERROR: ${PUBLIC_BASE} is missing a no-cache Cache-Control header" >&2
+  exit 1
+}
+
+echo "${ASSET_HEADERS}" | grep -Eiq 'cache-control:.*immutable' || {
+  echo "ERROR: ${PUBLIC_BASE}assets/${ASSET_PATH} is missing an immutable Cache-Control header" >&2
+  exit 1
+}
 
 echo "Release published successfully to ${DEPLOY_DOMAIN%/}${PUBLIC_BASE}"

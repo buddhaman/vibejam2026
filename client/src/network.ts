@@ -1,4 +1,5 @@
 import { Client, type Room } from "@colyseus/sdk";
+import { CLIENT_PROTOCOL_VERSION } from "../../shared/protocol.js";
 
 function normalizedBasePath(): string {
   const raw = import.meta.env.BASE_URL || "/";
@@ -24,7 +25,9 @@ function colyseusEndpoint(): string {
 
 export async function joinBattle(): Promise<Room> {
   const client = new Client(colyseusEndpoint());
-  return client.joinOrCreate("battle");
+  return client.joinOrCreate("battle", {
+    protocolVersion: CLIENT_PROTOCOL_VERSION,
+  });
 }
 
 /** Wait until synced state exposes the `blobs` collection. */

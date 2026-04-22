@@ -1,4 +1,4 @@
-import { Room, type Client } from "colyseus";
+import { Room, ServerError, type Client } from "colyseus";
 import { GameState, Player, Blob, Building } from "./state.js";
 import { CONFIG } from "./config.js";
 import {
@@ -7,8 +7,9 @@ import {
   UnitType,
   canBuildingProduceUnit,
   canAfford,
-  assignDatacenterSites,
+  decorateRadialKothResources,
   generateTile,
+  getPlayerSpawnPoint,
   getBuildingRules,
   getTileCenter,
   getBlobMaxHealth,
@@ -37,6 +38,8 @@ import {
   BlobGatherPhase,
   CarriedResourceType,
   type AttackMessage,
+  type ChatBroadcastMessage,
+  type ChatMessage,
   type BlobAggroMessage,
   type GatherMessage,
   MessageType,
@@ -49,6 +52,9 @@ import {
   type TileChunkMessage,
   type TilesRequestMessage,
   type TileUpdateMessage,
+  type SetNameMessage,
+  type SystemNoticeMessage,
+  CLIENT_PROTOCOL_VERSION,
 } from "../../shared/protocol.js";
 import { findPath, type Waypoint } from "./astar.js";
 import { assignPlayerPaletteColor } from "../../shared/player-colors.js";
@@ -72,14 +78,65 @@ const VILLAGER_DROP_OFF_PADDING = GAME_RULES.TILE_SIZE * 0.35;
 const VILLAGER_CARRY_PER_UNIT = 12;
 const VILLAGER_PICKUP_MS = 1000;
 const VILLAGER_DROPOFF_MS = 1000;
+const CHAT_MAX_CHARS = 280;
+
+const NAME_ADJECTIVES = [
+  "Amber",
+  "Brisk",
+  "Circuit",
+  "Clever",
+  "Copper",
+  "Crimson",
+  "Echo",
+  "Feral",
+  "Ghost",
+  "Golden",
+  "Lucky",
+  "Moss",
+  "Rapid",
+  "Silver",
+  "Solar",
+  "Velvet",
+] as const;
+
+const NAME_NOUNS = [
+  "Atlas",
+  "Beacon",
+  "Citadel",
+  "Cobra",
+  "Comet",
+  "Forge",
+  "Harbor",
+  "Kestrel",
+  "Lancer",
+  "Lotus",
+  "Nomad",
+  "Oracle",
+  "Ranger",
+  "Signal",
+  "Tempest",
+  "Vector",
+] as const;
 
 type AttackableTarget =
   | { type: typeof AttackTargetType.BLOB; entity: Blob }
   | { type: typeof AttackTargetType.BUILDING; entity: Building };
 
+function sanitizePlayerName(raw: unknown): string {
+  if (typeof raw !== "string") return "";
+  return raw.replace(/\s+/g, " ").trim().slice(0, 20);
+}
+
+function makeRandomName(): string {
+  const adjective = NAME_ADJECTIVES[Math.floor(Math.random() * NAME_ADJECTIVES.length)]!;
+  const noun = NAME_NOUNS[Math.floor(Math.random() * NAME_NOUNS.length)]!;
+  const suffix = Math.floor(10 + Math.random() * 90);
+  return `${adjective}${noun}${suffix}`;
+}
+
 /** @see https://docs.colyseus.io/state/ — state is assigned on the class in 0.17+ */
 export class BattleRoom extends Room<{ state: GameState }> {
-  maxClients = 64;
+  maxClients = CONFIG.TARGET_PLAYERS_PER_ROOM;
   state = new GameState();
 
   /** Plain tile data — NOT in schema, streamed on demand. */
@@ -88,6 +145,7 @@ export class BattleRoom extends Room<{ state: GameState }> {
   /** How many building footprints cover each tile (any owner). */
   private buildingTileOcc = new Map<string, number>();
   private walkBlockingBuildingTileOcc = new Map<string, number>();
+  private playerSpawnSlots = new Map<string, number>();
   /** Active A* paths per blob — server-side only, not part of schema. */
   private blobPaths = new Map<string, { waypoints: Waypoint[]; index: number }>();
   /** Pairwise "do not instantly re-engage" locks, used when fast units break contact. */
@@ -96,6 +154,17 @@ export class BattleRoom extends Room<{ state: GameState }> {
   private combatLinks = new Set<string>();
   /** Explicit retreat orders issued while in melee combat; keeps combat-state rules separate from pathing. */
   private combatRetreatTargets = new Map<string, { x: number; y: number }>();
+
+  static async onAuth(_token: string, options: unknown) {
+    const protocolVersion =
+      typeof options === "object" && options !== null && "protocolVersion" in options
+        ? Number((options as { protocolVersion?: unknown }).protocolVersion)
+        : NaN;
+    if (protocolVersion !== CLIENT_PROTOCOL_VERSION) {
+      throw new ServerError(4000, "Client is out of date. Refresh to load the latest build.");
+    }
+    return true;
+  }
 
   onCreate() {
     this.state.terrainSeed = Math.floor(Math.random() * 0xffffffff);
@@ -216,6 +285,30 @@ export class BattleRoom extends Room<{ state: GameState }> {
       blob.aggroMode = msg.aggroMode;
     });
 
+    this.onMessage(MessageType.SET_NAME, (client, raw) => {
+      const msg = raw as SetNameMessage;
+      const player = this.state.players.get(client.sessionId);
+      if (!player) return;
+      const nextName = sanitizePlayerName(msg?.name);
+      if (!nextName || nextName === player.name) return;
+      const prevName = player.name;
+      player.name = nextName;
+      this.broadcastSystemNotice(`${prevName} is now ${nextName}.`, "rename");
+    });
+
+    this.onMessage(MessageType.CHAT, (client, raw) => {
+      const msg = raw as ChatMessage;
+      const player = this.state.players.get(client.sessionId);
+      const text = typeof msg?.text === "string" ? msg.text.replace(/\s+/g, " ").trim().slice(0, CHAT_MAX_CHARS) : "";
+      if (!player || !text) return;
+      this.broadcast(MessageType.CHAT, {
+        senderId: client.sessionId,
+        senderName: player.name,
+        text,
+        sentAt: Date.now(),
+      } satisfies ChatBroadcastMessage);
+    });
+
     this.onMessage(MessageType.BUILD, (client, raw) => {
       const msg = raw as BuildMessage;
       if (
@@ -279,8 +372,10 @@ export class BattleRoom extends Room<{ state: GameState }> {
   }
 
   onJoin(client: Client) {
+    const playerIndex = this.allocateSpawnSlot();
     const player = new Player();
     player.sessionId = client.sessionId;
+    player.name = makeRandomName();
     const taken: number[] = [];
     this.state.players.forEach((p) => taken.push(p.color));
     player.color = assignPlayerPaletteColor(taken);
@@ -288,18 +383,21 @@ export class BattleRoom extends Room<{ state: GameState }> {
     player.material = CONFIG.START_MATERIAL;
     player.compute = CONFIG.START_COMPUTE;
     this.state.players.set(client.sessionId, player);
+    this.playerSpawnSlots.set(client.sessionId, playerIndex);
 
-    const playerIndex = this.getNextTownCenterIndex();
     const townCenter = this.spawnTownCenter(client.sessionId, playerIndex);
     this.spawnStartingBlob(townCenter, UnitType.VILLAGER, CONFIG.START_AGENT_UNIT_COUNT, 0);
     this.spawnStartingBlob(townCenter, UnitType.WARBAND, CONFIG.START_WARBAND_UNIT_COUNT, 1);
     this.spawnStartingBlob(townCenter, UnitType.ARCHER, CONFIG.START_ARCHER_UNIT_COUNT, 2);
     this.spawnStartingBlob(townCenter, UnitType.SYNTHAUR, CONFIG.START_SYNTHAUR_UNIT_COUNT, 3);
+    this.broadcastSystemNotice(`${player.name} joined the battle.`, "join");
   }
 
   onLeave(client: Client, _code: number) {
     const sid = client.sessionId;
+    const playerName = this.state.players.get(sid)?.name ?? "A player";
     this.state.players.delete(sid);
+    this.playerSpawnSlots.delete(sid);
 
     const blobIds: string[] = [];
     this.state.blobs.forEach((b, id) => {
@@ -320,6 +418,16 @@ export class BattleRoom extends Room<{ state: GameState }> {
       if (b) this.removeBuildingFootprint(b);
       this.state.buildings.delete(id);
     }
+
+    this.broadcastSystemNotice(`${playerName} left the battle.`, "leave");
+  }
+
+  private broadcastSystemNotice(text: string, kind: SystemNoticeMessage["kind"]): void {
+    this.broadcast(MessageType.SYSTEM_NOTICE, {
+      text,
+      kind,
+      sentAt: Date.now(),
+    } satisfies SystemNoticeMessage, { afterNextPatch: true });
   }
 
   private getBlobEngageDistance(a: Blob, b: Blob): number {
@@ -1114,12 +1222,18 @@ export class BattleRoom extends Room<{ state: GameState }> {
     }
   }
 
+  private allocateSpawnSlot(): number {
+    const taken = new Set(this.playerSpawnSlots.values());
+    for (let i = 0; i < this.maxClients; i++) {
+      if (!taken.has(i)) return i;
+    }
+    return Math.max(0, this.playerSpawnSlots.size % Math.max(1, this.maxClients));
+  }
+
   private spawnTownCenter(ownerId: string, playerIndex: number): Building {
     const tcRules = getBuildingRules(BuildingType.TOWN_CENTER);
-    const angle = playerIndex * 1.63;
-    const radius = (CONFIG.WORLD_MAX - CONFIG.WORLD_MIN) * 0.225;
     const snapped = this.findNearestBuildableTileCenter(
-      snapWorldToTileCenter(Math.cos(angle) * radius, Math.sin(angle) * radius),
+      getPlayerSpawnPoint(playerIndex, this.maxClients, this.state.terrainSeed),
       tcRules.footprintWidth,
       tcRules.footprintDepth
     );
@@ -1134,14 +1248,6 @@ export class BattleRoom extends Room<{ state: GameState }> {
     this.state.buildings.set(townCenter.id, townCenter);
     this.addBuildingFootprint(townCenter);
     return townCenter;
-  }
-
-  private getNextTownCenterIndex() {
-    let count = 0;
-    this.state.buildings.forEach((building) => {
-      if (building.buildingType === BuildingType.TOWN_CENTER) count++;
-    });
-    return count;
   }
 
   private getTileAtWorld(x: number, z: number): TileData | null {
@@ -1249,11 +1355,11 @@ export class BattleRoom extends Room<{ state: GameState }> {
     const datacenterSampleKeys: string[] = [];
     for (let tz = 0; tz < count; tz++) {
       for (let tx = 0; tx < count; tx++) {
-        const t = generateTile(tx, tz, this.state.terrainSeed);
+        const t = generateTile(tx, tz, this.state.terrainSeed, this.maxClients);
         this.tileData.set(t.key, t);
       }
     }
-    assignDatacenterSites(this.tileData, this.state.terrainSeed);
+    decorateRadialKothResources(this.tileData, this.state.terrainSeed, this.maxClients);
     this.tileData.forEach((t) => {
       if (t.maxCompute > 0) {
         datacenterTiles++;

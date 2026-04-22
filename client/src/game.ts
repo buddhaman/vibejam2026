@@ -20,6 +20,8 @@ import {
   BlobGatherPhase,
   CarriedResourceType,
   type AttackMessage,
+  type ChatBroadcastMessage,
+  type ChatMessage,
   type BlobAggroMessage,
   type GatherMessage,
   MessageType,
@@ -31,6 +33,8 @@ import {
   type TileChunkMessage,
   type TileUpdateMessage,
   type TilesRequestMessage,
+  type SetNameMessage,
+  type SystemNoticeMessage,
 } from "../../shared/protocol.js";
 import { BlobEntity } from "./blob-entity.js";
 import { BuildingEntity } from "./building-entity.js";
@@ -43,6 +47,7 @@ import { type TileView } from "./terrain.js";
 
 export class Game {
   private static readonly FLOATING_RESOURCE_TEXT_LIFE = 1.15;
+  private static readonly UI_FEED_MAX = 32;
 
   public room: Room;
   public scene: THREE.Scene;
@@ -86,6 +91,10 @@ export class Game {
     resourceType: number;
     bornAt: number;
   }> = [];
+  private _uiFeed: Array<
+    | ({ type: "chat"; senderId: string; senderName: string; text: string; sentAt: number } & { id: string })
+    | ({ type: "system"; text: string; kind: SystemNoticeMessage["kind"]; sentAt: number } & { id: string })
+  > = [];
 
   /** Updated every frame by `render.ts` for zoom-dependent squad affordances. */
   private _orbitCameraDistance = 165;
@@ -104,6 +113,32 @@ export class Game {
         this._blobPaths.set(msg.blobId, msg.waypoints);
       }
     });
+    this.room.onMessage(MessageType.CHAT, (msg: ChatBroadcastMessage) => {
+      this._uiFeed.push({
+        id: `chat:${msg.sentAt}:${msg.senderId}:${this._uiFeed.length}`,
+        type: "chat",
+        senderId: msg.senderId,
+        senderName: msg.senderName,
+        text: msg.text,
+        sentAt: msg.sentAt,
+      });
+      this.trimUiFeed();
+    });
+    this.room.onMessage(MessageType.SYSTEM_NOTICE, (msg: SystemNoticeMessage) => {
+      this._uiFeed.push({
+        id: `sys:${msg.sentAt}:${msg.kind}:${this._uiFeed.length}`,
+        type: "system",
+        text: msg.text,
+        kind: msg.kind,
+        sentAt: msg.sentAt,
+      });
+      this.trimUiFeed();
+    });
+  }
+
+  private trimUiFeed(): void {
+    if (this._uiFeed.length <= Game.UI_FEED_MAX) return;
+    this._uiFeed.splice(0, this._uiFeed.length - Game.UI_FEED_MAX);
   }
 
   /**
@@ -571,6 +606,23 @@ export class Game {
     };
   }
 
+  public getMyPlayerName(): string {
+    const player = this.room.state.players.get(this.room.sessionId) as { name?: string } | undefined;
+    return player?.name ?? "Player";
+  }
+
+  public getPlayerName(sessionId: string): string {
+    const player = this.room.state.players.get(sessionId) as { name?: string } | undefined;
+    return player?.name ?? `Player ${sessionId.slice(0, 4)}`;
+  }
+
+  public getUiFeed(): ReadonlyArray<
+    | { id: string; type: "chat"; senderId: string; senderName: string; text: string; sentAt: number }
+    | { id: string; type: "system"; text: string; kind: SystemNoticeMessage["kind"]; sentAt: number }
+  > {
+    return this._uiFeed;
+  }
+
   /** A* path for a blob (owner-client only). Null when no active path. */
   public getBlobPath(id: string): { x: number; y: number }[] | null {
     return this._blobPaths.get(id) ?? null;
@@ -823,6 +875,18 @@ export class Game {
 
   public sendBlobAggroIntent(blobId: string, aggroMode: number): void {
     this.room.send(MessageType.BLOB_AGGRO, { blobId, aggroMode } satisfies BlobAggroMessage);
+  }
+
+  public sendChat(text: string): void {
+    const message = text.replace(/\s+/g, " ").trim().slice(0, 280);
+    if (!message) return;
+    this.room.send(MessageType.CHAT, { text: message } satisfies ChatMessage);
+  }
+
+  public sendRename(name: string): void {
+    const nextName = name.replace(/\s+/g, " ").trim().slice(0, 20);
+    if (!nextName || nextName === this.getMyPlayerName()) return;
+    this.room.send(MessageType.SET_NAME, { name: nextName } satisfies SetNameMessage);
   }
 
   public runSelectionAction(actionId: string): void {

@@ -178,39 +178,44 @@ function selectionActionRects(W: number, H: number, count: number): Rect[] {
   }));
 }
 
-function menuLayout(sx: number, sy: number) {
-  const W = window.innerWidth;
-  const H = window.innerHeight;
-  const ITEM_W   = 112;
-  const ITEM_H   = 92;
-  const PAD      = 16;
-  const GAP      = 10;
-  const TITLE_H  = 38;
-  const count    = BUILD_ITEMS.length;
-  const menuW    = PAD * 2 + count * ITEM_W + (count - 1) * GAP;
-  const menuH    = TITLE_H + ITEM_H + PAD;
-
-  let mx = sx - menuW / 2;
-  let my = sy - menuH - 20;
-  mx = Math.max(8, Math.min(W - menuW - 8, mx));
-  my = Math.max(8, Math.min(H - menuH - 8, my));
-
-  const items = BUILD_ITEMS.map((item, i) => ({
-    ...item,
-    rect: { x: mx + PAD + i * (ITEM_W + GAP), y: my + TITLE_H, w: ITEM_W, h: ITEM_H } as Rect,
-  }));
-
-  return { panel: { x: mx, y: my, w: menuW, h: menuH } as Rect, items, anchor: { x: sx, y: sy } };
-}
 
 function inRect(px: number, py: number, r: Rect) {
   return px >= r.x && px <= r.x + r.w && py >= r.y && py <= r.y + r.h;
 }
 
+// ─── Layout helpers — build button & panel ───────────────────────────────────
+
+function buildButtonRect(W: number, H: number): Rect {
+  const top = H - BAR_H;
+  const rowMid = top + 24;
+  return { x: W - 96, y: rowMid - BUILD_BTN_H / 2, w: BUILD_BTN_W, h: BUILD_BTN_H };
+}
+
+function buildPanelLayout(W: number, H: number) {
+  const count = BUILD_ITEMS.length;
+  const totalItemW = count * BUILD_PANEL_ITEM_W + (count - 1) * BUILD_PANEL_GAP;
+  const panelW = totalItemW + BUILD_PANEL_PAD * 2;
+  const panelH = BUILD_PANEL_TITLE_H + BUILD_PANEL_ITEM_H + BUILD_PANEL_PAD;
+  const px = (W - panelW) * 0.5;
+  const py = H - BAR_H - panelH - 10;
+  const items = BUILD_ITEMS.map((item, i) => ({
+    ...item,
+    rect: {
+      x: px + BUILD_PANEL_PAD + i * (BUILD_PANEL_ITEM_W + BUILD_PANEL_GAP),
+      y: py + BUILD_PANEL_TITLE_H,
+      w: BUILD_PANEL_ITEM_W,
+      h: BUILD_PANEL_ITEM_H,
+    } as Rect,
+  }));
+  return { panel: { x: px, y: py, w: panelW, h: panelH } as Rect, items };
+}
+
 // ─── Hit-testing (public) ─────────────────────────────────────────────────────
 
-export function hitTestDeselect(x: number, y: number, selected: boolean): boolean {
-  return selected && inRect(x, y, closeBtnRect(window.innerWidth, window.innerHeight));
+/** True when the tap lands anywhere on the selection card (excluding action buttons, which are checked first). */
+export function hitTestSelectionCard(x: number, y: number, selected: SelectionInfo | null): boolean {
+  if (!selected) return false;
+  return inRect(x, y, selectionCardRect(window.innerWidth, window.innerHeight));
 }
 
 export function hitTestSelectionAction(x: number, y: number, selected: SelectionInfo | null): string | null {
@@ -222,13 +227,18 @@ export function hitTestSelectionAction(x: number, y: number, selected: Selection
   return null;
 }
 
-export function hitTestMenu(hud: HudState, x: number, y: number): BuildAction | "dismiss" | null {
-  if (!hud.buildMenu.visible) return null;
-  const { panel, items } = menuLayout(hud.buildMenu.screenX, hud.buildMenu.screenY);
+export function hitTestBuildButton(x: number, y: number): boolean {
+  return inRect(x, y, buildButtonRect(window.innerWidth, window.innerHeight));
+}
+
+/** Returns building type if a card was tapped, "inside" if tapped panel background, null if outside panel. */
+export function hitTestBuildPanel(x: number, y: number): BuildingTypeValue | "inside" | null {
+  const { panel, items } = buildPanelLayout(window.innerWidth, window.innerHeight);
+  if (!inRect(x, y, panel)) return null;
   for (const item of items) {
     if (inRect(x, y, item.rect)) return item.type;
   }
-  return inRect(x, y, panel) ? "dismiss" : null;
+  return "inside";
 }
 
 // ─── Main draw ────────────────────────────────────────────────────────────────
@@ -248,28 +258,26 @@ export function drawHUD(
   const H = canvas.height;
   ctx.clearRect(0, 0, W, H);
 
-  // Track animation state
   const cardKey = selected ? `${selected.title}:${selected.color}` : "";
   if (cardKey !== hud._cardKey) {
     hud._cardKey = cardKey;
     hud._cardEnterT = cardKey ? t : -999;
   }
 
-  if (hud.buildMenu.visible && !hud._menuWasVisible) hud._menuOpenT = t;
-  hud._menuWasVisible = hud.buildMenu.visible;
+  if (hud.buildPanelOpen && !hud._panelWasVisible) hud._panelOpenT = t;
+  hud._panelWasVisible = hud.buildPanelOpen;
 
   if (resources.biomass > hud._prevResources.biomass) hud._resourceBounce.biomass = t;
   if (resources.material > hud._prevResources.material) hud._resourceBounce.material = t;
   if (resources.compute > hud._prevResources.compute) hud._resourceBounce.compute = t;
   hud._prevResources = { biomass: resources.biomass, material: resources.material, compute: resources.compute };
 
-  // Draw layers
   drawMoveMarkers(ctx, hud, t);
   drawWarningToast(ctx, W, H, hud, t);
-  drawBottomBar(ctx, W, H, myColor, mySquadCount, resources, hud._resourceBounce, selected !== null, t);
+  drawBottomBar(ctx, W, H, myColor, mySquadCount, resources, hud._resourceBounce, selected !== null, hud, t);
   if (selected) drawSelectionCard(ctx, W, H, selected, t, hud._cardEnterT);
   if (!selected && selectedTile) drawTileCard(ctx, W, H, selectedTile);
-  if (hud.buildMenu.visible) drawBuildMenu(ctx, menuLayout(hud.buildMenu.screenX, hud.buildMenu.screenY), t, hud._menuOpenT);
+  if (hud.buildPanelOpen) drawBuildPanel(ctx, W, H, hud, t);
 }
 
 export function drawFloatingResourceTexts(
@@ -497,6 +505,7 @@ function drawBottomBar(
   resources: ResourceCost,
   bounce: HudState["_resourceBounce"],
   hasSelection: boolean,
+  hud: HudState,
   t: number
 ) {
   const top = H - BAR_H;
@@ -559,16 +568,25 @@ function drawBottomBar(
   drawResourcePill(ctx, 268, rowMid, "#8A7054", "#D4A84C",   "Material", resources.material, bounce.material, t, "M");
   drawResourcePill(ctx, 372, rowMid, "#00A8CC", DIVINE_CYAN, "Compute",  resources.compute,  bounce.compute,  t, "C");
 
-  // Hint text — own row under pills so long copy never collides with resource boxes
+  // BUILD button
+  drawBuildButton(ctx, W, H, hud.buildPanelOpen || hud.activeBuildType !== null, t);
+
+  // Hint text
   ctx.save();
   ctx.font = F_BODY_XS;
   ctx.fillStyle = MARBLE_MUTED;
   ctx.textBaseline = "middle";
   ctx.textAlign = "center";
-  const hint =
-    hasSelection
-      ? "tap ground → move  ·  double-tap → construct"
-      : "tap warrior → select  ·  double-tap ground → construct  ·  drag → pan  ·  arrows → orbit  ·  pinch → zoom";
+  let hint: string;
+  if (hud.activeBuildType !== null && !hud.buildPanelOpen) {
+    hint = "tap ground to place  ·  tap BUILD to cancel";
+  } else if (hud.buildPanelOpen) {
+    hint = "tap a building to place  ·  tap BUILD to cancel";
+  } else if (hasSelection) {
+    hint = "tap ground → move  ·  tap enemy → attack  ·  tap BUILD → construct";
+  } else {
+    hint = "tap unit → select  ·  tap BUILD → construct  ·  drag → pan  ·  pinch → zoom  ·  twist → rotate";
+  }
   ctx.fillText(hint, W * 0.5, hintY);
   ctx.restore();
 }
@@ -830,116 +848,112 @@ function drawSelectionCard(
   ctx.restore(); // close slide-in transform
 }
 
-// ─── Build menu ───────────────────────────────────────────────────────────────
+// ─── Build button ─────────────────────────────────────────────────────────────
 
-function drawBuildMenu(
-  ctx: CanvasRenderingContext2D,
-  layout: ReturnType<typeof menuLayout>,
-  t: number,
-  openT: number
-) {
-  const { panel, items, anchor } = layout;
-
-  const menuAge   = Math.max(0, t - openT);
-  const menuScale = menuAge < 0.4 ? easeOutBack(Math.min(1, menuAge / 0.28)) : 1;
-
+function drawBuildButton(ctx: CanvasRenderingContext2D, W: number, H: number, active: boolean, _t: number) {
+  const btn = buildButtonRect(W, H);
   ctx.save();
-  ctx.translate(anchor.x, anchor.y);
-  ctx.scale(menuScale, menuScale);
-  ctx.translate(-anchor.x, -anchor.y);
-
-  // Connector line — cyan dashed
-  ctx.save();
-  ctx.strokeStyle = CYAN_DIM;
-  ctx.lineWidth = 1.5;
-  ctx.setLineDash([3, 5]);
-  ctx.beginPath();
-  ctx.moveTo(panel.x + panel.w / 2, panel.y + panel.h);
-  ctx.lineTo(anchor.x, anchor.y);
-  ctx.stroke();
-  ctx.setLineDash([]);
+  if (active) {
+    ctx.shadowColor = GOLD_BRIGHT;
+    ctx.shadowBlur = 14;
+  }
+  ctx.fillStyle = active ? GOLD_BRIGHT : "rgba(10, 20, 42, 0.90)";
+  rr(ctx, btn.x, btn.y, btn.w, btn.h, 3); ctx.fill();
+  ctx.shadowBlur = 0;
+  ctx.strokeStyle = GOLD_BRIGHT;
+  ctx.lineWidth = active ? 2 : 1;
+  rr(ctx, btn.x, btn.y, btn.w, btn.h, 3); ctx.stroke();
+  ctx.fillStyle = active ? LAPIS_DEEP : GOLD_TEXT;
+  ctx.font = "700 10px 'Cinzel', serif";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.letterSpacing = "2px";
+  ctx.fillText("BUILD", btn.x + btn.w * 0.5, btn.y + btn.h * 0.5);
   ctx.restore();
+}
 
-  drawPanel(ctx, panel.x, panel.y, panel.w, panel.h, 4);
+// ─── Build panel (fixed bottom) ───────────────────────────────────────────────
 
-  // "CONSTRUCT" title in Cinzel
+function drawBuildPanel(ctx: CanvasRenderingContext2D, W: number, H: number, hud: HudState, t: number) {
+  const { panel, items } = buildPanelLayout(W, H);
+  const panelAge = Math.max(0, t - hud._panelOpenT);
+  const slideT   = panelAge < 0.32 ? easeOutBack(Math.min(1, panelAge / 0.26)) : 1;
+  const yOff     = (1 - slideT) * (panel.h + 14);
+
+  ctx.save();
+  ctx.translate(0, yOff);
+
+  drawPanel(ctx, panel.x, panel.y, panel.w, panel.h, 5);
+
   ctx.save();
   ctx.font = "700 11px 'Cinzel', serif";
   ctx.fillStyle = GOLD_TEXT;
-  ctx.textBaseline = "middle";
   ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
   ctx.letterSpacing = "4px";
-  ctx.fillText("CONSTRUCT", panel.x + panel.w / 2, panel.y + 19);
+  ctx.fillText("CONSTRUCT", panel.x + panel.w * 0.5, panel.y + 16);
   ctx.restore();
 
-  // Divider with small laurel dots
   ctx.save();
   ctx.strokeStyle = GOLD_DIM;
   ctx.lineWidth = 1;
   ctx.beginPath();
-  ctx.moveTo(panel.x + 14, panel.y + 32);
-  ctx.lineTo(panel.x + panel.w - 14, panel.y + 32);
+  ctx.moveTo(panel.x + 14, panel.y + BUILD_PANEL_TITLE_H);
+  ctx.lineTo(panel.x + panel.w - 14, panel.y + BUILD_PANEL_TITLE_H);
   ctx.stroke();
-  // Small diamond accents at divider ends
-  drawDiamond(ctx, panel.x + 14, panel.y + 32, 3, GOLD_BRIGHT);
-  drawDiamond(ctx, panel.x + panel.w - 14, panel.y + 32, 3, GOLD_BRIGHT);
+  drawDiamond(ctx, panel.x + 14, panel.y + BUILD_PANEL_TITLE_H, 3, GOLD_BRIGHT);
+  drawDiamond(ctx, panel.x + panel.w - 14, panel.y + BUILD_PANEL_TITLE_H, 3, GOLD_BRIGHT);
   ctx.restore();
 
   for (let i = 0; i < items.length; i++) {
-    const item  = items[i];
-    const pulse = 1 + 0.035 * Math.sin(t * 2.8 + i * 1.1);
-    const glowA = 0.4 + 0.25 * Math.sin(t * 2.2 + i * 1.3);
+    const item     = items[i];
+    const isActive = hud.activeBuildType === item.type;
+    const pulse    = isActive ? 1.04 : 1 + 0.025 * Math.sin(t * 2.8 + i * 1.1);
+    const glowA    = isActive ? 0.85 : 0.3 + 0.2 * Math.sin(t * 2.2 + i * 1.3);
 
     ctx.save();
-    // Card with gradient — dark base to lighter at top
-    ctx.shadowColor = item.glow;
-    ctx.shadowBlur  = 12 * glowA;
-
+    ctx.shadowColor = isActive ? GOLD_BRIGHT : item.glow;
+    ctx.shadowBlur  = 14 * glowA;
     const grad = ctx.createLinearGradient(item.rect.x, item.rect.y, item.rect.x, item.rect.y + item.rect.h);
-    grad.addColorStop(0, item.colorLight);
-    grad.addColorStop(1, item.color);
+    grad.addColorStop(0, isActive ? "#C9911E" : item.colorLight);
+    grad.addColorStop(1, isActive ? "#7A5A10" : item.color);
     ctx.fillStyle = grad;
     rr(ctx, item.rect.x, item.rect.y, item.rect.w, item.rect.h, 3); ctx.fill();
     ctx.shadowBlur = 0;
-
-    // Top marble sheen
-    const shine = ctx.createLinearGradient(item.rect.x, item.rect.y, item.rect.x, item.rect.y + item.rect.h * 0.5);
-    shine.addColorStop(0, "rgba(255,255,255,0.18)");
+    const shine = ctx.createLinearGradient(item.rect.x, item.rect.y, item.rect.x, item.rect.y + item.rect.h * 0.4);
+    shine.addColorStop(0, "rgba(255,255,255,0.16)");
     shine.addColorStop(1, "rgba(255,255,255,0)");
     ctx.fillStyle = shine;
     rr(ctx, item.rect.x, item.rect.y, item.rect.w, item.rect.h, 3); ctx.fill();
-
-    // Border
-    ctx.strokeStyle = "rgba(255,255,255,0.22)";
-    ctx.lineWidth = 1.5;
+    ctx.strokeStyle = isActive ? GOLD_BRIGHT : "rgba(255,255,255,0.2)";
+    ctx.lineWidth = isActive ? 2 : 1.5;
     rr(ctx, item.rect.x, item.rect.y, item.rect.w, item.rect.h, 3); ctx.stroke();
     ctx.restore();
 
-    // Icon — pulsing
     ctx.save();
-    ctx.font = `${30 * pulse}px system-ui`;
+    ctx.font = `${24 * pulse}px system-ui`;
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
-    ctx.fillText(item.icon, item.rect.x + item.rect.w / 2, item.rect.y + item.rect.h * 0.40);
+    ctx.fillText(item.icon, item.rect.x + item.rect.w * 0.5, item.rect.y + item.rect.h * 0.38);
     ctx.restore();
 
-    // Label in Cinzel
     ctx.save();
     ctx.fillStyle = MARBLE_TEXT;
-    ctx.font = "600 10px 'Cinzel', serif";
+    ctx.font = "600 9px 'Cinzel', serif";
     ctx.textAlign = "center";
     ctx.textBaseline = "bottom";
     ctx.letterSpacing = "0.5px";
-    ctx.shadowColor = "rgba(0,0,0,0.7)"; ctx.shadowBlur = 5;
-    ctx.fillText(item.label, item.rect.x + item.rect.w / 2, item.rect.y + item.rect.h - 18);
+    ctx.shadowColor = "rgba(0,0,0,0.7)"; ctx.shadowBlur = 4;
+    ctx.fillText(item.label, item.rect.x + item.rect.w * 0.5, item.rect.y + item.rect.h - 13);
     ctx.font = F_BODY_XS;
     ctx.letterSpacing = "0px";
     ctx.fillStyle = MARBLE_DIM;
-    ctx.fillText(formatResourceCost(item.cost), item.rect.x + item.rect.w / 2, item.rect.y + item.rect.h - 4);
+    ctx.shadowBlur = 0;
+    ctx.fillText(formatResourceCost(item.cost), item.rect.x + item.rect.w * 0.5, item.rect.y + item.rect.h - 1);
     ctx.restore();
   }
 
-  ctx.restore(); // close pop-in
+  ctx.restore();
 }
 
 // ─── Production panel ─────────────────────────────────────────────────────────

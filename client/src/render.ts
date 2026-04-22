@@ -1,5 +1,5 @@
 import * as THREE from "three";
-import { BuildingType, UnitType, snapWorldToTileCenter } from "../../shared/game-rules.js";
+import { BuildingType, GAME_RULES, UnitType, snapWorldToTileCenter } from "../../shared/game-rules.js";
 import { AttackTargetType } from "../../shared/protocol.js";
 import type { Game } from "./game.js";
 import { BlobEntity } from "./blob-entity.js";
@@ -10,18 +10,20 @@ import {
   createHudState,
   drawHUD,
   drawFloatingResourceTexts,
-  hitTestDeselect,
-  hitTestMenu,
   hitTestSelectionAction,
+  hitTestSelectionCard,
+  hitTestBuildButton,
+  hitTestBuildPanel,
   showWarning,
 } from "./hud.js";
 import type { SelectionInfo } from "./entity.js";
-import { type TileView } from "./terrain.js";
+import { getTerrainHeightAt, type TileView } from "./terrain.js";
 import { attachDevNetworkPerf } from "./network-perf.js";
 import { drawTileDebugPanel } from "./tile-debug.js";
 import { drawDevOverlay } from "./dev-overlay.js";
 import { CAMERA_CONFIG, createInitialFrameStats, createRenderWorld } from "./render-world.js";
 import { projectFloatingResourceTexts } from "./world-text.js";
+import { createChatUi } from "./chat-ui.js";
 
 const WALKABILITY_DEBUG_KEY = "KeyV";
 const TILE_DEBUG_KEY = "Backquote"; // ` key toggles developer mode too
@@ -85,26 +87,48 @@ export function startRender(game: Game) {
   const terrainHits: THREE.Intersection<THREE.Object3D>[] = [];
   let walkabilityOverlayVisible = false;
 
+  // Ghost preview mesh for build placement mode
+  const GHOST_HALF_H = 3.5;
+  const ghostGeometry = new THREE.BoxGeometry(
+    GAME_RULES.TILE_SIZE * 0.88,
+    GHOST_HALF_H * 2,
+    GAME_RULES.TILE_SIZE * 0.88
+  );
+  const ghostMaterial = new THREE.MeshBasicMaterial({
+    color: 0x44ff88,
+    transparent: true,
+    opacity: 0.38,
+    depthWrite: false,
+  });
+  const ghostMesh = new THREE.Mesh(ghostGeometry, ghostMaterial);
+  ghostMesh.visible = false;
+  scene.add(ghostMesh);
+
   const hudCanvas = createHudCanvas();
   const hud = createHudState();
-  const DRAG_THRESHOLD = 5;
+  const chatUi = createChatUi(game);
+  const DRAG_THRESHOLD = 8; // slightly larger on touch
 
-  let drag: { startX: number; startY: number; prevX: number; prevY: number; moved: boolean } | null = null;
-  let lastGroundTap = { t: 0, x: 0, y: 0, wx: 0, wz: 0 };
-  /** Second tap within this window + distance → build menu (never blocked by move). */
-  const DOUBLE_MS = 450;
-  const DOUBLE_SCREEN_PX = 36;
-  const DOUBLE_WORLD = 22;
-  /** Move is issued only after this delay so a double-tap can cancel it and open build. */
-  const MOVE_DELAY_MS = 280;
+  // ── Multi-touch pointer tracking ─────────────────────────────────────────────
+  type PointerPos = { x: number; y: number };
+  const activePointers = new Map<number, PointerPos>();
 
-  let pendingMoveTimer: ReturnType<typeof setTimeout> | null = null;
+  /** Single-finger drag state (pan + tap discrimination). */
+  let singleDrag: { startX: number; startY: number; prevX: number; prevY: number; moved: boolean } | null = null;
+  /** Previous two-finger snapshot for delta computation. */
+  let prevTwoFinger: { dist: number; cx: number; cy: number; angle: number } | null = null;
+  /** True once two fingers were ever active this gesture — suppresses tap on finger-lift. */
+  let hadTwoFingers = false;
 
-  function cancelPendingMove() {
-    if (pendingMoveTimer !== null) {
-      clearTimeout(pendingMoveTimer);
-      pendingMoveTimer = null;
-    }
+  function getTwoFingerState(): { dist: number; cx: number; cy: number; angle: number } | null {
+    if (activePointers.size !== 2) return null;
+    const [a, b] = [...activePointers.values()] as [PointerPos, PointerPos];
+    return {
+      dist:  Math.hypot(b.x - a.x, b.y - a.y),
+      cx:    (a.x + b.x) * 0.5,
+      cy:    (a.y + b.y) * 0.5,
+      angle: Math.atan2(b.y - a.y, b.x - a.x),
+    };
   }
 
   function groundHit(clientX: number, clientY: number): THREE.Vector3 | null {
@@ -127,12 +151,6 @@ export function startRender(game: Game) {
     cameraRig.placeCamera();
   }
 
-  function deselect() {
-    cancelPendingMove();
-    game.clearSelection();
-    hud.buildMenu.visible = false;
-  }
-
   function getMoveBlockedMessage(tile: TileView | null): string {
     if (!tile) return "Units can't walk there";
     if (tile.isMountain) return "Units can't walk on mountains";
@@ -146,7 +164,6 @@ export function startRender(game: Game) {
   }
 
   function handleClick(clientX: number, clientY: number) {
-    // In tile debug mode, clicks select a tile for inspection instead of normal game actions.
     if (devModeVisible) {
       const point = groundHit(clientX, clientY);
       if (point) {
@@ -159,38 +176,63 @@ export function startRender(game: Game) {
 
     const selectedInfo = game.getSelectedEntity()?.getSelectionInfo() ?? null;
 
-    if (hitTestDeselect(clientX, clientY, game.selectedEntityId !== null)) {
-      deselect();
-      return;
-    }
-
+    // 1. Action buttons inside the selection card (highest priority)
     const selectionAction = hitTestSelectionAction(clientX, clientY, selectedInfo);
     if (selectionAction !== null) {
-      cancelPendingMove();
       game.runSelectionAction(selectionAction);
       return;
     }
 
-    const menuAction = hitTestMenu(hud, clientX, clientY);
-    if (menuAction !== null) {
-      cancelPendingMove();
-      if (menuAction !== "dismiss") {
-        const tile = game.getTileAtWorld(hud.buildMenu.worldX, hud.buildMenu.worldZ);
-        if (!tile?.canBuild) {
-          showWarning(hud, getBuildBlockedMessage(tile), performance.now() / 1000);
-        } else {
-          game.sendBuildIntent(menuAction, hud.buildMenu.worldX, hud.buildMenu.worldZ);
-        }
+    // 2. BUILD button — toggle build panel / cancel build mode
+    if (hitTestBuildButton(clientX, clientY)) {
+      if (hud.buildPanelOpen) {
+        hud.buildPanelOpen = false;
+        hud.activeBuildType = null;
+        ghostMesh.visible = false;
+      } else {
+        hud.buildPanelOpen = true;
       }
-      hud.buildMenu.visible = false;
-      return;
-    }
-    if (hud.buildMenu.visible) {
-      cancelPendingMove();
-      hud.buildMenu.visible = false;
       return;
     }
 
+    // 3. Build panel — pick building type or dismiss
+    if (hud.buildPanelOpen) {
+      const panelHit = hitTestBuildPanel(clientX, clientY);
+      if (panelHit !== null) {
+        if (panelHit !== "inside") {
+          hud.activeBuildType = panelHit;
+          hud.buildPanelOpen = false;
+        }
+        return;
+      }
+      // Clicked outside panel — close it, keep activeBuildType
+      hud.buildPanelOpen = false;
+      return;
+    }
+
+    // 4. Tapping the selection card (but not an action button) deselects
+    if (hitTestSelectionCard(clientX, clientY, selectedInfo)) {
+      game.clearSelection();
+      return;
+    }
+
+    // 5. Tap ground while a building type is armed — place it
+    if (hud.activeBuildType !== null) {
+      const point = groundHit(clientX, clientY);
+      if (point) {
+        const tile = game.getTileAtWorld(point.x, point.z);
+        if (!tile?.canBuild) {
+          showWarning(hud, getBuildBlockedMessage(tile), performance.now() / 1000);
+        } else {
+          game.sendBuildIntent(hud.activeBuildType, point.x, point.z);
+          hud.activeBuildType = null;
+          ghostMesh.visible = false;
+        }
+      }
+      return;
+    }
+
+    // 6. World picking
     ndcV.set((clientX / window.innerWidth) * 2 - 1, -(clientY / window.innerHeight) * 2 + 1);
     raycaster.setFromCamera(ndcV, camera);
     const point = groundHit(clientX, clientY);
@@ -200,14 +242,13 @@ export function startRender(game: Game) {
     const attackPicked =
       game.pickAttackableEntityFromRay(raycaster, { enemyOnly: true }) ??
       (point ? game.pickAttackableEntityAtWorldPoint(point.x, point.z, { enemyOnly: true }) : null);
+
     if (selectedBlob && attackPicked) {
-      cancelPendingMove();
       game.sendAttackIntent(
         selectedBlob.id,
         attackPicked instanceof BlobEntity ? AttackTargetType.BLOB : AttackTargetType.BUILDING,
         attackPicked.id
       );
-      lastGroundTap.t = 0;
       return;
     }
 
@@ -216,8 +257,8 @@ export function startRender(game: Game) {
       ownedPointPicked ??
       game.pickEntityFromRay(raycaster) ??
       pointPicked;
+
     if (picked) {
-      cancelPendingMove();
       if (
         selectedBlob &&
         picked.isOwnedByMe() &&
@@ -226,7 +267,6 @@ export function startRender(game: Game) {
         selectedBlob.getUnitType() === UnitType.VILLAGER
       ) {
         game.sendGatherBuildingIntent(selectedBlob.id, picked.id);
-        lastGroundTap.t = 0;
         return;
       }
       if (selectedBlob && !picked.isOwnedByMe() && (picked instanceof BlobEntity || picked instanceof BuildingEntity)) {
@@ -235,83 +275,48 @@ export function startRender(game: Game) {
           picked instanceof BlobEntity ? AttackTargetType.BLOB : AttackTargetType.BUILDING,
           picked.id
         );
-        lastGroundTap.t = 0;
         return;
       }
       game.toggleSelection(picked.id);
-      lastGroundTap.t = 0;
       return;
     }
 
     if (!point) return;
 
-    const now = performance.now();
-
-    if (game.getSelectedMyBlobEntity()) {
-      cancelPendingMove();
-      const tx = point.x;
-      const tz = point.z;
-      const sx = clientX;
-      const sy = clientY;
-      const selectedBlob = game.getSelectedMyBlobEntity();
-      const tile = game.getTileAtWorld(tx, tz);
+    // 7. Movement or gather when own blob is selected — instant, no delay
+    if (selectedBlob) {
+      const tile = game.getTileAtWorld(point.x, point.z);
       if (
-        selectedBlob &&
         selectedBlob.getUnitType() === UnitType.VILLAGER &&
         tile &&
         (tile.material > 0 || tile.compute > 0)
       ) {
         game.sendGatherIntent(selectedBlob.id, tile.key);
-        addMoveMarker(hud, sx, sy, performance.now() / 1000);
+        addMoveMarker(hud, clientX, clientY, performance.now() / 1000);
         return;
       }
-      pendingMoveTimer = setTimeout(() => {
-        pendingMoveTimer = null;
-        const moveTile = game.getTileAtWorld(tx, tz);
-        if (!moveTile?.canWalk) {
-          showWarning(hud, getMoveBlockedMessage(moveTile), performance.now() / 1000);
-          return;
-        }
-        game.sendMoveIntent(tx, tz);
-        addMoveMarker(hud, sx, sy, performance.now() / 1000);
-      }, MOVE_DELAY_MS);
-      lastGroundTap = { t: now, x: clientX, y: clientY, wx: point.x, wz: point.z };
+      if (!tile?.canWalk) {
+        showWarning(hud, getMoveBlockedMessage(tile), performance.now() / 1000);
+        return;
+      }
+      game.sendMoveIntent(point.x, point.z);
+      addMoveMarker(hud, clientX, clientY, performance.now() / 1000);
       return;
     }
 
-    const dtMs = now - lastGroundTap.t;
-    const dScr = Math.hypot(clientX - lastGroundTap.x, clientY - lastGroundTap.y);
-    const dW = Math.hypot(point.x - lastGroundTap.wx, point.z - lastGroundTap.wz);
-    const isDouble =
-      lastGroundTap.t > 0 &&
-      dtMs < DOUBLE_MS &&
-      dtMs > 30 &&
-      dScr < DOUBLE_SCREEN_PX &&
-      dW < DOUBLE_WORLD;
-
-    if (isDouble) {
-      cancelPendingMove();
+    // 8. Enemy/neutral selected + tap ground → deselect
+    const selectedEntity = game.getSelectedEntity();
+    if (selectedEntity && !selectedEntity.isOwnedByMe()) {
       game.clearSelection();
-      const snapped = snapWorldToTileCenter(point.x, point.z);
-      const tile = game.getTileAtWorld(snapped.x, snapped.z);
-      if (!tile?.canBuild) {
-        showWarning(hud, getBuildBlockedMessage(tile), now / 1000);
-        lastGroundTap.t = 0;
-        return;
-      }
-      hud.buildMenu = { visible: true, screenX: clientX, screenY: clientY, worldX: snapped.x, worldZ: snapped.z };
-      lastGroundTap.t = 0;
       return;
     }
 
-    lastGroundTap = { t: now, x: clientX, y: clientY, wx: point.x, wz: point.z };
-
+    // 9. Select terrain tile for info
     const tile = game.getTileAtWorld(point.x, point.z);
     game.selectTile(tile?.key ?? null);
   }
 
   function handleSecondaryClick(clientX: number, clientY: number) {
-    cancelPendingMove();
     ndcV.set((clientX / window.innerWidth) * 2 - 1, -(clientY / window.innerHeight) * 2 + 1);
     raycaster.setFromCamera(ndcV, camera);
     const point = groundHit(clientX, clientY);
@@ -328,37 +333,109 @@ export function startRender(game: Game) {
       attackPicked instanceof BlobEntity ? AttackTargetType.BLOB : AttackTargetType.BUILDING,
       attackPicked.id
     );
-    lastGroundTap.t = 0;
   }
 
   canvas.addEventListener("pointerdown", (ev) => {
     canvas.setPointerCapture(ev.pointerId);
-    drag = { startX: ev.clientX, startY: ev.clientY, prevX: ev.clientX, prevY: ev.clientY, moved: false };
+    activePointers.set(ev.pointerId, { x: ev.clientX, y: ev.clientY });
+
+    if (activePointers.size === 1) {
+      // First finger down — start a potential tap / single-finger pan
+      singleDrag = { startX: ev.clientX, startY: ev.clientY, prevX: ev.clientX, prevY: ev.clientY, moved: false };
+      hadTwoFingers = false;
+    } else if (activePointers.size === 2) {
+      // Second finger joined — cancel single-finger drag, enter two-finger gesture
+      hadTwoFingers = true;
+      singleDrag = null;
+      prevTwoFinger = getTwoFingerState();
+    }
   });
 
   canvas.addEventListener("pointermove", (ev) => {
-    if (!drag) return;
-    const dx = ev.clientX - drag.startX;
-    const dy = ev.clientY - drag.startY;
-    if (!drag.moved && Math.hypot(dx, dy) > DRAG_THRESHOLD) {
-      drag.moved = true;
-      cancelPendingMove();
-      game.clearSelection();
-      hud.buildMenu.visible = false;
+    const ptr = activePointers.get(ev.pointerId);
+    if (!ptr) return;
+    ptr.x = ev.clientX;
+    ptr.y = ev.clientY;
+
+    if (activePointers.size >= 2) {
+      // ── Two-finger gesture: pinch zoom + pan + twist rotate ────────────────
+      const curr = getTwoFingerState();
+      if (!curr || !prevTwoFinger) { prevTwoFinger = curr; return; }
+
+      // Pinch → zoom (ratio of distance change drives distance)
+      if (prevTwoFinger.dist > 1 && curr.dist > 1) {
+        cameraRig.distance = THREE.MathUtils.clamp(
+          cameraRig.distance * (prevTwoFinger.dist / curr.dist),
+          CAMERA_CONFIG.distanceMin,
+          CAMERA_CONFIG.distanceMax
+        );
+      }
+
+      // Center movement → pan
+      panCamera(prevTwoFinger.cx, prevTwoFinger.cy, curr.cx, curr.cy);
+
+      // Twist → azimuth rotation (wrap angle delta to [-π, π])
+      if (prevTwoFinger.dist > 20 && curr.dist > 20) {
+        let dAngle = curr.angle - prevTwoFinger.angle;
+        if (dAngle > Math.PI)  dAngle -= Math.PI * 2;
+        if (dAngle < -Math.PI) dAngle += Math.PI * 2;
+        cameraRig.azimuthDeg += dAngle * (180 / Math.PI);
+      }
+
+      cameraRig.placeCamera();
+      prevTwoFinger = curr;
+      return;
     }
-    if (drag.moved) panCamera(drag.prevX, drag.prevY, ev.clientX, ev.clientY);
-    drag.prevX = ev.clientX;
-    drag.prevY = ev.clientY;
+
+    // ── Single-finger ghost preview ─────────────────────────────────────────
+    if (hud.activeBuildType !== null && !(singleDrag?.moved)) {
+      const gPoint = groundHit(ev.clientX, ev.clientY);
+      if (gPoint) {
+        const snapped = snapWorldToTileCenter(gPoint.x, gPoint.z);
+        const gTile = game.getTileAtWorld(snapped.x, snapped.z);
+        ghostMaterial.color.setHex(gTile?.canBuild ? 0x44ff88 : 0xff4455);
+        ghostMesh.position.set(
+          snapped.x,
+          getTerrainHeightAt(snapped.x, snapped.z, game.getTiles()) + GHOST_HALF_H,
+          snapped.z
+        );
+        ghostMesh.visible = true;
+      } else {
+        ghostMesh.visible = false;
+      }
+    } else if (singleDrag?.moved) {
+      ghostMesh.visible = false;
+    }
+
+    // ── Single-finger pan ───────────────────────────────────────────────────
+    if (!singleDrag) return;
+    const dx = ev.clientX - singleDrag.startX;
+    const dy = ev.clientY - singleDrag.startY;
+    if (!singleDrag.moved && Math.hypot(dx, dy) > DRAG_THRESHOLD) {
+      singleDrag.moved = true;
+      game.clearSelection();
+      hud.buildPanelOpen = false;
+    }
+    if (singleDrag.moved) panCamera(singleDrag.prevX, singleDrag.prevY, ev.clientX, ev.clientY);
+    singleDrag.prevX = ev.clientX;
+    singleDrag.prevY = ev.clientY;
   });
 
   canvas.addEventListener("pointerup", (ev) => {
-    if (!drag) return;
-    if (!drag.moved) {
-      if (ev.button === 2) handleSecondaryClick(ev.clientX, ev.clientY);
-      else handleClick(ev.clientX, ev.clientY);
-    }
     canvas.releasePointerCapture(ev.pointerId);
-    drag = null;
+    activePointers.delete(ev.pointerId);
+
+    if (activePointers.size < 2) prevTwoFinger = null;
+
+    if (activePointers.size === 0) {
+      // All fingers lifted — fire tap only if this was a clean single-finger tap
+      if (!hadTwoFingers && singleDrag && !singleDrag.moved) {
+        if (ev.button === 2) handleSecondaryClick(ev.clientX, ev.clientY);
+        else handleClick(ev.clientX, ev.clientY);
+      }
+      singleDrag = null;
+      hadTwoFingers = false;
+    }
   });
 
   canvas.addEventListener("contextmenu", (ev) => {
@@ -367,7 +444,12 @@ export function startRender(game: Game) {
 
   canvas.addEventListener("pointercancel", (ev) => {
     canvas.releasePointerCapture(ev.pointerId);
-    drag = null;
+    activePointers.delete(ev.pointerId);
+    if (activePointers.size < 2) prevTwoFinger = null;
+    if (activePointers.size === 0) {
+      singleDrag = null;
+      hadTwoFingers = false;
+    }
   });
 
   canvas.addEventListener(
@@ -402,6 +484,7 @@ export function startRender(game: Game) {
     cameraRig.applyArrowKeys(dt);
     const perfSync0 = performance.now();
     game.sync();
+    chatUi.update();
     const perfSync1 = performance.now();
     game.clearBeamDraws();
     if (game.consumeTerrainDirty()) {

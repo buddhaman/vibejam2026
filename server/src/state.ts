@@ -11,6 +11,7 @@ import type {
 /** Identity + ownership bookkeeping (blobs/buildings reference ownerId). */
 export class Player extends Schema {
   @type("string") sessionId: string = "";
+  @type("string") name: string = "";
   /** Packed RGB for client tint */
   @type("uint32") color: number = 0xffffff;
   @type("uint16") biomass: number = 0;

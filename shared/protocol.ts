@@ -1,5 +1,7 @@
 import type { BuildingType, SquadSpread, TileType, UnitType } from "./game-rules.js";
 
+export const CLIENT_PROTOCOL_VERSION = 1;
+
 export const MessageType = {
   INTENT:        "intent",
   ATTACK:        "attack",
@@ -8,6 +10,9 @@ export const MessageType = {
   TRAIN:         "train",
   SQUAD_SPREAD:  "squad_spread",
   BLOB_AGGRO:    "blob_aggro",
+  SET_NAME:      "set_name",
+  CHAT:          "chat",
+  SYSTEM_NOTICE: "system_notice",
   // Tile streaming — client requests chunks, server replies; server pushes mutations
   TILES_REQUEST: "tiles_req",
   TILE_CHUNK:    "tile_chunk",
@@ -98,6 +103,27 @@ export type SquadSpreadMessage = {
 export type BlobAggroMessage = {
   blobId: string;
   aggroMode: BlobAggroMode;
+};
+
+export type SetNameMessage = {
+  name: string;
+};
+
+export type ChatMessage = {
+  text: string;
+};
+
+export type ChatBroadcastMessage = {
+  senderId: string;
+  senderName: string;
+  text: string;
+  sentAt: number;
+};
+
+export type SystemNoticeMessage = {
+  text: string;
+  kind: "info" | "join" | "leave" | "rename";
+  sentAt: number;
 };
 
 /** Client → Server: request one chunk of tile data by index. */
