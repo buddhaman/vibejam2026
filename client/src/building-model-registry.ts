@@ -20,6 +20,7 @@ export const BUILDING_GLB_PATHS: Partial<Record<BuildingTypeValue, string>> = {
 
 /** One prototype per building type (never added to the scene; clone per `BuildingEntity`). */
 let templateBuildingSet: BuildingSet | null = null;
+let gltfTemplatePromise: Promise<void> | null = null;
 
 function ensureProceduralTemplateSet(): BuildingSet {
   if (!templateBuildingSet) {
@@ -193,9 +194,12 @@ export function instantiateBuildingVariant(type: BuildingTypeValue): BuildingVar
  * Call once before spawning entities (e.g. from `main.ts` after network sync).
  */
 export async function ensureBuildingModelsLoaded(): Promise<void> {
-  const procedural = ensureProceduralTemplateSet();
-  const gltf = await loadAllGltfOnce();
-  templateBuildingSet = mergeTemplateSet(gltf, procedural);
+  gltfTemplatePromise ??= (async () => {
+    const procedural = ensureProceduralTemplateSet();
+    const gltf = await loadAllGltfOnce();
+    templateBuildingSet = mergeTemplateSet(gltf, procedural);
+  })();
+  await gltfTemplatePromise;
 }
 
 /** Throws if `ensureBuildingModelsLoaded` has not completed. */

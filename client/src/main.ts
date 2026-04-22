@@ -58,13 +58,20 @@ async function boot() {
   const game = new Game(room);
   shell.setStatus("Syncing your match...");
   await waitForSyncedGameState(room);
+  shell.setStatus("Loading world...");
+  const buildingModelsPromise = ensureBuildingModelsLoaded().catch((err) => {
+    console.warn("[boot] building models failed to load", err);
+  });
+  const tileVisualsPromise = ensureTileVisualAssetsLoaded().catch((err) => {
+    console.warn("[boot] tile visuals failed to load", err);
+  });
+  const unitModelsPromise = ensureUnitInstancedModelsLoaded().catch((err) => {
+    console.warn("[boot] unit models failed to load", err);
+  });
+  await game.streamTiles();
   startRender(game);
   shell.remove();
-
-  void ensureBuildingModelsLoaded().catch((err) => console.warn("[boot] building models failed to load", err));
-  void ensureTileVisualAssetsLoaded().catch((err) => console.warn("[boot] tile visuals failed to load", err));
-  void ensureUnitInstancedModelsLoaded().catch((err) => console.warn("[boot] unit models failed to load", err));
-  void game.streamTiles().catch((err) => console.warn("[boot] tile streaming failed", err));
+  void Promise.all([buildingModelsPromise, tileVisualsPromise, unitModelsPromise]);
 }
 
 boot().catch((err) => {
