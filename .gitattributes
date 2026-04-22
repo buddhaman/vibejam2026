@@ -1,0 +1,2 @@
+# Large3D sources — use Git LFS (run once per clone: git lfs install)
+models-source/**/*.glb filter=lfs diff=lfs merge=lfs -text
