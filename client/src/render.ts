@@ -10,6 +10,7 @@ import {
   createHudState,
   drawHUD,
   drawFloatingResourceTexts,
+  drawVictoryOverlay,
   hitTestSelectionAction,
   hitTestSelectionCard,
   hitTestBuildButton,
@@ -109,6 +110,45 @@ export function startRender(game: Game) {
   const hud = createHudState();
   const chatUi = createChatUi(game);
   const DRAG_THRESHOLD = 8; // slightly larger on touch
+
+  // ── Victory state ────────────────────────────────────────────────────────────
+  let victoryState: { name: string; color: number; isMe: boolean; startT: number } | null = null;
+
+  function triggerVictoryExplosions(winnerSessionId: string) {
+    const snapshots = game.getBuildingSnapshots();
+    let delay = 0;
+    for (const snapshot of snapshots.values()) {
+      if (snapshot.ownerId === winnerSessionId) continue;
+      const capturedDelay = delay;
+      setTimeout(() => {
+        buildingDestructionFx.spawn({
+          x: snapshot.x,
+          z: snapshot.y,
+          buildingType: snapshot.buildingType,
+          teamColor: game.getPlayerColor(snapshot.ownerId),
+          tiles: game.getTiles(),
+        });
+      }, capturedDelay);
+      delay += 60 + Math.random() * 100;
+    }
+    // Central server mega-explosion — cluster of blasts
+    const serverDelay = Math.max(delay * 0.4, 800);
+    for (let i = 0; i < 5; i++) {
+      setTimeout(() => {
+        buildingDestructionFx.spawn({
+          x: (Math.random() - 0.5) * 14,
+          z: (Math.random() - 0.5) * 14,
+          buildingType: BuildingType.TOWN_CENTER,
+          teamColor: 0xffffff,
+          tiles: game.getTiles(),
+        });
+      }, serverDelay + i * 260);
+    }
+    // Hide the central server model when it explodes
+    setTimeout(() => { centralServer.root.visible = false; }, serverDelay + 400);
+    // Reload after victory screen
+    setTimeout(() => window.location.reload(), 13_000);
+  }
 
   // ── Multi-touch pointer tracking ─────────────────────────────────────────────
   type PointerPos = { x: number; y: number };
@@ -539,8 +579,23 @@ export function startRender(game: Game) {
     centralServer.syncOwner(kothState.ownerColor || null);
     centralServer.syncTerrainY(getTerrainHeightAt(0, 0, game.getTiles()));
 
+    // Victory detection — trigger once when any player reaches 0ms
+    if (!victoryState) {
+      const winner = kothState.entries.find((e) => e.timeMs <= 0);
+      if (winner) {
+        victoryState = {
+          name: winner.name,
+          color: winner.color,
+          isMe: winner.sessionId === game.room.sessionId,
+          startT: now / 1000,
+        };
+        triggerVictoryExplosions(winner.sessionId);
+      }
+    }
+
     drawHUD(hudCanvas, hud, myColor, mySquadCount, myResources, selectedInfo, selectedTile, now / 1000, kothState);
     drawFloatingResourceTexts(hudCanvas, projectFloatingResourceTexts(game, camera, hudCanvas, now / 1000));
+    if (victoryState) drawVictoryOverlay(hudCanvas, victoryState, now / 1000, victoryState.startT);
 
     if (devModeVisible) {
       const ctx = hudCanvas.getContext("2d")!;

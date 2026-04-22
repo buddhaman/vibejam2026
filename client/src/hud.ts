@@ -1227,6 +1227,159 @@ function drawKothPanel(
   }
 }
 
+// ─── Victory overlay ─────────────────────────────────────────────────────────
+
+export function drawVictoryOverlay(
+  canvas: HTMLCanvasElement,
+  winner: { name: string; color: number; isMe: boolean },
+  t: number,
+  startT: number
+): void {
+  const ctx = canvas.getContext("2d")!;
+  const W = canvas.width;
+  const H = canvas.height;
+  const age = t - startT;
+  const fadeIn = Math.min(1, age / 0.7);
+  if (fadeIn <= 0) return;
+
+  ctx.save();
+
+  // Full-screen dark veil
+  ctx.globalAlpha = fadeIn * 0.9;
+  ctx.fillStyle = "#030810";
+  ctx.fillRect(0, 0, W, H);
+
+  // Scan-line grid — subtle post-AGI digital artifact
+  ctx.globalAlpha = fadeIn * 0.035;
+  ctx.fillStyle = DIVINE_CYAN;
+  for (let y = 0; y < H; y += 4) ctx.fillRect(0, y, W, 1);
+  ctx.globalAlpha = fadeIn;
+
+  // Winner color burst in background
+  const wr = (winner.color >> 16) & 0xff;
+  const wg = (winner.color >> 8) & 0xff;
+  const wb = winner.color & 0xff;
+  const burstAlpha = Math.max(0, 0.12 - age * 0.012);
+  if (burstAlpha > 0) {
+    const radial = ctx.createRadialGradient(W / 2, H * 0.4, 0, W / 2, H * 0.4, W * 0.6);
+    radial.addColorStop(0, `rgba(${wr},${wg},${wb},${burstAlpha})`);
+    radial.addColorStop(1, "rgba(0,0,0,0)");
+    ctx.fillStyle = radial;
+    ctx.fillRect(0, 0, W, H);
+  }
+
+  // Meander ornament top
+  ctx.save();
+  ctx.globalAlpha = fadeIn * 0.6;
+  drawMeanderStripe(ctx, W * 0.05, H * 0.28, W * 0.9);
+  ctx.restore();
+
+  // "AGI ACHIEVED" — main title
+  const titleProgress = age < 0.55 ? easeOutBack(Math.min(1, age / 0.45)) : 1;
+  const titleFontSize = Math.round(Math.min(90, W * 0.115));
+  ctx.save();
+  ctx.translate(W / 2, H * 0.38);
+  ctx.scale(titleProgress, titleProgress);
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+
+  // Outer glow passes
+  ctx.shadowColor = DIVINE_CYAN;
+  ctx.shadowBlur = 60;
+  ctx.font = `900 ${titleFontSize}px 'Cinzel Decorative', 'Cinzel', serif`;
+  ctx.fillStyle = MARBLE_TEXT;
+  ctx.fillText("AGI ACHIEVED", 0, 0);
+  ctx.shadowBlur = 0;
+
+  // Sub-label
+  ctx.font = `600 ${Math.round(titleFontSize * 0.18)}px 'Cinzel', serif`;
+  ctx.fillStyle = DIVINE_CYAN;
+  ctx.letterSpacing = "6px";
+  ctx.shadowColor = DIVINE_CYAN;
+  ctx.shadowBlur = 10;
+  ctx.fillText("TECHNOLOGICAL SINGULARITY", 0, titleFontSize * 0.65);
+  ctx.shadowBlur = 0;
+  ctx.restore();
+
+  // Meander ornament bottom of title
+  ctx.save();
+  ctx.globalAlpha = fadeIn * 0.6;
+  drawMeanderStripe(ctx, W * 0.05, H * 0.48, W * 0.9);
+  ctx.restore();
+
+  // Winner block — fades in after 0.6s
+  const winnerAge = Math.max(0, age - 0.6);
+  const winnerAlpha = Math.min(1, winnerAge / 0.45);
+  ctx.save();
+  ctx.globalAlpha = winnerAlpha * fadeIn;
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+
+  // "TRANSCENDED BY" label
+  ctx.font = "600 11px 'Cinzel', serif";
+  ctx.fillStyle = MARBLE_MUTED;
+  ctx.letterSpacing = "4px";
+  ctx.fillText("CIVILIZATION TRANSCENDED BY", W / 2, H * 0.545);
+
+  // Player color diamond
+  const dotCX = W / 2 - ctx.measureText(winner.name).width * 0.44 - 18;
+  ctx.beginPath();
+  ctx.moveTo(dotCX, H * 0.588 - 9);
+  ctx.lineTo(dotCX + 9, H * 0.588);
+  ctx.lineTo(dotCX, H * 0.588 + 9);
+  ctx.lineTo(dotCX - 9, H * 0.588);
+  ctx.closePath();
+  ctx.fillStyle = GOLD_BRIGHT;
+  ctx.fill();
+  ctx.beginPath();
+  ctx.arc(dotCX, H * 0.588, 6.5, 0, Math.PI * 2);
+  ctx.fillStyle = `rgb(${wr},${wg},${wb})`;
+  ctx.shadowColor = `rgb(${wr},${wg},${wb})`;
+  ctx.shadowBlur = 18;
+  ctx.fill();
+  ctx.shadowBlur = 0;
+
+  // Winner name
+  ctx.font = `700 ${Math.round(Math.min(36, W * 0.065))}px 'Cinzel', serif`;
+  ctx.fillStyle = winner.isMe ? GOLD_TEXT : MARBLE_TEXT;
+  ctx.shadowColor = winner.isMe ? GOLD_BRIGHT : `rgb(${wr},${wg},${wb})`;
+  ctx.shadowBlur = 22;
+  ctx.letterSpacing = "2px";
+  ctx.fillText(winner.name, W / 2, H * 0.59);
+  ctx.shadowBlur = 0;
+
+  // "YOU WIN" / "DEFEAT" sub-tag
+  const outcomeText = winner.isMe ? "VICTORY" : "DEFEAT";
+  const outcomeColor = winner.isMe ? GOLD_TEXT : "rgba(220,80,80,0.9)";
+  ctx.font = "700 13px 'Cinzel', serif";
+  ctx.fillStyle = outcomeColor;
+  ctx.letterSpacing = "5px";
+  ctx.shadowColor = outcomeColor;
+  ctx.shadowBlur = 10;
+  ctx.fillText(outcomeText, W / 2, H * 0.635);
+  ctx.shadowBlur = 0;
+
+  ctx.restore();
+
+  // Restart countdown — appears after 2s
+  const cdAge = Math.max(0, age - 2.0);
+  if (cdAge > 0) {
+    const cdAlpha = Math.min(1, cdAge / 0.5) * fadeIn;
+    const remaining = Math.max(0, Math.ceil(10 - (age - 2.0)));
+    ctx.save();
+    ctx.globalAlpha = cdAlpha;
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.font = "600 11px 'Cinzel', serif";
+    ctx.fillStyle = MARBLE_MUTED;
+    ctx.letterSpacing = "2px";
+    ctx.fillText(`NEW BATTLE BEGINS IN  ${remaining}`, W / 2, H * 0.72);
+    ctx.restore();
+  }
+
+  ctx.restore();
+}
+
 // ─── Utilities ────────────────────────────────────────────────────────────────
 
 function drawDiamond(ctx: CanvasRenderingContext2D, x: number, y: number, size: number, color: string) {

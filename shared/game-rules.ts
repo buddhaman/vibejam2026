@@ -87,7 +87,7 @@ export const GAME_RULES = {
   KOTH_PER_PLAYER_FOREST_DISTANCE: 90,
   KOTH_PER_PLAYER_COMPUTE_DISTANCE: 78,
   KOTH_CENTER_SERVER_COMPUTE: 1_100,
-  KOTH_PLAYER_COMPUTE: 360,
+  KOTH_PLAYER_COMPUTE: 1440,
   BLOB_MOVE_SPEED: 11,
   BLOB_ACCELERATION: 10,
   BLOB_DECELERATION_RADIUS: 14,
@@ -655,11 +655,9 @@ export function getTerrainVertexHeight(
   const widthNoise = fbm2D(x * 0.011 + 17.4, z * 0.011 - 31.2, seed + 4400, 2);
   const boundaryWidth = layout.mountainHalfAngle + (widthNoise - 0.5) * layout.sectorAngle * 0.05;
   const boundaryStrength = 1 - boundaryDistance / Math.max(0.025, boundaryWidth);
+  const worldEdgeRadius = Math.max(Math.abs(GAME_RULES.WORLD_MIN), Math.abs(GAME_RULES.WORLD_MAX));
 
-  if (
-    boundaryStrength <= 0 ||
-    radius >= Math.max(Math.abs(GAME_RULES.WORLD_MIN), Math.abs(GAME_RULES.WORLD_MAX)) - 18
-  ) {
+  if (boundaryStrength <= 0) {
     return openGroundHeight;
   }
 
@@ -667,10 +665,11 @@ export function getTerrainVertexHeight(
   const spawnGate = smoothstep(clamp01((spawnDistance - layout.startClearRadius) / 30));
   const centerGate = smoothstep(clamp01((radius - layout.centerValleyRadius) / 28));
   const ridgeNoise = fbm2D(x * 0.021 + 4.1, z * 0.021 - 7.9, seed + 5100, 3);
-  const ridgeStrength = boundaryStrength * spawnGate * centerGate * (0.84 + ridgeNoise * 0.5);
+  const edgeBoost = 1 + smoothstep(clamp01((radius - (worldEdgeRadius - 84)) / 54)) * 0.65;
+  const ridgeStrength = boundaryStrength * spawnGate * centerGate * (0.84 + ridgeNoise * 0.5) * edgeBoost;
 
   if (ridgeStrength <= 0.26) return openGroundHeight;
-  return 9.6 + ridgeStrength * 18 + ridgeNoise * 4.6;
+  return 9.6 + ridgeStrength * 18 + ridgeNoise * 4.6 + (edgeBoost - 1) * 4.8;
 }
 
 export function generateTile(
@@ -719,6 +718,7 @@ function setGrassTile(tile: GeneratedTile): void {
 
 function setForestTile(tile: GeneratedTile, amount: number): void {
   if (tile.isMountain) return;
+  if (tile.compute > 0 || tile.maxCompute > 0) return;
   tile.tileType = TileType.FOREST;
   tile.material = Math.max(tile.material, amount);
   tile.maxMaterial = Math.max(tile.maxMaterial, amount);
@@ -726,6 +726,9 @@ function setForestTile(tile: GeneratedTile, amount: number): void {
 
 function setComputeTile(tile: GeneratedTile, amount: number): void {
   if (tile.isMountain) return;
+  tile.tileType = TileType.GRASS;
+  tile.material = 0;
+  tile.maxMaterial = 0;
   tile.compute = Math.max(tile.compute, amount);
   tile.maxCompute = Math.max(tile.maxCompute, amount);
 }
@@ -734,30 +737,32 @@ function stampForestPatch(
   tiles: Map<string, GeneratedTile>,
   centerX: number,
   centerZ: number,
-  amountScale: number
+  amountScale: number,
+  seed = 0
 ): void {
-  const { tx, tz } = getTileCoordsFromWorld(centerX, centerZ);
-  const patch = [
-    { dx: 0, dz: 0, weight: 1.0 },
-    { dx: 1, dz: 0, weight: 0.84 },
-    { dx: -1, dz: 0, weight: 0.84 },
-    { dx: 0, dz: 1, weight: 0.84 },
-    { dx: 0, dz: -1, weight: 0.84 },
-    { dx: 1, dz: 1, weight: 0.7 },
-    { dx: -1, dz: 1, weight: 0.7 },
-    { dx: 1, dz: -1, weight: 0.7 },
-    { dx: -1, dz: -1, weight: 0.7 },
-    { dx: 2, dz: 0, weight: 0.54 },
-    { dx: -2, dz: 0, weight: 0.54 },
-    { dx: 0, dz: 2, weight: 0.54 },
-    { dx: 0, dz: -2, weight: 0.54 },
-  ] as const;
+  const lobes = 3 + Math.floor(seededFraction(seed, 1301) * 2);
+  for (let lobeIndex = 0; lobeIndex < lobes; lobeIndex++) {
+    const lobeAngle = seededFraction(seed, 1310 + lobeIndex) * Math.PI * 2;
+    const lobeDistance = seededFraction(seed, 1320 + lobeIndex) * GAME_RULES.TILE_SIZE * 1.6;
+    const lobeRadiusTiles = 1.35 + seededFraction(seed, 1330 + lobeIndex) * 1.2;
+    const lobeScale = amountScale * (0.58 + seededFraction(seed, 1340 + lobeIndex) * 0.38);
+    const lobeX = centerX + Math.cos(lobeAngle) * lobeDistance;
+    const lobeZ = centerZ + Math.sin(lobeAngle) * lobeDistance;
+    const { tx, tz } = getTileCoordsFromWorld(lobeX, lobeZ);
+    const radiusCeil = Math.ceil(lobeRadiusTiles + 1);
 
-  for (const entry of patch) {
-    const tile = tiles.get(getTileKey(tx + entry.dx, tz + entry.dz));
-    if (!tile) continue;
-    const amount = Math.round(GAME_RULES.FOREST_WOOD_MAX * amountScale * entry.weight);
-    setForestTile(tile, Math.max(1, amount));
+    for (let dz = -radiusCeil; dz <= radiusCeil; dz++) {
+      for (let dx = -radiusCeil; dx <= radiusCeil; dx++) {
+        const tile = tiles.get(getTileKey(tx + dx, tz + dz));
+        if (!tile) continue;
+        const noise = seededFraction(seed, 1400 + lobeIndex * 97 + dx * 13 + dz * 29);
+        const ellipticalDistance = Math.hypot(dx * (0.88 + noise * 0.32), dz * (1.04 - noise * 0.24));
+        if (ellipticalDistance > lobeRadiusTiles + noise * 0.35) continue;
+        const falloff = clamp01(1 - ellipticalDistance / Math.max(0.001, lobeRadiusTiles));
+        const amount = Math.round(GAME_RULES.FOREST_WOOD_MAX * lobeScale * (0.42 + falloff * 0.58));
+        setForestTile(tile, Math.max(1, amount));
+      }
+    }
   }
 }
 
@@ -809,7 +814,7 @@ export function decorateRadialKothResources(
       const forestAngle = spawnAngle + dir * layout.forestAngleOffset;
       const fx = spawn.x + Math.cos(forestAngle) * layout.forestDistance;
       const fz = spawn.z + Math.sin(forestAngle) * layout.forestDistance;
-      stampForestPatch(tiles, fx, fz, forestScale);
+      stampForestPatch(tiles, fx, fz, forestScale, seed + playerIndex * 101 + (dir < 0 ? 17 : 41));
     }
 
     const computeAngle = spawnAngle + layout.computeSideSign * layout.computeAngleOffset;

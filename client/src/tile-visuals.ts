@@ -8,7 +8,9 @@ import { applyStylizedShading, isStylizedLitMaterial } from "./stylized-shading.
 import type { ComputeSlot, TileView, TreeSlot } from "./terrain.js";
 
 const COMPUTE_MINE_GLB = publicAssetUrl("models/buildings/compute_mine.glb");
+const GPU_GLB = publicAssetUrl("models/buildings/gpu.glb");
 const COMPUTE_MINE_TARGET_HEIGHT = 8.0;
+const GPU_TARGET_HEIGHT = 1.4;
 const TREE_VARIANT_COUNT = 3;
 
 type TileVisualLayerId = "forest" | "datacenters";
@@ -31,6 +33,7 @@ type RegrowingCompute = {
 };
 
 let computeMineVariantTemplate: InstancedVariant | null = null;
+let gpuVariantTemplate: InstancedVariant | null = null;
 
 function hash(n: number) {
   const x = Math.sin(n * 127.1) * 43758.5453123;
@@ -286,6 +289,21 @@ async function loadComputeMineVariant(): Promise<InstancedVariant> {
   return createDatacenterFallbackVariant();
 }
 
+async function loadGpuVariant(): Promise<InstancedVariant> {
+  const loader = createGLTFLoader();
+  try {
+    const gltf = await loader.loadAsync(GPU_GLB);
+    const root = gltf.scene.clone(true) as THREE.Group;
+    fitGroundAndCenterXZ(root, GPU_TARGET_HEIGHT);
+    const parts = meshPartsFromObject(root);
+    if (parts.length > 0) return { parts };
+    console.warn(`[tile-visuals] GPU GLB had no mesh parts, using procedural fallback: ${GPU_GLB}`);
+  } catch (err) {
+    console.warn(`[tile-visuals] Could not load GPU GLB, using procedural fallback: ${GPU_GLB}`, err);
+  }
+  return createComputeShardVariant();
+}
+
 
 function createForestLayer(): TileVisualLayer {
   const set = createInstancedVariantSet(createTreeVariants(), 1024);
@@ -374,7 +392,7 @@ function createDatacenterLayer(): TileVisualLayer {
   const set = createInstancedVariantSet(
     [
       computeMineVariantTemplate ?? createDatacenterFallbackVariant(),
-      createComputeShardVariant(),
+      gpuVariantTemplate ?? createComputeShardVariant(),
     ],
     64
   );
@@ -426,13 +444,14 @@ function createDatacenterLayer(): TileVisualLayer {
           scale: new THREE.Vector3(scale, scale, scale),
         });
 
-        const fill = Math.max(0.15, c / maxC);
-        const baseVisibleCount = Math.max(1, Math.round(1 + fill * 5));
+        const fill = Math.max(0.12, c / maxC);
+        const baseVisibleCount = Math.max(2, Math.round(3 + fill * 9));
         const hiddenCount = carried.get(tile.key) ?? 0;
         const previousHiddenCount = previousCarriedByTile.get(tile.key) ?? 0;
         previousCarriedByTile.set(tile.key, hiddenCount);
         const slots = ensureComputeSlots(tile);
-        const clampedHiddenCount = Math.min(hiddenCount, slots.length);
+        const visualHiddenCount = Math.ceil(hiddenCount * 0.4);
+        const clampedHiddenCount = Math.min(visualHiddenCount, slots.length);
         const visibleCount = Math.max(0, Math.min(baseVisibleCount, slots.length) - clampedHiddenCount);
         const previousVisibleCount = Math.max(0, Math.min(baseVisibleCount, slots.length) - Math.min(previousHiddenCount, slots.length));
 
@@ -473,8 +492,11 @@ function createDatacenterLayer(): TileVisualLayer {
 }
 
 export async function ensureTileVisualAssetsLoaded(): Promise<void> {
-  if (computeMineVariantTemplate) return;
-  computeMineVariantTemplate = await loadComputeMineVariant();
+  if (computeMineVariantTemplate && gpuVariantTemplate) return;
+  [computeMineVariantTemplate, gpuVariantTemplate] = await Promise.all([
+    loadComputeMineVariant(),
+    loadGpuVariant(),
+  ]);
 }
 
 export class TileVisualManager {

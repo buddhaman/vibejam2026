@@ -3,17 +3,27 @@ import { publicAssetUrl } from "./asset-url.js";
 import { createGLTFLoader } from "./gltf-loader.js";
 import { stylizeObjectMaterials } from "./stylized-shading.js";
 import {
+  applyNeutralTeamColorToObject3D,
   applyTeamColorTexturesToObject3D,
   secondaryTeamHexFromPrimary,
+  TEAM_TEX_RECOLOR_APPLIED,
 } from "./render-texture-recolor.js";
 
 const GLB_URL = publicAssetUrl("models/buildings/central_server.glb");
 const TARGET_HEIGHT = 18.0;
 
+/** Saved original textures per material so we can re-apply from scratch on owner change. */
+interface OriginalMaterialMaps {
+  material: THREE.MeshStandardMaterial | THREE.MeshPhysicalMaterial;
+  map: THREE.Texture | null;
+  emissiveMap: THREE.Texture | null;
+}
+
 export class CentralServerRenderer {
   public readonly root = new THREE.Group();
   private model: THREE.Group | null = null;
   private lastOwnerColor: number | null | undefined = undefined;
+  private originalMaps: OriginalMaterialMaps[] = [];
 
   async load(): Promise<void> {
     const loader = createGLTFLoader();
@@ -45,10 +55,29 @@ export class CentralServerRenderer {
       });
       stylizeObjectMaterials(root);
 
+      // Save original texture references before any recoloring so we can
+      // re-apply from scratch whenever the owner changes.
+      this.originalMaps = [];
+      root.traverse((obj) => {
+        if (!(obj instanceof THREE.Mesh)) return;
+        const mats = Array.isArray(obj.material) ? obj.material : [obj.material];
+        for (const m of mats) {
+          if (
+            m instanceof THREE.MeshStandardMaterial ||
+            m instanceof THREE.MeshPhysicalMaterial
+          ) {
+            this.originalMaps.push({
+              material: m,
+              map: m.map,
+              emissiveMap: m.emissiveMap,
+            });
+          }
+        }
+      });
+
       this.model = root;
       this.root.add(root);
-      // Force recolor on first render
-      this.lastOwnerColor = undefined;
+      this.syncOwner(null);
 
       console.log("[central-server] GLB loaded OK");
     } catch (err) {
@@ -62,17 +91,32 @@ export class CentralServerRenderer {
   }
 
   /**
-   * Recolor the model to the owner's team color using the same hue-remap system
-   * as buildings and units. null = unowned (keeps whatever the last color was,
-   * or the raw GLB colors on first load — neutral until someone captures).
+   * Recolor the model using the same hue-remap system as buildings and units.
+   * null = uncontested → faction-red pixels desaturated to near-white.
+   * number = owner team color → faction-red pixels shifted to that hue.
    */
   syncOwner(ownerColor: number | null): void {
     if (!this.model || ownerColor === this.lastOwnerColor) return;
     this.lastOwnerColor = ownerColor;
-    if (ownerColor === null) return; // leave as-is when uncontested
-    const secondary = secondaryTeamHexFromPrimary(ownerColor);
-    applyTeamColorTexturesToObject3D(this.model, ownerColor, secondary, {
-      blueChannelUsesSecondary: false,
-    });
+
+    // Reset all materials back to their original textures so we can re-apply
+    // from scratch (the recolor system caches results and won't re-apply otherwise).
+    for (const entry of this.originalMaps) {
+      entry.material.map = entry.map;
+      entry.material.emissiveMap = entry.emissiveMap;
+      delete entry.material.userData[TEAM_TEX_RECOLOR_APPLIED];
+      entry.material.needsUpdate = true;
+    }
+
+    if (ownerColor === null) {
+      // Uncontested: desaturate faction-red pixels → near-white/grey neutral look
+      applyNeutralTeamColorToObject3D(this.model);
+    } else {
+      // Owned: shift faction-red pixels to the owner's team hue
+      const secondary = secondaryTeamHexFromPrimary(ownerColor);
+      applyTeamColorTexturesToObject3D(this.model, ownerColor, secondary, {
+        blueChannelUsesSecondary: false,
+      });
+    }
   }
 }

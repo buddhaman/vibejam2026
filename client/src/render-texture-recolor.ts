@@ -212,6 +212,67 @@ export function remapBrightFactionTexture(
   return newTextureFromCanvasLike(src, canvas);
 }
 
+/**
+ * Desaturate faction-red and faction-blue pixels to grey (s→0, keep l).
+ * Used to render a model as "white/neutral" team color, since hue=0 (white) is
+ * identical to hue=0 (red) and would leave faction pixels unchanged.
+ */
+export function remapBrightFactionTextureToNeutral(src: THREE.Texture): THREE.Texture {
+  const size = getDrawableImageSize(src.image);
+  if (!size) return src;
+
+  const canvas = document.createElement("canvas");
+  canvas.width = size.w;
+  canvas.height = size.h;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return src;
+  try {
+    ctx.drawImage(src.image as CanvasImageSource, 0, 0, size.w, size.h);
+  } catch {
+    return src;
+  }
+  const imgData = ctx.getImageData(0, 0, size.w, size.h);
+  const d = imgData.data;
+  for (let i = 0; i < d.length; i += 4) {
+    if (d[i + 3] < 4) continue;
+    const r = d[i] / 255;
+    const g = d[i + 1] / 255;
+    const b = d[i + 2] / 255;
+    if (!pixelIsBrightFactionRed(r, g, b) && !pixelIsBrightFactionBlue(r, g, b)) continue;
+    // Desaturate: luminance = perceptual grey
+    const grey = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+    // Push toward white by blending grey with 1
+    const white = grey * 0.5 + 0.5;
+    const v = Math.round(THREE.MathUtils.clamp(white, 0, 1) * 255);
+    d[i] = v; d[i + 1] = v; d[i + 2] = v;
+  }
+  ctx.putImageData(imgData, 0, 0);
+  return newTextureFromCanvasLike(src, canvas);
+}
+
+/**
+ * Apply neutral (white) hue to an object's materials — faction-colored pixels
+ * are desaturated to near-white. Re-entrant: clears the recolor cache flag first.
+ */
+export function applyNeutralTeamColorToObject3D(root: THREE.Object3D): void {
+  root.traverse((obj) => {
+    if (!(obj instanceof THREE.Mesh)) return;
+    const mats = Array.isArray(obj.material) ? obj.material : [obj.material];
+    for (const m of mats) {
+      if (!(m instanceof THREE.MeshStandardMaterial || m instanceof THREE.MeshPhysicalMaterial)) continue;
+      delete m.userData[TEAM_TEX_RECOLOR_APPLIED];
+      if (m.map) {
+        m.map = remapBrightFactionTextureToNeutral(m.map);
+      }
+      if (m.emissiveMap) {
+        m.emissiveMap = remapBrightFactionTextureToNeutral(m.emissiveMap);
+      }
+      m.userData[TEAM_TEX_RECOLOR_APPLIED] = true;
+      m.needsUpdate = true;
+    }
+  });
+}
+
 /** Fast scan for map-based heuristics (e.g. which meshes are “faction” tinted). */
 export function textureLikelyHasBrightFactionColors(tex: THREE.Texture): boolean {
   const size = getDrawableImageSize(tex.image);

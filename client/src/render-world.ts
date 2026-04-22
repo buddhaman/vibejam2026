@@ -11,7 +11,6 @@ import { BuildingDestructionFxSystem } from "./building-destruction-fx.js";
 import { BeamDrawer } from "./beam-drawer.js";
 import { BrightBeamDrawer } from "./bright-beam-drawer.js";
 import { CentralServerRenderer } from "./central-server-renderer.js";
-import { LightningBeamDrawer } from "./lightning-beam-drawer.js";
 
 const SCENE_ENVIRONMENT_INTENSITY = 0.08;
 
@@ -66,7 +65,6 @@ export type RenderWorld = {
   buildingDestructionFx: BuildingDestructionFxSystem;
   beamDrawer: BeamDrawer;
   brightBeamDrawer: BrightBeamDrawer;
-  lightningBeamDrawer: LightningBeamDrawer;
   sunLight: THREE.DirectionalLight;
   centralServer: CentralServerRenderer;
 };
@@ -193,10 +191,6 @@ export function createRenderWorld(game: Game): RenderWorld {
   scene.add(brightBeamDrawer.root);
   game.setBrightBeamDrawer(brightBeamDrawer);
 
-  const lightningBeamDrawer = new LightningBeamDrawer(4096);
-  scene.add(lightningBeamDrawer.root);
-  game.setLightningBeamDrawer(lightningBeamDrawer);
-
   const centralServer = new CentralServerRenderer();
   scene.add(centralServer.root);
   centralServer.load();
@@ -216,7 +210,6 @@ export function createRenderWorld(game: Game): RenderWorld {
     buildingDestructionFx,
     beamDrawer,
     brightBeamDrawer,
-    lightningBeamDrawer,
     sunLight,
     centralServer,
   });

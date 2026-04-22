@@ -1,8 +1,13 @@
 import * as THREE from "three";
 import { GAME_RULES } from "../../shared/game-rules.js";
+import { publicAssetUrl } from "./asset-url.js";
+import { createGLTFLoader } from "./gltf-loader.js";
 import { applyStylizedShading } from "./stylized-shading.js";
+import { isStylizedLitMaterial } from "./stylized-shading.js";
 
 const DUMMY = new THREE.Object3D();
+const GPU_GLB = publicAssetUrl("models/buildings/gpu.glb");
+const CARRIED_GPU_TARGET_HEIGHT = 0.82;
 
 export type CarriedResourceKind = "tree" | "compute" | "plants";
 
@@ -32,6 +37,9 @@ type MeshBank = {
   capacity: number;
 };
 
+let carriedGpuMeshesTemplate: Array<{ geometry: THREE.BufferGeometry; material: THREE.Material }> | null = null;
+let carriedGpuMeshesPromise: Promise<Array<{ geometry: THREE.BufferGeometry; material: THREE.Material }>> | null = null;
+
 function buildTreeMeshes(capacity: number): THREE.InstancedMesh[] {
   const trunkMat = applyStylizedShading(
     new THREE.MeshStandardMaterial({ color: 0x7c5632, roughness: 0.96, metalness: 0.02 })
@@ -57,6 +65,18 @@ function buildTreeMeshes(capacity: number): THREE.InstancedMesh[] {
 }
 
 function buildComputeMeshes(capacity: number): THREE.InstancedMesh[] {
+  if (carriedGpuMeshesTemplate && carriedGpuMeshesTemplate.length > 0) {
+    return carriedGpuMeshesTemplate.map((part) => {
+      const mesh = new THREE.InstancedMesh(part.geometry.clone(), part.material.clone(), capacity);
+      mesh.count = 0;
+      mesh.castShadow = true;
+      mesh.receiveShadow = true;
+      mesh.frustumCulled = false;
+      mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+      return mesh;
+    });
+  }
+
   const crystalMat = applyStylizedShading(
     new THREE.MeshStandardMaterial({
       color: 0x7be7ff,
@@ -82,6 +102,83 @@ function buildComputeMeshes(capacity: number): THREE.InstancedMesh[] {
     mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
     return mesh;
   });
+}
+
+function fitGroundAndCenterXZ(root: THREE.Object3D, targetHeight: number): void {
+  root.updateMatrixWorld(true);
+  const box = new THREE.Box3().setFromObject(root);
+  const size = box.getSize(new THREE.Vector3());
+  const maxY = Math.max(size.y, 1e-3);
+  const scale = targetHeight / maxY;
+  root.scale.setScalar(scale);
+  root.updateMatrixWorld(true);
+
+  const box2 = new THREE.Box3().setFromObject(root);
+  root.position.y -= box2.min.y;
+  root.updateMatrixWorld(true);
+
+  const box3 = new THREE.Box3().setFromObject(root);
+  const center = box3.getCenter(new THREE.Vector3());
+  root.position.x -= center.x;
+  root.position.z -= center.z;
+}
+
+function cloneGeometryGroup(source: THREE.BufferGeometry, materialIndex: number): THREE.BufferGeometry | null {
+  if (source.groups.length === 0) return source.clone();
+  const geometry = source.clone();
+  geometry.clearGroups();
+  let matched = false;
+  for (const group of source.groups) {
+    if (group.materialIndex !== materialIndex) continue;
+    matched = true;
+    geometry.addGroup(group.start, group.count, 0);
+  }
+  return matched ? geometry : null;
+}
+
+function meshPartsFromObject(root: THREE.Object3D): Array<{ geometry: THREE.BufferGeometry; material: THREE.Material }> {
+  const parts: Array<{ geometry: THREE.BufferGeometry; material: THREE.Material }> = [];
+  root.updateMatrixWorld(true);
+  root.traverse((obj) => {
+    if (!(obj instanceof THREE.Mesh)) return;
+    const materials = Array.isArray(obj.material) ? obj.material : [obj.material];
+    for (let materialIndex = 0; materialIndex < materials.length; materialIndex++) {
+      const material = materials[materialIndex];
+      if (!material) continue;
+      const geometry = cloneGeometryGroup(obj.geometry, materialIndex);
+      if (!geometry) continue;
+      geometry.applyMatrix4(obj.matrixWorld);
+      const nextMaterial = isStylizedLitMaterial(material)
+        ? applyStylizedShading(material.clone())
+        : material.clone();
+      parts.push({ geometry, material: nextMaterial });
+    }
+  });
+  return parts;
+}
+
+async function ensureCarriedGpuMeshesLoaded(): Promise<Array<{ geometry: THREE.BufferGeometry; material: THREE.Material }>> {
+  if (carriedGpuMeshesTemplate) return carriedGpuMeshesTemplate;
+  if (carriedGpuMeshesPromise) return carriedGpuMeshesPromise;
+  carriedGpuMeshesPromise = (async () => {
+    const loader = createGLTFLoader();
+    try {
+      const gltf = await loader.loadAsync(GPU_GLB);
+      const root = gltf.scene.clone(true) as THREE.Group;
+      fitGroundAndCenterXZ(root, CARRIED_GPU_TARGET_HEIGHT);
+      const parts = meshPartsFromObject(root);
+      if (parts.length > 0) {
+        carriedGpuMeshesTemplate = parts;
+        return parts;
+      }
+      console.warn(`[carried-resource-renderer] GPU GLB had no mesh parts, using fallback: ${GPU_GLB}`);
+    } catch (err) {
+      console.warn(`[carried-resource-renderer] Could not load GPU GLB, using fallback: ${GPU_GLB}`, err);
+    }
+    carriedGpuMeshesTemplate = [];
+    return carriedGpuMeshesTemplate;
+  })();
+  return carriedGpuMeshesPromise;
 }
 
 function buildPlantMeshes(capacity: number): THREE.InstancedMesh[] {
@@ -142,6 +239,13 @@ export class CarriedResourceRenderer {
     for (const mesh of this.treeBank.meshes) this.root.add(mesh);
     for (const mesh of this.computeBank.meshes) this.root.add(mesh);
     for (const mesh of this.plantsBank.meshes) this.root.add(mesh);
+    void this.loadComputeGpuMeshes();
+  }
+
+  private async loadComputeGpuMeshes(): Promise<void> {
+    const parts = await ensureCarriedGpuMeshesLoaded();
+    if (parts.length === 0) return;
+    rebuildBank(this.computeBank, buildComputeMeshes, this.root);
   }
 
   public sync(instances: CarriedResourceInstance[]): void {
