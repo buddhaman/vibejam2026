@@ -5,17 +5,66 @@ import { ensureBuildingModelsLoaded } from "./building-model-registry.js";
 import { ensureUnitInstancedModelsLoaded } from "./unit-instanced-models.js";
 import { ensureTileVisualAssetsLoaded } from "./tile-visuals.js";
 
+function createBootShell() {
+  const shell = document.createElement("div");
+  shell.style.cssText = [
+    "position:fixed",
+    "inset:0",
+    "display:flex",
+    "align-items:center",
+    "justify-content:center",
+    "background:radial-gradient(circle at 50% 35%, rgba(38,84,155,0.18), rgba(7,14,27,0.96))",
+    "z-index:1000",
+    "font-family:system-ui,sans-serif",
+    "color:#f2edd7",
+  ].join(";");
+  shell.innerHTML = `
+    <div style="width:min(420px, calc(100vw - 40px));padding:24px 22px;border:1px solid rgba(201,145,30,0.35);border-radius:18px;background:rgba(10,18,34,0.72);box-shadow:0 20px 60px rgba(0,0,0,0.35);backdrop-filter:blur(10px);">
+      <div style="font:700 24px Cinzel,serif;letter-spacing:0.08em;color:#f0c060;margin-bottom:8px;">AGI of Mythology</div>
+      <div style="font-size:14px;line-height:1.5;color:rgba(242,237,215,0.72);margin-bottom:18px;">Joining battle...</div>
+      <div style="height:6px;border-radius:999px;background:rgba(255,255,255,0.08);overflow:hidden;">
+        <div id="boot-shell-bar" style="height:100%;width:38%;border-radius:999px;background:linear-gradient(90deg, #1b6ca8, #00d4ff, #f0c060);transform-origin:left center;animation:boot-shell-pulse 1.15s ease-in-out infinite;"></div>
+      </div>
+    </div>
+  `;
+  const style = document.createElement("style");
+  style.textContent = `
+    @keyframes boot-shell-pulse {
+      0% { transform: translateX(-18%) scaleX(0.72); opacity: 0.72; }
+      50% { transform: translateX(88%) scaleX(1.02); opacity: 1; }
+      100% { transform: translateX(210%) scaleX(0.72); opacity: 0.72; }
+    }
+  `;
+  document.head.appendChild(style);
+  document.body.appendChild(shell);
+  const status = shell.querySelector("div div:nth-child(2)") as HTMLDivElement | null;
+  return {
+    setStatus(text: string) {
+      if (status) status.textContent = text;
+    },
+    remove() {
+      shell.remove();
+      style.remove();
+    },
+  };
+}
+
 async function boot() {
+  const shell = createBootShell();
+  shell.setStatus("Connecting to the server...");
   const room = await joinBattle();
   // Register Colyseus custom message handlers before any await — the server can broadcast
   // `tile_update` during onJoin (e.g. town-center footprint) while we are still syncing.
   const game = new Game(room);
+  shell.setStatus("Syncing your match...");
   await waitForSyncedGameState(room);
-  await ensureBuildingModelsLoaded();
-  await ensureTileVisualAssetsLoaded();
-  await ensureUnitInstancedModelsLoaded();
-  await game.streamTiles(); // request chunks sequentially until world is fully loaded
   startRender(game);
+  shell.remove();
+
+  void ensureBuildingModelsLoaded().catch((err) => console.warn("[boot] building models failed to load", err));
+  void ensureTileVisualAssetsLoaded().catch((err) => console.warn("[boot] tile visuals failed to load", err));
+  void ensureUnitInstancedModelsLoaded().catch((err) => console.warn("[boot] unit models failed to load", err));
+  void game.streamTiles().catch((err) => console.warn("[boot] tile streaming failed", err));
 }
 
 boot().catch((err) => {

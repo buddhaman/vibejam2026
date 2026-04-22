@@ -231,20 +231,15 @@ No deep `systems/` tree — add files only when they earn their place.
 Keep the architecture **boring on the wire**, **expressive on the GPU**.
 
 ### TODO:
- - Behavior trees (behavior of all units)
  - Villagers build buildings
 
  - Build walls
  - Add water
- - In game text 
  - Music
  - Sounds and voiceover
  - Game rooms
- - Full map generation
  - Fog of war
- - User chat
  - Show blob state clearly
- - Score per user, realtime leaderboards
  - Nice icons for everything
 
  Stretch:
@@ -257,6 +252,10 @@ Keep the architecture **boring on the wire**, **expressive on the GPU**.
  - Sync map
 
 ### Done
+ - Score per user, realtime leaderboards
+ - User chat
+ - Full map generation
+ - In game text 
  - Farms
  - Make trees cuttable and collectable
  - Bows

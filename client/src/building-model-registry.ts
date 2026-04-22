@@ -21,6 +21,13 @@ export const BUILDING_GLB_PATHS: Partial<Record<BuildingTypeValue, string>> = {
 /** One prototype per building type (never added to the scene; clone per `BuildingEntity`). */
 let templateBuildingSet: BuildingSet | null = null;
 
+function ensureProceduralTemplateSet(): BuildingSet {
+  if (!templateBuildingSet) {
+    templateBuildingSet = createProceduralBuildingSet();
+  }
+  return templateBuildingSet;
+}
+
 function isTintable(m: THREE.Material): m is TintableMaterial {
   return m instanceof THREE.MeshStandardMaterial || m instanceof THREE.MeshPhysicalMaterial;
 }
@@ -186,16 +193,12 @@ export function instantiateBuildingVariant(type: BuildingTypeValue): BuildingVar
  * Call once before spawning entities (e.g. from `main.ts` after network sync).
  */
 export async function ensureBuildingModelsLoaded(): Promise<void> {
-  if (templateBuildingSet) return;
-  const procedural = createProceduralBuildingSet();
+  const procedural = ensureProceduralTemplateSet();
   const gltf = await loadAllGltfOnce();
   templateBuildingSet = mergeTemplateSet(gltf, procedural);
 }
 
 /** Throws if `ensureBuildingModelsLoaded` has not completed. */
 export function getBuildingVariantTemplates(): BuildingSet {
-  if (!templateBuildingSet) {
-    throw new Error("getBuildingVariantTemplates() called before ensureBuildingModelsLoaded()");
-  }
-  return templateBuildingSet;
+  return ensureProceduralTemplateSet();
 }
