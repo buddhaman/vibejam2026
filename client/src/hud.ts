@@ -66,8 +66,9 @@ export type HudState = {
 const BAR_H        = 62; // legacy floating panel layout
 const CONTEXT_BTN_W = 64;
 const CONTEXT_BTN_H = 46;
-const CONTEXT_BTN_GAP = 7;
-const CONTEXT_CANCEL_W = 60;
+const CONTEXT_BTN_GAP = 6;
+const CONTEXT_CANCEL_W = 44;
+const VIBEJAM_W    = 108; // horizontal space reserved for the required vibejam widget
 const CARD_W       = 428;
 const CARD_H       = 130;
 const CARD_PAD     = 10;
@@ -210,7 +211,10 @@ function bottomBarRect(W: number, H: number): Rect {
 }
 
 function contextActionLeft(W: number, compact: boolean): number {
-  return compact ? 16 : Math.max(220, Math.min(330, W * 0.27));
+  if (compact) return 16;
+  // On mobile: start buttons earlier so they fit in one row
+  if (W < 500) return Math.min(108, Math.floor(W * 0.28));
+  return Math.max(180, Math.min(300, Math.floor(W * 0.25)));
 }
 
 function contextCancelRect(W: number, H: number): Rect {
@@ -218,15 +222,19 @@ function contextCancelRect(W: number, H: number): Rect {
   return contextCancelRectForBar(W, bar);
 }
 
+// Minimum button width ensuring 44px touch targets even on narrow screens
+const CONTEXT_BTN_MIN_W = 44;
+
 function contextActionRects(W: number, H: number, count: number, compact = false): Rect[] {
   if (count <= 0) return [];
   const rows = contextActionRowCount(W, count, compact);
   const bar = { x: 0, y: H - contextBarHeightForRows(rows), w: W, h: contextBarHeightForRows(rows) };
   const cancel = contextCancelRectForBar(W, bar);
   const left = contextActionLeft(W, compact);
-  const right = Math.max(left + 64, cancel.x - 12);
-  const availableW = Math.max(64, right - left);
-  const perRow = Math.max(1, Math.floor((availableW + CONTEXT_BTN_GAP) / (CONTEXT_BTN_W + CONTEXT_BTN_GAP)));
+  const right = Math.max(left + CONTEXT_BTN_MIN_W, cancel.x - 10);
+  const availableW = Math.max(CONTEXT_BTN_MIN_W, right - left);
+  // Use min touch-target width for perRow so buttons flex to fill rather than stack
+  const perRow = Math.max(1, Math.floor((availableW + CONTEXT_BTN_GAP) / (CONTEXT_BTN_MIN_W + CONTEXT_BTN_GAP)));
   const buttonW = Math.min(CONTEXT_BTN_W, (availableW - Math.max(0, Math.min(count, perRow) - 1) * CONTEXT_BTN_GAP) / Math.min(count, perRow));
   const startY = bar.y + 16;
   return Array.from({ length: count }, (_, index) => {
@@ -257,10 +265,10 @@ function currentContextActionCompact(): boolean {
 
 function contextActionRowCount(W: number, count: number, compact = false): number {
   if (count <= 0) return 1;
-  const right = W - CONTEXT_CANCEL_W - 24;
+  const right = W - VIBEJAM_W - CONTEXT_CANCEL_W - 18;
   const left = contextActionLeft(W, compact);
-  const availableW = Math.max(64, right - left);
-  const perRow = Math.max(1, Math.floor((availableW + CONTEXT_BTN_GAP) / (CONTEXT_BTN_W + CONTEXT_BTN_GAP)));
+  const availableW = Math.max(CONTEXT_BTN_MIN_W, right - left);
+  const perRow = Math.max(1, Math.floor((availableW + CONTEXT_BTN_GAP) / (CONTEXT_BTN_MIN_W + CONTEXT_BTN_GAP)));
   return Math.max(1, Math.ceil(count / perRow));
 }
 
@@ -273,7 +281,7 @@ function topResourceStackRect(): Rect {
 }
 
 function contextCancelRectForBar(W: number, bar: Rect): Rect {
-  return { x: W - CONTEXT_CANCEL_W - 12, y: bar.y + 18, w: CONTEXT_CANCEL_W, h: Math.min(52, bar.h - 34) };
+  return { x: W - VIBEJAM_W - CONTEXT_CANCEL_W - 8, y: bar.y + 16, w: CONTEXT_CANCEL_W, h: Math.min(50, bar.h - 30) };
 }
 
 // ─── Layout helpers — build button & panel ───────────────────────────────────
@@ -802,6 +810,8 @@ function drawContextBottomBar(
   ctx.fillText(cancelActive ? "CLEAR" : "IDLE", cancel.x + cancel.w * 0.5, cancel.y + cancel.h - 10);
   ctx.restore();
 
+  drawVibeJamZoneInfo(ctx, W, bar, color, count);
+
   ctx.save();
   ctx.font = F_BODY_XS;
   ctx.fillStyle = MARBLE_MUTED;
@@ -812,8 +822,54 @@ function drawContextBottomBar(
     : selected
       ? ""
       : "tap to select  ·  double tap buildable ground to build  ·  drag to pan";
-  const hintMaxW = compactActions ? Math.max(120, contextCancelRect(W, H).x - 28) : Math.max(120, W - 340);
+  const hintMaxW = Math.max(80, cancel.x - 44);
   if (hint) ctx.fillText(clipText(ctx, hint, hintMaxW), 16, hintY);
+  ctx.restore();
+}
+
+function drawVibeJamZoneInfo(
+  ctx: CanvasRenderingContext2D,
+  W: number,
+  bar: Rect,
+  color: number,
+  squadCount: number,
+): void {
+  // Draws compact player info in the column above the required vibejam widget.
+  // The widget covers roughly the bottom 32px of this zone; we use the top portion.
+  const zoneX = W - VIBEJAM_W + 4;
+  const zoneW = VIBEJAM_W - 8;
+  const usableH = bar.h - 34; // leave bottom 34px for the widget
+  const midY = bar.y + usableH * 0.5;
+  const cx = zoneX + zoneW * 0.5;
+
+  ctx.save();
+  // Subtle separator line on the left edge of the zone
+  ctx.strokeStyle = GOLD_DIM;
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(zoneX - 4, bar.y + 10);
+  ctx.lineTo(zoneX - 4, bar.y + usableH - 4);
+  ctx.stroke();
+
+  // Player color diamond + inner circle
+  const dY = midY - 10;
+  drawDiamond(ctx, cx, dY, 8, GOLD_BRIGHT);
+  ctx.beginPath();
+  ctx.arc(cx, dY, 5.5, 0, Math.PI * 2);
+  ctx.fillStyle = `#${color.toString(16).padStart(6, "0")}`;
+  ctx.fill();
+
+  // Squad count
+  ctx.fillStyle = MARBLE_TEXT;
+  ctx.font = F_NUM_SM;
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.fillText(String(squadCount), cx, midY + 5);
+
+  ctx.fillStyle = MARBLE_MUTED;
+  ctx.font = "600 7px 'Cinzel', serif";
+  ctx.letterSpacing = "0.8px";
+  ctx.fillText(squadCount === 1 ? "SQUAD" : "SQUADS", cx, midY + 17);
   ctx.restore();
 }
 
