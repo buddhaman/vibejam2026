@@ -51,6 +51,14 @@
         user-select: none;
         -webkit-user-select: none;
       }
+
+      /* Keep the required Vibe Jam widget present, but less intrusive on mobile. */
+      iframe[src*="vibej.am"],
+      [id*="vibe" i],
+      [class*="vibe" i] {
+        transform: scale(0.72) !important;
+        transform-origin: right bottom !important;
+      }
     </style>
   </head>
   <body>

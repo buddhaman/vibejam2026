@@ -12,8 +12,25 @@ function bootLog(label: string, extra?: Record<string, unknown>): void {
   console.info(`[boot] ${label} at ${elapsedMs}ms`, extra ?? "");
 }
 
+function tameVibeJamWidget(): void {
+  const apply = () => {
+    const candidates = Array.from(document.body.querySelectorAll<HTMLElement>(
+      'iframe[src*="vibej.am"], [id*="vibe" i], [class*="vibe" i]'
+    ));
+    for (const el of candidates) {
+      if (el === document.body) continue;
+      el.style.setProperty("transform", "scale(0.72)", "important");
+      el.style.setProperty("transform-origin", "right bottom", "important");
+      el.style.setProperty("z-index", "8", "important");
+    }
+  };
+  apply();
+  new MutationObserver(apply).observe(document.body, { childList: true, subtree: true });
+}
+
 async function boot() {
   bootLog("script started");
+  tameVibeJamWidget();
   const joinStart = performance.now();
   const room = await joinBattle();
   bootLog("joined room", { ms: Math.round(performance.now() - joinStart) });

@@ -15,7 +15,7 @@ function fmtTime(ms: number): string {
 const css = (strings: TemplateStringsArray, ...values: unknown[]) =>
   strings.reduce((acc, s, i) => acc + s + (values[i] ?? ""), "").trim();
 
-export function createChatUi(game: Game): ChatUi {
+export function createChatUi(game: Game, getBottomInset: () => number): ChatUi {
   // ── Toggle button — sits inside the bottom bar on the left ────
   const toggleBtn = document.createElement("button");
   toggleBtn.type = "button";
@@ -298,8 +298,18 @@ export function createChatUi(game: Game): ChatUi {
   let lastKnownName = "";
   let unreadCount = 0;
   let lastSeenFeedLength = 0;
+  let lastBottomInset = -1;
+
+  function syncPosition(): void {
+    const inset = Math.max(78, getBottomInset());
+    if (Math.abs(inset - lastBottomInset) < 1) return;
+    lastBottomInset = inset;
+    toggleBtn.style.bottom = `${Math.round(inset + 10)}px`;
+    panel.style.bottom = `${Math.round(inset + 56)}px`;
+  }
 
   function openPanel() {
+    syncPosition();
     panelOpen = true;
     panel.style.transform = "translateY(0) scale(1)";
     panel.style.opacity = "1";
@@ -397,6 +407,7 @@ export function createChatUi(game: Game): ChatUi {
 
   return {
     update() {
+      syncPosition();
       // Sync name display
       const currentName = game.getMyPlayerName();
       if (currentName !== lastKnownName) {

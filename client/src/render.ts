@@ -15,6 +15,7 @@ import {
   hitTestContextBuildAction,
   hitTestContextCancel,
   hitTestContextSelectionAction,
+  getHudBottomInset,
   showWarning,
   type KothState,
 } from "./hud.js";
@@ -109,7 +110,7 @@ export function startRender(game: Game) {
 
   const hudCanvas = createHudCanvas();
   const hud = createHudState();
-  const chatUi = createChatUi(game);
+  const chatUi = createChatUi(game, getHudBottomInset);
   const DRAG_THRESHOLD = 8; // slightly larger on touch
   const DOUBLE_TAP_MS = 300;
   const DOUBLE_TAP_PX = 16;
@@ -511,6 +512,13 @@ export function startRender(game: Game) {
       // All fingers lifted — fire tap only if this was a clean single-finger tap
       if (!hadTwoFingers && singleDrag && !singleDrag.moved) {
         const now = performance.now();
+        if (hitTestContextBar(ev.clientX, ev.clientY)) {
+          if (ev.button !== 2) handleClick(ev.clientX, ev.clientY);
+          lastTap = null;
+          singleDrag = null;
+          hadTwoFingers = false;
+          return;
+        }
         const isDoubleTap =
           ev.button !== 2 &&
           lastTap !== null &&

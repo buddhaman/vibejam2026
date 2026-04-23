@@ -64,11 +64,10 @@ export type HudState = {
 // ─── Layout constants ────────────────────────────────────────────────────────
 
 const BAR_H        = 62; // legacy floating panel layout
-const CONTEXT_BAR_H = 92;
-const CONTEXT_BTN_W = 72;
-const CONTEXT_BTN_H = 54;
-const CONTEXT_BTN_GAP = 8;
-const CONTEXT_CANCEL_W = 62;
+const CONTEXT_BTN_W = 64;
+const CONTEXT_BTN_H = 46;
+const CONTEXT_BTN_GAP = 7;
+const CONTEXT_CANCEL_W = 60;
 const CARD_W       = 428;
 const CARD_H       = 130;
 const CARD_PAD     = 10;
@@ -205,30 +204,68 @@ function clipText(ctx: CanvasRenderingContext2D, text: string, maxW: number): st
 }
 
 function bottomBarRect(W: number, H: number): Rect {
-  return { x: 0, y: H - CONTEXT_BAR_H, w: W, h: CONTEXT_BAR_H };
+  const rows = contextActionRowCount(W, currentContextActionCount());
+  const h = contextBarHeightForRows(rows);
+  return { x: 0, y: H - h, w: W, h };
 }
 
 function contextCancelRect(W: number, H: number): Rect {
   const bar = bottomBarRect(W, H);
-  return { x: W - CONTEXT_CANCEL_W - 12, y: bar.y + 19, w: CONTEXT_CANCEL_W, h: 52 };
+  return contextCancelRectForBar(W, bar);
 }
 
 function contextActionRects(W: number, H: number, count: number): Rect[] {
   if (count <= 0) return [];
-  const bar = bottomBarRect(W, H);
-  const cancel = contextCancelRect(W, H);
-  const right = cancel.x - 12;
-  const left = Math.min(430, W * 0.42);
-  const availableW = Math.max(0, right - left);
-  const buttonW = Math.max(54, Math.min(CONTEXT_BTN_W, (availableW - Math.max(0, count - 1) * CONTEXT_BTN_GAP) / count));
-  const totalW = count * buttonW + Math.max(0, count - 1) * CONTEXT_BTN_GAP;
-  const startX = Math.max(left, right - totalW);
-  return Array.from({ length: count }, (_, index) => ({
-    x: startX + index * (buttonW + CONTEXT_BTN_GAP),
-    y: bar.y + 19,
-    w: buttonW,
-    h: CONTEXT_BTN_H,
-  }));
+  const rows = contextActionRowCount(W, count);
+  const bar = { x: 0, y: H - contextBarHeightForRows(rows), w: W, h: contextBarHeightForRows(rows) };
+  const cancel = contextCancelRectForBar(W, bar);
+  const left = Math.max(220, Math.min(330, W * 0.27));
+  const right = Math.max(left + 64, cancel.x - 12);
+  const availableW = Math.max(64, right - left);
+  const perRow = Math.max(1, Math.floor((availableW + CONTEXT_BTN_GAP) / (CONTEXT_BTN_W + CONTEXT_BTN_GAP)));
+  const buttonW = Math.min(CONTEXT_BTN_W, (availableW - Math.max(0, Math.min(count, perRow) - 1) * CONTEXT_BTN_GAP) / Math.min(count, perRow));
+  const gridH = rows * CONTEXT_BTN_H + Math.max(0, rows - 1) * CONTEXT_BTN_GAP;
+  const startY = bar.y + 16;
+  return Array.from({ length: count }, (_, index) => {
+    const row = Math.floor(index / perRow);
+    const col = index % perRow;
+    const rowCount = Math.min(perRow, count - row * perRow);
+    const totalW = rowCount * buttonW + Math.max(0, rowCount - 1) * CONTEXT_BTN_GAP;
+    const startX = right - totalW;
+    return {
+      x: startX + col * (buttonW + CONTEXT_BTN_GAP),
+      y: startY + row * (CONTEXT_BTN_H + CONTEXT_BTN_GAP),
+      w: buttonW,
+      h: CONTEXT_BTN_H,
+    };
+  });
+}
+
+let contextActionCountHint = 0;
+
+function currentContextActionCount(): number {
+  return contextActionCountHint;
+}
+
+function contextActionRowCount(W: number, count: number): number {
+  if (count <= 0) return 1;
+  const right = W - CONTEXT_CANCEL_W - 24;
+  const left = Math.max(220, Math.min(330, W * 0.27));
+  const availableW = Math.max(64, right - left);
+  const perRow = Math.max(1, Math.floor((availableW + CONTEXT_BTN_GAP) / (CONTEXT_BTN_W + CONTEXT_BTN_GAP)));
+  return Math.max(1, Math.ceil(count / perRow));
+}
+
+function contextBarHeightForRows(rows: number): number {
+  return Math.min(188, 116 + Math.max(0, rows - 1) * (CONTEXT_BTN_H + CONTEXT_BTN_GAP));
+}
+
+function topResourceStackRect(): Rect {
+  return { x: 10, y: 10, w: 118, h: 86 };
+}
+
+function contextCancelRectForBar(W: number, bar: Rect): Rect {
+  return { x: W - CONTEXT_CANCEL_W - 12, y: bar.y + 18, w: CONTEXT_CANCEL_W, h: Math.min(52, bar.h - 34) };
 }
 
 // ─── Layout helpers — build button & panel ───────────────────────────────────
@@ -313,6 +350,10 @@ export function hitTestContextBuildAction(x: number, y: number, buildOpen: boole
     if (inRect(x, y, rects[i]!)) return BUILD_ITEMS[i]!.type;
   }
   return null;
+}
+
+export function getHudBottomInset(): number {
+  return bottomBarRect(window.innerWidth, window.innerHeight).h;
 }
 
 // ─── Main draw ────────────────────────────────────────────────────────────────
@@ -582,45 +623,6 @@ function drawContextBottomBar(
   hud: HudState,
   t: number
 ) {
-  const bar = bottomBarRect(W, H);
-  const rowMid = bar.y + 34;
-  const hintY = bar.y + 72;
-
-  ctx.save();
-  ctx.fillStyle = LAPIS_DEEP;
-  ctx.fillRect(0, bar.y, W, bar.h);
-  ctx.strokeStyle = GOLD_BRIGHT;
-  ctx.lineWidth = 1.5;
-  ctx.beginPath(); ctx.moveTo(0, bar.y); ctx.lineTo(W, bar.y); ctx.stroke();
-  ctx.strokeStyle = GOLD_DIM;
-  ctx.lineWidth = 1;
-  ctx.beginPath(); ctx.moveTo(0, bar.y + 3); ctx.lineTo(W, bar.y + 3); ctx.stroke();
-  ctx.restore();
-
-  drawMeanderStripe(ctx, 0, bar.y + 5, W);
-
-  const r = (color >> 16) & 0xff;
-  const g = (color >> 8) & 0xff;
-  const b = color & 0xff;
-  ctx.save();
-  ctx.beginPath();
-  ctx.arc(56, rowMid, 11, 0, Math.PI * 2);
-  ctx.fillStyle = `rgb(${r},${g},${b})`;
-  ctx.shadowColor = `rgb(${r},${g},${b})`;
-  ctx.shadowBlur = 10;
-  ctx.fill();
-  ctx.shadowBlur = 0;
-  ctx.strokeStyle = GOLD_BRIGHT;
-  ctx.lineWidth = 2;
-  ctx.stroke();
-  ctx.restore();
-
-  drawResourcePill(ctx, 84, rowMid, "#3D9E47", DIVINE_CYAN, "Bio", resources.biomass, bounce.biomass, t, "B");
-  drawResourcePill(ctx, 188, rowMid, "#8A7054", "#D4A84C", "Mat", resources.material, bounce.material, t, "M");
-  drawResourcePill(ctx, 292, rowMid, "#00A8CC", DIVINE_CYAN, "GPU", resources.compute, bounce.compute, t, "C");
-
-  const summaryX = Math.min(406, W * 0.4);
-  const summaryW = Math.max(40, contextActionRects(W, H, 1)[0]?.x ?? W - 90 - summaryX);
   let title = `${count} ${count === 1 ? "Squad" : "Squads"}`;
   let detail = "Tap units to select. Double tap buildable ground to construct.";
   let actions: Array<{ label: string; sub?: string; disabled?: boolean; active?: boolean; kind: "selection" | "build"; build?: BuildingTypeValue }> = [];
@@ -641,10 +643,12 @@ function drawContextBottomBar(
   } else if (selected) {
     title = selected.title;
     const hp = `${Math.ceil(selected.health)} / ${Math.ceil(selected.maxHealth)}`;
-    detail = `${selected.detail}  ·  HP ${hp}`;
+    detail = selected.production
+      ? `Training ${selected.production.label} x${selected.production.queueCount} · ${Math.ceil(selected.production.remainingMs / 1000)}s left · HP ${hp}`
+      : `${selected.detail}  ·  HP ${hp}`;
     actions = selected.actions.map((action) => ({
       label: action.label,
-      sub: action.cost ? formatResourceCost(action.cost) : action.timeMs ? `${Math.ceil(action.timeMs / 1000)}s` : "",
+      sub: `${action.queueCount ? `x${action.queueCount} · ` : ""}${action.cost ? formatResourceCost(action.cost) : action.timeMs ? `${Math.ceil(action.timeMs / 1000)}s` : ""}`,
       disabled: action.disabled,
       active: action.active,
       kind: "selection" as const,
@@ -666,18 +670,58 @@ function drawContextBottomBar(
           : "Double tap buildable ground to construct.";
   }
 
+  contextActionCountHint = actions.length;
+  const rows = contextActionRowCount(W, actions.length);
+  const bar = bottomBarRect(W, H);
+  const rowMid = bar.y + 32;
+  const hintY = bar.y + bar.h - 32;
+
+  ctx.save();
+  ctx.fillStyle = LAPIS_DEEP;
+  ctx.fillRect(0, bar.y, W, bar.h);
+  ctx.strokeStyle = GOLD_BRIGHT;
+  ctx.lineWidth = 1.5;
+  ctx.beginPath(); ctx.moveTo(0, bar.y); ctx.lineTo(W, bar.y); ctx.stroke();
+  ctx.strokeStyle = GOLD_DIM;
+  ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.moveTo(0, bar.y + 3); ctx.lineTo(W, bar.y + 3); ctx.stroke();
+  ctx.restore();
+
+  drawMeanderStripe(ctx, 0, bar.y + 5, W);
+  drawTopResourceStack(ctx, color, resources, bounce, t);
+
+  const summaryX = 16;
+  const firstActionX = contextActionRects(W, H, Math.max(1, actions.length))[0]?.x ?? contextCancelRect(W, H).x;
+  const summaryW = Math.max(90, firstActionX - summaryX - 12);
+
   ctx.save();
   ctx.fillStyle = MARBLE_TEXT;
   ctx.font = F_CINZEL_MD;
   ctx.textBaseline = "middle";
   ctx.letterSpacing = "0.5px";
   const clippedTitle = clipText(ctx, title, Math.max(80, summaryW - 16));
-  ctx.fillText(clippedTitle, summaryX, rowMid - 9);
+  ctx.fillText(clippedTitle, summaryX, rowMid - (rows > 1 ? 7 : 9));
   ctx.fillStyle = MARBLE_DIM;
   ctx.font = F_BODY_XS;
   ctx.letterSpacing = "0px";
-  ctx.fillText(clipText(ctx, detail, Math.max(80, summaryW - 16)), summaryX, rowMid + 11);
+  ctx.fillText(clipText(ctx, detail, Math.max(80, summaryW - 16)), summaryX, rowMid + (rows > 1 ? 12 : 11));
   ctx.restore();
+
+  if (selected?.production) {
+    const progressW = Math.max(80, summaryW - 20);
+    const progressY = rowMid + 25;
+    ctx.save();
+    ctx.fillStyle = "rgba(0,0,0,0.38)";
+    rr(ctx, summaryX, progressY, progressW, 8, 2); ctx.fill();
+    ctx.strokeStyle = GOLD_DIM;
+    ctx.lineWidth = 1;
+    rr(ctx, summaryX, progressY, progressW, 8, 2); ctx.stroke();
+    ctx.fillStyle = DIVINE_CYAN;
+    ctx.shadowColor = CYAN_GLOW;
+    ctx.shadowBlur = 7;
+    rr(ctx, summaryX, progressY, progressW * selected.production.progress, 8, 2); ctx.fill();
+    ctx.restore();
+  }
 
   const actionRects = contextActionRects(W, H, actions.length);
   for (let i = 0; i < actions.length; i++) {
@@ -734,13 +778,70 @@ function drawContextBottomBar(
   ctx.font = F_BODY_XS;
   ctx.fillStyle = MARBLE_MUTED;
   ctx.textBaseline = "middle";
-  ctx.textAlign = "center";
+  ctx.textAlign = "left";
   const hint = hud.buildPanelOpen
     ? "tap a structure to build here  ·  X cancels"
     : selected
       ? "tap ground to move  ·  tap enemy to attack  ·  X deselects"
       : "tap to select  ·  double tap buildable ground to build  ·  drag to pan";
-  ctx.fillText(hint, W * 0.5, hintY);
+  ctx.fillText(clipText(ctx, hint, Math.max(120, W - 340)), 16, hintY);
+  ctx.restore();
+}
+
+function drawTopResourceStack(
+  ctx: CanvasRenderingContext2D,
+  color: number,
+  resources: ResourceCost,
+  bounce: HudState["_resourceBounce"],
+  t: number
+): void {
+  const panel = topResourceStackRect();
+  ctx.save();
+  ctx.fillStyle = "rgba(8, 16, 34, 0.86)";
+  rr(ctx, panel.x, panel.y, panel.w, panel.h, 5); ctx.fill();
+  ctx.strokeStyle = GOLD_DIM;
+  ctx.lineWidth = 1;
+  rr(ctx, panel.x, panel.y, panel.w, panel.h, 5); ctx.stroke();
+  drawDiamond(ctx, panel.x + 16, panel.y + 17, 7, `#${color.toString(16).padStart(6, "0")}`);
+  ctx.fillStyle = GOLD_TEXT;
+  ctx.font = "700 8px 'Cinzel', serif";
+  ctx.textBaseline = "middle";
+  ctx.letterSpacing = "1px";
+  ctx.fillText("STOCK", panel.x + 30, panel.y + 17);
+  ctx.restore();
+
+  drawMiniResource(ctx, panel.x + 10, panel.y + 34, "#59B96A", "BIO", resources.biomass, bounce.biomass, t);
+  drawMiniResource(ctx, panel.x + 10, panel.y + 52, "#D4A84C", "MAT", resources.material, bounce.material, t);
+  drawMiniResource(ctx, panel.x + 10, panel.y + 70, DIVINE_CYAN, "GPU", resources.compute, bounce.compute, t);
+}
+
+function drawMiniResource(
+  ctx: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  color: string,
+  label: string,
+  value: number,
+  bounceT: number,
+  t: number
+): void {
+  const bounceAge = t - bounceT;
+  const pulse = bounceAge < 0.45 ? Math.sin((bounceAge / 0.45) * Math.PI) : 0;
+  ctx.save();
+  ctx.globalAlpha = 0.94;
+  ctx.fillStyle = color;
+  ctx.shadowColor = color;
+  ctx.shadowBlur = pulse * 10;
+  ctx.fillRect(x, y - 5, 3, 10);
+  ctx.shadowBlur = 0;
+  ctx.fillStyle = MARBLE_MUTED;
+  ctx.font = "700 8px 'Cinzel', serif";
+  ctx.textBaseline = "middle";
+  ctx.fillText(label, x + 10, y);
+  ctx.fillStyle = MARBLE_TEXT;
+  ctx.font = F_NUM_SM;
+  ctx.textAlign = "right";
+  ctx.fillText(String(value), x + 96, y);
   ctx.restore();
 }
 
