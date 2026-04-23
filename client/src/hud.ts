@@ -204,9 +204,13 @@ function clipText(ctx: CanvasRenderingContext2D, text: string, maxW: number): st
 }
 
 function bottomBarRect(W: number, H: number): Rect {
-  const rows = contextActionRowCount(W, currentContextActionCount());
+  const rows = contextActionRowCount(W, currentContextActionCount(), currentContextActionCompact());
   const h = contextBarHeightForRows(rows);
   return { x: 0, y: H - h, w: W, h };
+}
+
+function contextActionLeft(W: number, compact: boolean): number {
+  return compact ? 16 : Math.max(220, Math.min(330, W * 0.27));
 }
 
 function contextCancelRect(W: number, H: number): Rect {
@@ -214,24 +218,23 @@ function contextCancelRect(W: number, H: number): Rect {
   return contextCancelRectForBar(W, bar);
 }
 
-function contextActionRects(W: number, H: number, count: number): Rect[] {
+function contextActionRects(W: number, H: number, count: number, compact = false): Rect[] {
   if (count <= 0) return [];
-  const rows = contextActionRowCount(W, count);
+  const rows = contextActionRowCount(W, count, compact);
   const bar = { x: 0, y: H - contextBarHeightForRows(rows), w: W, h: contextBarHeightForRows(rows) };
   const cancel = contextCancelRectForBar(W, bar);
-  const left = Math.max(220, Math.min(330, W * 0.27));
+  const left = contextActionLeft(W, compact);
   const right = Math.max(left + 64, cancel.x - 12);
   const availableW = Math.max(64, right - left);
   const perRow = Math.max(1, Math.floor((availableW + CONTEXT_BTN_GAP) / (CONTEXT_BTN_W + CONTEXT_BTN_GAP)));
   const buttonW = Math.min(CONTEXT_BTN_W, (availableW - Math.max(0, Math.min(count, perRow) - 1) * CONTEXT_BTN_GAP) / Math.min(count, perRow));
-  const gridH = rows * CONTEXT_BTN_H + Math.max(0, rows - 1) * CONTEXT_BTN_GAP;
   const startY = bar.y + 16;
   return Array.from({ length: count }, (_, index) => {
     const row = Math.floor(index / perRow);
     const col = index % perRow;
     const rowCount = Math.min(perRow, count - row * perRow);
     const totalW = rowCount * buttonW + Math.max(0, rowCount - 1) * CONTEXT_BTN_GAP;
-    const startX = right - totalW;
+    const startX = compact ? right - totalW : left;
     return {
       x: startX + col * (buttonW + CONTEXT_BTN_GAP),
       y: startY + row * (CONTEXT_BTN_H + CONTEXT_BTN_GAP),
@@ -242,15 +245,20 @@ function contextActionRects(W: number, H: number, count: number): Rect[] {
 }
 
 let contextActionCountHint = 0;
+let contextActionCompactHint = false;
 
 function currentContextActionCount(): number {
   return contextActionCountHint;
 }
 
-function contextActionRowCount(W: number, count: number): number {
+function currentContextActionCompact(): boolean {
+  return contextActionCompactHint;
+}
+
+function contextActionRowCount(W: number, count: number, compact = false): number {
   if (count <= 0) return 1;
   const right = W - CONTEXT_CANCEL_W - 24;
-  const left = Math.max(220, Math.min(330, W * 0.27));
+  const left = contextActionLeft(W, compact);
   const availableW = Math.max(64, right - left);
   const perRow = Math.max(1, Math.floor((availableW + CONTEXT_BTN_GAP) / (CONTEXT_BTN_W + CONTEXT_BTN_GAP)));
   return Math.max(1, Math.ceil(count / perRow));
@@ -336,7 +344,7 @@ export function hitTestContextBar(x: number, y: number): boolean {
 
 export function hitTestContextSelectionAction(x: number, y: number, selected: SelectionInfo | null): string | null {
   if (!selected || selected.actions.length === 0) return null;
-  const rects = contextActionRects(window.innerWidth, window.innerHeight, selected.actions.length);
+  const rects = contextActionRects(window.innerWidth, window.innerHeight, selected.actions.length, false);
   for (let i = 0; i < rects.length; i++) {
     if (inRect(x, y, rects[i]!)) return selected.actions[i]!.id;
   }
@@ -345,7 +353,7 @@ export function hitTestContextSelectionAction(x: number, y: number, selected: Se
 
 export function hitTestContextBuildAction(x: number, y: number, buildOpen: boolean): BuildingTypeValue | null {
   if (!buildOpen) return null;
-  const rects = contextActionRects(window.innerWidth, window.innerHeight, BUILD_ITEMS.length);
+  const rects = contextActionRects(window.innerWidth, window.innerHeight, BUILD_ITEMS.length, true);
   for (let i = 0; i < rects.length; i++) {
     if (inRect(x, y, rects[i]!)) return BUILD_ITEMS[i]!.type;
   }
@@ -626,14 +634,11 @@ function drawContextBottomBar(
   let title = `${count} ${count === 1 ? "Squad" : "Squads"}`;
   let detail = "Tap units to select. Double tap buildable ground to construct.";
   let actions: Array<{ label: string; sub?: string; disabled?: boolean; active?: boolean; kind: "selection" | "build"; build?: BuildingTypeValue }> = [];
+  const compactActions = hud.buildPanelOpen;
 
   if (hud.buildPanelOpen) {
-    title = "Build Here";
-    detail = selectedTile
-      ? selectedTile.canBuild
-        ? "Choose a structure for this tile."
-        : "This tile cannot be built on."
-      : "Choose a structure.";
+    title = "";
+    detail = "";
     actions = BUILD_ITEMS.map((item) => ({
       label: item.label,
       sub: formatResourceCost(item.cost),
@@ -671,10 +676,13 @@ function drawContextBottomBar(
   }
 
   contextActionCountHint = actions.length;
-  const rows = contextActionRowCount(W, actions.length);
+  contextActionCompactHint = compactActions;
+  const rows = contextActionRowCount(W, actions.length, compactActions);
   const bar = bottomBarRect(W, H);
   const rowMid = bar.y + 32;
   const hintY = bar.y + bar.h - 32;
+  const selectedSummary = !compactActions && selected !== null;
+  const bottomRightAvoid = selectedSummary && W < 980 ? 230 : 0;
 
   ctx.save();
   ctx.fillStyle = LAPIS_DEEP;
@@ -691,25 +699,32 @@ function drawContextBottomBar(
   drawTopResourceStack(ctx, color, resources, bounce, t);
 
   const summaryX = 16;
-  const firstActionX = contextActionRects(W, H, Math.max(1, actions.length))[0]?.x ?? contextCancelRect(W, H).x;
+  const firstActionX = contextActionRects(W, H, Math.max(1, actions.length), compactActions)[0]?.x ?? contextCancelRect(W, H).x;
   const summaryW = Math.max(90, firstActionX - summaryX - 12);
+  const titleY = selectedSummary ? bar.y + bar.h - 64 : rowMid - (rows > 1 ? 7 : 9);
+  const detailY = selectedSummary ? bar.y + bar.h - 38 : rowMid + (rows > 1 ? 12 : 11);
+  const detailMaxW = selectedSummary
+    ? Math.max(120, W - summaryX - 16 - bottomRightAvoid)
+    : Math.max(80, summaryW - 16);
 
-  ctx.save();
-  ctx.fillStyle = MARBLE_TEXT;
-  ctx.font = F_CINZEL_MD;
-  ctx.textBaseline = "middle";
-  ctx.letterSpacing = "0.5px";
-  const clippedTitle = clipText(ctx, title, Math.max(80, summaryW - 16));
-  ctx.fillText(clippedTitle, summaryX, rowMid - (rows > 1 ? 7 : 9));
-  ctx.fillStyle = MARBLE_DIM;
-  ctx.font = F_BODY_XS;
-  ctx.letterSpacing = "0px";
-  ctx.fillText(clipText(ctx, detail, Math.max(80, summaryW - 16)), summaryX, rowMid + (rows > 1 ? 12 : 11));
-  ctx.restore();
+  if (!compactActions) {
+    ctx.save();
+    ctx.fillStyle = MARBLE_TEXT;
+    ctx.font = F_CINZEL_MD;
+    ctx.textBaseline = "middle";
+    ctx.letterSpacing = "0.5px";
+    const clippedTitle = clipText(ctx, title, Math.max(80, summaryW - 16));
+    ctx.fillText(clippedTitle, summaryX, titleY);
+    ctx.fillStyle = MARBLE_DIM;
+    ctx.font = F_BODY_XS;
+    ctx.letterSpacing = "0px";
+    ctx.fillText(clipText(ctx, detail, detailMaxW), summaryX, detailY);
+    ctx.restore();
+  }
 
-  if (selected?.production) {
-    const progressW = Math.max(80, summaryW - 20);
-    const progressY = rowMid + 25;
+  if (!compactActions && selected?.production) {
+    const progressW = Math.max(80, Math.min(selectedSummary ? detailMaxW - 8 : summaryW - 20, W - summaryX - 40 - bottomRightAvoid));
+    const progressY = selectedSummary ? bar.y + bar.h - 21 : rowMid + 25;
     ctx.save();
     ctx.fillStyle = "rgba(0,0,0,0.38)";
     rr(ctx, summaryX, progressY, progressW, 8, 2); ctx.fill();
@@ -723,7 +738,7 @@ function drawContextBottomBar(
     ctx.restore();
   }
 
-  const actionRects = contextActionRects(W, H, actions.length);
+  const actionRects = contextActionRects(W, H, actions.length, compactActions);
   for (let i = 0; i < actions.length; i++) {
     const rect = actionRects[i]!;
     const action = actions[i]!;
@@ -746,13 +761,26 @@ function drawContextBottomBar(
     ctx.fillStyle = active ? LAPIS_DEEP : MARBLE_TEXT;
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
-    ctx.font = "700 9px 'Cinzel', serif";
-    ctx.letterSpacing = "0.2px";
-    ctx.fillText(clipText(ctx, action.label, rect.w - 8), rect.x + rect.w * 0.5, rect.y + 20);
-    ctx.font = F_BODY_XS;
-    ctx.letterSpacing = "0px";
-    ctx.fillStyle = active ? "rgba(8,16,34,0.74)" : MARBLE_DIM;
-    if (action.sub) ctx.fillText(clipText(ctx, action.sub, rect.w - 8), rect.x + rect.w * 0.5, rect.y + 39);
+    if (action.kind === "build" && item) {
+      ctx.font = "700 17px system-ui, sans-serif";
+      ctx.letterSpacing = "0px";
+      ctx.fillText(item.icon, rect.x + rect.w * 0.5, rect.y + 11);
+      ctx.font = "700 8px 'Cinzel', serif";
+      ctx.letterSpacing = "0.2px";
+      ctx.fillText(clipText(ctx, action.label, rect.w - 8), rect.x + rect.w * 0.5, rect.y + 26);
+      ctx.font = F_BODY_XS;
+      ctx.letterSpacing = "0px";
+      ctx.fillStyle = active ? "rgba(8,16,34,0.74)" : MARBLE_DIM;
+      if (action.sub) ctx.fillText(clipText(ctx, action.sub, rect.w - 8), rect.x + rect.w * 0.5, rect.y + 40);
+    } else {
+      ctx.font = "700 9px 'Cinzel', serif";
+      ctx.letterSpacing = "0.2px";
+      ctx.fillText(clipText(ctx, action.label, rect.w - 8), rect.x + rect.w * 0.5, rect.y + 20);
+      ctx.font = F_BODY_XS;
+      ctx.letterSpacing = "0px";
+      ctx.fillStyle = active ? "rgba(8,16,34,0.74)" : MARBLE_DIM;
+      if (action.sub) ctx.fillText(clipText(ctx, action.sub, rect.w - 8), rect.x + rect.w * 0.5, rect.y + 39);
+    }
     ctx.restore();
   }
 
@@ -780,11 +808,12 @@ function drawContextBottomBar(
   ctx.textBaseline = "middle";
   ctx.textAlign = "left";
   const hint = hud.buildPanelOpen
-    ? "tap a structure to build here  ·  X cancels"
+    ? "double tap ground to build  ·  tap icon to place  ·  X cancels"
     : selected
-      ? "tap ground to move  ·  tap enemy to attack  ·  X deselects"
+      ? ""
       : "tap to select  ·  double tap buildable ground to build  ·  drag to pan";
-  ctx.fillText(clipText(ctx, hint, Math.max(120, W - 340)), 16, hintY);
+  const hintMaxW = compactActions ? Math.max(120, contextCancelRect(W, H).x - 28) : Math.max(120, W - 340);
+  if (hint) ctx.fillText(clipText(ctx, hint, hintMaxW), 16, hintY);
   ctx.restore();
 }
 
