@@ -13,7 +13,7 @@ import {
 import type { Game } from "./game.js";
 import { Entity, type SelectionInfo } from "./entity.js";
 import { getTerrainHeightAt } from "./terrain.js";
-import { instantiateBuildingVariant } from "./building-model-registry.js";
+import { getBuildingModelAssetVersion, instantiateBuildingVariant } from "./building-model-registry.js";
 import type { BuildingVariant } from "./building-visuals.js";
 import {
   applyTeamColorTexturesToObject3D,
@@ -60,6 +60,8 @@ function getEffectiveUnitTrainTimeMs(unitType: UnitTypeValue): number {
 export class BuildingEntity extends Entity {
   /** Cloned only for the one building type this entity actually uses. Set after first sync(). */
   private variant: BuildingVariant | null = null;
+  private variantType: BuildingTypeValue | null = null;
+  private variantAssetVersion = -1;
   /** One-time CPU recolor of GLB albedo/emissive maps to this owner’s palette. */
   private buildingTeamTexturesApplied = false;
   /** Single unlit sphere — full-brightness player palette color. */
@@ -117,8 +119,7 @@ export class BuildingEntity extends Entity {
       const type = building.buildingType;
       setTimeout(() => {
         if (this.isStale()) return; // building already destroyed before clone finished
-        this.variant = instantiateBuildingVariant(type);
-        this.mesh.add(this.variant.root);
+        this.replaceVariant(type);
       }, 0);
     }
   }
@@ -128,7 +129,15 @@ export class BuildingEntity extends Entity {
   }
 
   public render(_dt: number): void {
-    if (!this.building || !this.variant) return;
+    if (!this.building) return;
+    if (
+      !this.variant ||
+      this.variantType !== this.building.buildingType ||
+      this.variantAssetVersion !== getBuildingModelAssetVersion()
+    ) {
+      this.replaceVariant(this.building.buildingType);
+    }
+    if (!this.variant) return;
     this.localAge += _dt;
 
     const terrainY = getTerrainHeightAt(
@@ -159,6 +168,17 @@ export class BuildingEntity extends Entity {
     } else if (this.building.buildingType === BuildingType.TOWER) {
       this.renderTowerLightning(terrainY);
     }
+  }
+
+  private replaceVariant(type: BuildingTypeValue): void {
+    if (this.variant) {
+      this.mesh.remove(this.variant.root);
+    }
+    this.variant = instantiateBuildingVariant(type);
+    this.variantType = type;
+    this.variantAssetVersion = getBuildingModelAssetVersion();
+    this.buildingTeamTexturesApplied = false;
+    this.mesh.add(this.variant.root);
   }
 
   private renderTowerLightning(terrainY: number): void {

@@ -16,8 +16,12 @@
  *   GLTF_WEBP_QUALITY — WebP quality 1–100 (default: 82)
  *   GLTF_FORCE=1 or --force — rebuild even if output is newer
  *
- * Geometry is not re-encoded: only `resize` + `webp` touch image data. Vertex buffers
- * stay as in `models-source/` (aside from glTF Transform’s normal buffer layout when writing).
+ * Pipeline:
+ *   1. Resize oversized textures.
+ *   2. Re-encode textures to WebP.
+ *
+ * Keep geometry untouched. `gltf-transform optimize` / meshopt can be much smaller,
+ * but some of our stylized GLBs currently render with corrupted transforms after that pass.
  *
  * Git: track sources with Git LFS (see .gitattributes). Run once: git lfs install
  */
@@ -35,6 +39,8 @@ const TEXTURE_SIZE = Number(process.env.GLTF_TEXTURE_SIZE || "1024") || 1024;
 const WEBP_QUALITY = Number(process.env.GLTF_WEBP_QUALITY || "82") || 82;
 const FORCE = process.env.GLTF_FORCE === "1" || process.argv.includes("--force");
 const WATCH = process.argv.includes("--watch");
+const PIPELINE_VERSION = `texture-webp-v2:size=${TEXTURE_SIZE}:q=${WEBP_QUALITY}:geometry=unchanged`;
+const MARKER_ROOT = path.join(REPO_ROOT, "node_modules/.cache/vibejam-gltf-compress");
 
 /** @type {{ label: string; source: string; out: string }[]} */
 const JOBS = [
@@ -67,8 +73,12 @@ function fmtMb(bytes) {
   return (bytes / (1024 * 1024)).toFixed(2);
 }
 
+function markerPathFor(job, output) {
+  return path.join(MARKER_ROOT, job.label, `${path.basename(output)}.meta`);
+}
+
 /**
- * Texture-only pipeline: max-size textures, then WebP. No meshopt/draco/quantize/simplify.
+ * Compression pipeline: texture resize/WebP only. This preserves authored geometry exactly.
  */
 function runTextureOnlyPipeline(input, output) {
   const cli = gltfTransformCli();
@@ -122,11 +132,14 @@ function compressJob(job) {
   for (const input of inputs) {
     const name = path.basename(input);
     const output = path.join(job.out, name);
+    const marker = markerPathFor(job, output);
     const before = fs.statSync(input).size;
 
     if (
       !FORCE &&
       fs.existsSync(output) &&
+      fs.existsSync(marker) &&
+      fs.readFileSync(marker, "utf8") === PIPELINE_VERSION &&
       fs.statSync(output).mtimeMs >= fs.statSync(input).mtimeMs
     ) {
       const after = fs.statSync(output).size;
@@ -135,6 +148,8 @@ function compressJob(job) {
     }
 
     runTextureOnlyPipeline(input, output);
+    fs.mkdirSync(path.dirname(marker), { recursive: true });
+    fs.writeFileSync(marker, PIPELINE_VERSION);
     const after = fs.statSync(output).size;
     rows.push({ name: `${job.label}/${name}`, before, after, skipped: false });
   }

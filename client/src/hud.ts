@@ -50,6 +50,7 @@ export type KothState = {
 export type HudState = {
   buildPanelOpen: boolean;
   activeBuildType: BuildingTypeValue | null;
+  buildAnchorTileKey: string | null;
   _cardKey: string;
   _cardEnterT: number;
   _panelWasVisible: boolean;
@@ -62,7 +63,12 @@ export type HudState = {
 
 // ─── Layout constants ────────────────────────────────────────────────────────
 
-const BAR_H        = 62; // two rows: resources + hint line
+const BAR_H        = 62; // legacy floating panel layout
+const CONTEXT_BAR_H = 92;
+const CONTEXT_BTN_W = 72;
+const CONTEXT_BTN_H = 54;
+const CONTEXT_BTN_GAP = 8;
+const CONTEXT_CANCEL_W = 62;
 const CARD_W       = 428;
 const CARD_H       = 130;
 const CARD_PAD     = 10;
@@ -129,6 +135,7 @@ export function createHudState(): HudState {
   return {
     buildPanelOpen: false,
     activeBuildType: null,
+    buildAnchorTileKey: null,
     _cardKey: "",
     _cardEnterT: -999,
     _panelWasVisible: false,
@@ -190,6 +197,40 @@ function inRect(px: number, py: number, r: Rect) {
   return px >= r.x && px <= r.x + r.w && py >= r.y && py <= r.y + r.h;
 }
 
+function clipText(ctx: CanvasRenderingContext2D, text: string, maxW: number): string {
+  if (ctx.measureText(text).width <= maxW) return text;
+  let out = text;
+  while (out.length > 1 && ctx.measureText(`${out}…`).width > maxW) out = out.slice(0, -1);
+  return `${out}…`;
+}
+
+function bottomBarRect(W: number, H: number): Rect {
+  return { x: 0, y: H - CONTEXT_BAR_H, w: W, h: CONTEXT_BAR_H };
+}
+
+function contextCancelRect(W: number, H: number): Rect {
+  const bar = bottomBarRect(W, H);
+  return { x: W - CONTEXT_CANCEL_W - 12, y: bar.y + 19, w: CONTEXT_CANCEL_W, h: 52 };
+}
+
+function contextActionRects(W: number, H: number, count: number): Rect[] {
+  if (count <= 0) return [];
+  const bar = bottomBarRect(W, H);
+  const cancel = contextCancelRect(W, H);
+  const right = cancel.x - 12;
+  const left = Math.min(430, W * 0.42);
+  const availableW = Math.max(0, right - left);
+  const buttonW = Math.max(54, Math.min(CONTEXT_BTN_W, (availableW - Math.max(0, count - 1) * CONTEXT_BTN_GAP) / count));
+  const totalW = count * buttonW + Math.max(0, count - 1) * CONTEXT_BTN_GAP;
+  const startX = Math.max(left, right - totalW);
+  return Array.from({ length: count }, (_, index) => ({
+    x: startX + index * (buttonW + CONTEXT_BTN_GAP),
+    y: bar.y + 19,
+    w: buttonW,
+    h: CONTEXT_BTN_H,
+  }));
+}
+
 // ─── Layout helpers — build button & panel ───────────────────────────────────
 
 function buildButtonRect(W: number, H: number): Rect {
@@ -248,6 +289,32 @@ export function hitTestBuildPanel(x: number, y: number): BuildingTypeValue | "in
   return "inside";
 }
 
+export function hitTestContextCancel(x: number, y: number): boolean {
+  return inRect(x, y, contextCancelRect(window.innerWidth, window.innerHeight));
+}
+
+export function hitTestContextBar(x: number, y: number): boolean {
+  return inRect(x, y, bottomBarRect(window.innerWidth, window.innerHeight));
+}
+
+export function hitTestContextSelectionAction(x: number, y: number, selected: SelectionInfo | null): string | null {
+  if (!selected || selected.actions.length === 0) return null;
+  const rects = contextActionRects(window.innerWidth, window.innerHeight, selected.actions.length);
+  for (let i = 0; i < rects.length; i++) {
+    if (inRect(x, y, rects[i]!)) return selected.actions[i]!.id;
+  }
+  return null;
+}
+
+export function hitTestContextBuildAction(x: number, y: number, buildOpen: boolean): BuildingTypeValue | null {
+  if (!buildOpen) return null;
+  const rects = contextActionRects(window.innerWidth, window.innerHeight, BUILD_ITEMS.length);
+  for (let i = 0; i < rects.length; i++) {
+    if (inRect(x, y, rects[i]!)) return BUILD_ITEMS[i]!.type;
+  }
+  return null;
+}
+
 // ─── Main draw ────────────────────────────────────────────────────────────────
 
 export function drawHUD(
@@ -282,11 +349,8 @@ export function drawHUD(
 
   drawMoveMarkers(ctx, hud, t);
   drawWarningToast(ctx, W, H, hud, t);
-  drawBottomBar(ctx, W, H, myColor, mySquadCount, resources, hud._resourceBounce, selected !== null, hud, t);
+  drawContextBottomBar(ctx, W, H, myColor, mySquadCount, resources, hud._resourceBounce, selected, selectedTile, hud, t);
   if (koth) drawKothPanel(ctx, W, H, koth, t);
-  if (selected) drawSelectionCard(ctx, W, H, selected, t, hud._cardEnterT);
-  if (!selected && selectedTile) drawTileCard(ctx, W, H, selectedTile);
-  if (hud.buildPanelOpen) drawBuildPanel(ctx, W, H, hud, t);
 }
 
 export function drawFloatingResourceTexts(
@@ -504,6 +568,181 @@ function drawMeanderStripe(ctx: CanvasRenderingContext2D, x: number, y: number, 
 }
 
 // ─── Bottom bar ───────────────────────────────────────────────────────────────
+
+function drawContextBottomBar(
+  ctx: CanvasRenderingContext2D,
+  W: number,
+  H: number,
+  color: number,
+  count: number,
+  resources: ResourceCost,
+  bounce: HudState["_resourceBounce"],
+  selected: SelectionInfo | null,
+  selectedTile: TileView | null,
+  hud: HudState,
+  t: number
+) {
+  const bar = bottomBarRect(W, H);
+  const rowMid = bar.y + 34;
+  const hintY = bar.y + 72;
+
+  ctx.save();
+  ctx.fillStyle = LAPIS_DEEP;
+  ctx.fillRect(0, bar.y, W, bar.h);
+  ctx.strokeStyle = GOLD_BRIGHT;
+  ctx.lineWidth = 1.5;
+  ctx.beginPath(); ctx.moveTo(0, bar.y); ctx.lineTo(W, bar.y); ctx.stroke();
+  ctx.strokeStyle = GOLD_DIM;
+  ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.moveTo(0, bar.y + 3); ctx.lineTo(W, bar.y + 3); ctx.stroke();
+  ctx.restore();
+
+  drawMeanderStripe(ctx, 0, bar.y + 5, W);
+
+  const r = (color >> 16) & 0xff;
+  const g = (color >> 8) & 0xff;
+  const b = color & 0xff;
+  ctx.save();
+  ctx.beginPath();
+  ctx.arc(56, rowMid, 11, 0, Math.PI * 2);
+  ctx.fillStyle = `rgb(${r},${g},${b})`;
+  ctx.shadowColor = `rgb(${r},${g},${b})`;
+  ctx.shadowBlur = 10;
+  ctx.fill();
+  ctx.shadowBlur = 0;
+  ctx.strokeStyle = GOLD_BRIGHT;
+  ctx.lineWidth = 2;
+  ctx.stroke();
+  ctx.restore();
+
+  drawResourcePill(ctx, 84, rowMid, "#3D9E47", DIVINE_CYAN, "Bio", resources.biomass, bounce.biomass, t, "B");
+  drawResourcePill(ctx, 188, rowMid, "#8A7054", "#D4A84C", "Mat", resources.material, bounce.material, t, "M");
+  drawResourcePill(ctx, 292, rowMid, "#00A8CC", DIVINE_CYAN, "GPU", resources.compute, bounce.compute, t, "C");
+
+  const summaryX = Math.min(406, W * 0.4);
+  const summaryW = Math.max(40, contextActionRects(W, H, 1)[0]?.x ?? W - 90 - summaryX);
+  let title = `${count} ${count === 1 ? "Squad" : "Squads"}`;
+  let detail = "Tap units to select. Double tap buildable ground to construct.";
+  let actions: Array<{ label: string; sub?: string; disabled?: boolean; active?: boolean; kind: "selection" | "build"; build?: BuildingTypeValue }> = [];
+
+  if (hud.buildPanelOpen) {
+    title = "Build Here";
+    detail = selectedTile
+      ? selectedTile.canBuild
+        ? "Choose a structure for this tile."
+        : "This tile cannot be built on."
+      : "Choose a structure.";
+    actions = BUILD_ITEMS.map((item) => ({
+      label: item.label,
+      sub: formatResourceCost(item.cost),
+      kind: "build" as const,
+      build: item.type,
+    }));
+  } else if (selected) {
+    title = selected.title;
+    const hp = `${Math.ceil(selected.health)} / ${Math.ceil(selected.maxHealth)}`;
+    detail = `${selected.detail}  ·  HP ${hp}`;
+    actions = selected.actions.map((action) => ({
+      label: action.label,
+      sub: action.cost ? formatResourceCost(action.cost) : action.timeMs ? `${Math.ceil(action.timeMs / 1000)}s` : "",
+      disabled: action.disabled,
+      active: action.active,
+      kind: "selection" as const,
+    }));
+  } else if (selectedTile) {
+    title = selectedTile.isMountain
+      ? "Mountain"
+      : selectedTile.material > 0
+        ? "Forest"
+        : selectedTile.maxCompute > 0
+          ? "GPU Mine"
+          : "Grassland";
+    detail = selectedTile.isMountain
+      ? "Impassable terrain."
+      : selectedTile.material > 0
+        ? `Material ${selectedTile.material} / ${selectedTile.maxMaterial}`
+        : selectedTile.maxCompute > 0
+          ? `Compute ${selectedTile.compute} / ${selectedTile.maxCompute}`
+          : "Double tap buildable ground to construct.";
+  }
+
+  ctx.save();
+  ctx.fillStyle = MARBLE_TEXT;
+  ctx.font = F_CINZEL_MD;
+  ctx.textBaseline = "middle";
+  ctx.letterSpacing = "0.5px";
+  const clippedTitle = clipText(ctx, title, Math.max(80, summaryW - 16));
+  ctx.fillText(clippedTitle, summaryX, rowMid - 9);
+  ctx.fillStyle = MARBLE_DIM;
+  ctx.font = F_BODY_XS;
+  ctx.letterSpacing = "0px";
+  ctx.fillText(clipText(ctx, detail, Math.max(80, summaryW - 16)), summaryX, rowMid + 11);
+  ctx.restore();
+
+  const actionRects = contextActionRects(W, H, actions.length);
+  for (let i = 0; i < actions.length; i++) {
+    const rect = actionRects[i]!;
+    const action = actions[i]!;
+    const item = action.kind === "build" && action.build !== undefined ? BUILD_ITEM_THEME[action.build] : null;
+    const active = !!action.active || (action.kind === "build" && hud.activeBuildType === action.build);
+    const disabled = !!action.disabled;
+    ctx.save();
+    ctx.fillStyle = disabled
+      ? "rgba(24, 26, 38, 0.92)"
+      : active
+        ? GOLD_BRIGHT
+        : item?.color ?? "rgba(13, 32, 72, 0.95)";
+    ctx.shadowColor = disabled ? "transparent" : item?.glow ?? AZURE_GLOW;
+    ctx.shadowBlur = disabled ? 0 : 10;
+    rr(ctx, rect.x, rect.y, rect.w, rect.h, 4); ctx.fill();
+    ctx.shadowBlur = 0;
+    ctx.strokeStyle = active ? GOLD_BRIGHT : disabled ? "rgba(255,255,255,0.14)" : GOLD_DIM;
+    ctx.lineWidth = active ? 2 : 1;
+    rr(ctx, rect.x, rect.y, rect.w, rect.h, 4); ctx.stroke();
+    ctx.fillStyle = active ? LAPIS_DEEP : MARBLE_TEXT;
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.font = "700 9px 'Cinzel', serif";
+    ctx.letterSpacing = "0.2px";
+    ctx.fillText(clipText(ctx, action.label, rect.w - 8), rect.x + rect.w * 0.5, rect.y + 20);
+    ctx.font = F_BODY_XS;
+    ctx.letterSpacing = "0px";
+    ctx.fillStyle = active ? "rgba(8,16,34,0.74)" : MARBLE_DIM;
+    if (action.sub) ctx.fillText(clipText(ctx, action.sub, rect.w - 8), rect.x + rect.w * 0.5, rect.y + 39);
+    ctx.restore();
+  }
+
+  const cancel = contextCancelRect(W, H);
+  const cancelActive = selected !== null || selectedTile !== null || hud.buildPanelOpen || hud.activeBuildType !== null;
+  ctx.save();
+  ctx.fillStyle = cancelActive ? "rgba(140, 18, 18, 0.94)" : "rgba(30, 34, 48, 0.78)";
+  rr(ctx, cancel.x, cancel.y, cancel.w, cancel.h, 5); ctx.fill();
+  ctx.strokeStyle = cancelActive ? "rgba(255, 80, 80, 0.78)" : GOLD_DIM;
+  ctx.lineWidth = 1.5;
+  rr(ctx, cancel.x, cancel.y, cancel.w, cancel.h, 5); ctx.stroke();
+  ctx.fillStyle = MARBLE_TEXT;
+  ctx.font = "900 24px system-ui, sans-serif";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.fillText("X", cancel.x + cancel.w * 0.5, cancel.y + cancel.h * 0.42);
+  ctx.font = "700 8px 'Cinzel', serif";
+  ctx.letterSpacing = "1px";
+  ctx.fillText(cancelActive ? "CLEAR" : "IDLE", cancel.x + cancel.w * 0.5, cancel.y + cancel.h - 10);
+  ctx.restore();
+
+  ctx.save();
+  ctx.font = F_BODY_XS;
+  ctx.fillStyle = MARBLE_MUTED;
+  ctx.textBaseline = "middle";
+  ctx.textAlign = "center";
+  const hint = hud.buildPanelOpen
+    ? "tap a structure to build here  ·  X cancels"
+    : selected
+      ? "tap ground to move  ·  tap enemy to attack  ·  X deselects"
+      : "tap to select  ·  double tap buildable ground to build  ·  drag to pan";
+  ctx.fillText(hint, W * 0.5, hintY);
+  ctx.restore();
+}
 
 function drawBottomBar(
   ctx: CanvasRenderingContext2D,

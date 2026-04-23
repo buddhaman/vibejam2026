@@ -27,6 +27,7 @@ const templates: Record<UnitModelSlot, UnitPartTemplate[] | null> = {
 };
 
 let ensurePromise: Promise<void> | null = null;
+let unitModelAssetVersion = 0;
 
 function targetHeightForSlot(slot: UnitModelSlot): number {
   const rules =
@@ -169,7 +170,9 @@ export async function ensureUnitInstancedModelsLoaded(): Promise<void> {
     loadSlot("agent"),
     loadSlot("archer"),
     loadSlot("synthaur"),
-  ]).then(() => undefined);
+  ]).then(() => {
+    unitModelAssetVersion += 1;
+  });
   await ensurePromise;
 }
 
@@ -205,4 +208,8 @@ export function hasWarbandInstancedGlb(): boolean {
 
 export function hasVillagerInstancedGlb(): boolean {
   return hasUnitInstancedGlb("agent");
+}
+
+export function getUnitModelAssetVersion(): number {
+  return unitModelAssetVersion;
 }

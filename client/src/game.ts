@@ -5,6 +5,9 @@ import {
   BuildingType,
   SquadSpread,
   UnitType,
+  getAllChunkKeys,
+  getChunkCoordsFromWorld,
+  getChunkKeysInRadius,
   getTileCoordsFromWorld,
   getTileKey,
   getWorldTileCount,
@@ -31,10 +34,12 @@ import {
   type SquadSpreadMessage,
   type TrainMessage,
   type TileChunkMessage,
+  type TileChunksRequestMessage,
   type TileUpdateMessage,
   type TilesRequestMessage,
   type SetNameMessage,
   type SystemNoticeMessage,
+  type RoundResetMessage,
 } from "../../shared/protocol.js";
 import { BlobEntity } from "./blob-entity.js";
 import { BuildingEntity } from "./building-entity.js";
@@ -70,6 +75,12 @@ export class Game {
   private _tiles = new Map<string, TileView>();
   private _tilesOrdered: TileView[] = [];
   private _streamResolve: (() => void) | null = null;
+  private _pendingChunkResolvers = new Map<string, Array<() => void>>();
+  private _loadedChunkKeys = new Set<string>();
+  private _chunkLoadStartedAt = 0;
+  private _firstChunkMs: number | null = null;
+  private _spawnChunksMs: number | null = null;
+  private _fullChunksMs: number | null = null;
   private _dirtyTileVisualLayers = new Set<"forest" | "datacenters">(["forest", "datacenters"]);
   private _allTileVisualsDirty = true;
   private _walkabilityDirty = true;
@@ -95,6 +106,8 @@ export class Game {
     | ({ type: "chat"; senderId: string; senderName: string; text: string; sentAt: number } & { id: string })
     | ({ type: "system"; text: string; kind: SystemNoticeMessage["kind"]; sentAt: number } & { id: string })
   > = [];
+  private _roundResetCount = 0;
+  private _streamPromise: Promise<void> | null = null;
 
   /** Updated every frame by `render.ts` for zoom-dependent squad affordances. */
   private _orbitCameraDistance = 165;
@@ -134,6 +147,10 @@ export class Game {
       });
       this.trimUiFeed();
     });
+    this.room.onMessage(MessageType.ROUND_RESET, (_msg: RoundResetMessage) => {
+      this.resetForNewRound();
+      void this.streamSpawnChunks().then(() => this.streamRemainingChunks());
+    });
   }
 
   private trimUiFeed(): void {
@@ -146,17 +163,88 @@ export class Game {
    * Resolves when every chunk has been received and the tile map is complete.
    */
   public streamTiles(): Promise<void> {
-    return new Promise((resolve) => {
+    if (this._streamPromise) return this._streamPromise;
+    this._streamPromise = new Promise((resolve) => {
       this._streamResolve = resolve;
       this.room.send(MessageType.TILES_REQUEST, { chunk: 0 } satisfies TilesRequestMessage);
+    });
+    return this._streamPromise;
+  }
+
+  public async streamSpawnChunks(radius = 1): Promise<void> {
+    const center = this.getMyTownCenterPosition() ?? { x: 0, z: 0 };
+    const chunk = getChunkCoordsFromWorld(center.x, center.z);
+    const keys = getChunkKeysInRadius(chunk.cx, chunk.cz, radius);
+    const start = performance.now();
+    if (this._chunkLoadStartedAt <= 0) this._chunkLoadStartedAt = start;
+    await this.requestTileChunks(keys);
+    this._spawnChunksMs = performance.now() - start;
+    console.info(`[chunks] spawn neighborhood loaded in ${Math.round(this._spawnChunksMs)}ms`, {
+      chunkSize: "12x12 tiles",
+      radius,
+      requested: keys.length,
+      loadedTotal: this._loadedChunkKeys.size,
+    });
+  }
+
+  public async streamRemainingChunks(): Promise<void> {
+    const all = getAllChunkKeys();
+    const remaining = all.filter((key) => !this._loadedChunkKeys.has(key));
+    const start = performance.now();
+    await this.requestTileChunks(remaining);
+    this._fullChunksMs = performance.now() - (this._chunkLoadStartedAt || start);
+    console.info(`[chunks] full debug world loaded in ${Math.round(this._fullChunksMs)}ms`, {
+      total: all.length,
+      requested: remaining.length,
+      loadedTotal: this._loadedChunkKeys.size,
+    });
+  }
+
+  private requestTileChunks(keys: string[]): Promise<void> {
+    const missing = keys.filter((key) => !this._loadedChunkKeys.has(key));
+    if (missing.length === 0) return Promise.resolve();
+    return new Promise((resolve) => {
+      let remaining = missing.length;
+      const done = () => {
+        remaining -= 1;
+        if (remaining <= 0) resolve();
+      };
+      for (const key of missing) {
+        const resolvers = this._pendingChunkResolvers.get(key) ?? [];
+        resolvers.push(done);
+        this._pendingChunkResolvers.set(key, resolvers);
+      }
+      this.room.send(MessageType.TILE_CHUNKS_REQUEST, { keys: missing } satisfies TileChunksRequestMessage);
     });
   }
 
   private _onTileChunk(msg: TileChunkMessage): void {
+    const key = typeof msg.key === "string" && msg.key.length > 0 ? msg.key : null;
+    if (this._chunkLoadStartedAt <= 0) this._chunkLoadStartedAt = performance.now();
     for (const raw of msg.tiles) {
       const t = raw as TileView;
       if (typeof t.maxCompute !== "number") t.maxCompute = 0;
       this._tiles.set(t.key, t);
+    }
+    if (key) {
+      this._loadedChunkKeys.add(key);
+      if (this._firstChunkMs === null) {
+        this._firstChunkMs = performance.now() - this._chunkLoadStartedAt;
+        console.info(`[chunks] first chunk loaded in ${Math.round(this._firstChunkMs)}ms`, {
+          key,
+          tiles: msg.tiles.length,
+        });
+      }
+      const resolvers = this._pendingChunkResolvers.get(key) ?? [];
+      this._pendingChunkResolvers.delete(key);
+      for (const resolve of resolvers) resolve();
+      this.rebuildLoadedTileOrder();
+      this._allTileVisualsDirty = true;
+      this._dirtyTileVisualLayers.add("forest");
+      this._dirtyTileVisualLayers.add("datacenters");
+      this._walkabilityDirty = true;
+      this._terrainDirty = true;
+      return;
     }
     const next = msg.chunk + 1;
     if (next < msg.total) {
@@ -177,7 +265,44 @@ export class Game {
       this._terrainDirty = true;
       this._streamResolve?.();
       this._streamResolve = null;
+      this._streamPromise = null;
     }
+  }
+
+  private rebuildLoadedTileOrder(): void {
+    const count = getWorldTileCount();
+    this._tilesOrdered = [];
+    for (let tz = 0; tz < count; tz++) {
+      for (let tx = 0; tx < count; tx++) {
+        const tile = this._tiles.get(getTileKey(tx, tz));
+        if (tile) this._tilesOrdered.push(tile);
+      }
+    }
+  }
+
+  private resetForNewRound(): void {
+    this.selectedEntityId = null;
+    this.selectedTileKey = null;
+    this._tiles.clear();
+    this._tilesOrdered = [];
+    this._loadedChunkKeys.clear();
+    this._pendingChunkResolvers.clear();
+    this._chunkLoadStartedAt = 0;
+    this._firstChunkMs = null;
+    this._spawnChunksMs = null;
+    this._fullChunksMs = null;
+    this._blobPaths.clear();
+    this._blobCarrySnapshots.clear();
+    this._buildingSnapshots.clear();
+    this._floatingResourceTexts = [];
+    this._dirtyTileVisualLayers.add("forest");
+    this._dirtyTileVisualLayers.add("datacenters");
+    this._allTileVisualsDirty = true;
+    this._walkabilityDirty = true;
+    this._terrainDirty = true;
+    this._streamResolve = null;
+    this._streamPromise = null;
+    this._roundResetCount += 1;
   }
 
   private _onTileUpdate(msg: TileUpdateMessage): void {
@@ -701,6 +826,12 @@ export class Game {
     return dirty;
   }
 
+  public markAllTileVisualsDirty(): void {
+    this._allTileVisualsDirty = true;
+    this._dirtyTileVisualLayers.add("forest");
+    this._dirtyTileVisualLayers.add("datacenters");
+  }
+
   public consumeWalkabilityDirty(): boolean {
     const dirty = this._walkabilityDirty;
     this._walkabilityDirty = false;
@@ -985,5 +1116,31 @@ export class Game {
     x: number; y: number; buildingType: BuildingTypeValue; health: number; ownerId: string;
   }> {
     return this._buildingSnapshots;
+  }
+
+  public getRoundResetCount(): number {
+    return this._roundResetCount;
+  }
+
+  public getLoadedChunkKeys(): ReadonlySet<string> {
+    return this._loadedChunkKeys;
+  }
+
+  public getChunkLoadStats(): {
+    loaded: number;
+    total: number;
+    pending: number;
+    firstMs: number | null;
+    spawnMs: number | null;
+    fullMs: number | null;
+  } {
+    return {
+      loaded: this._loadedChunkKeys.size,
+      total: getAllChunkKeys().length,
+      pending: this._pendingChunkResolvers.size,
+      firstMs: this._firstChunkMs,
+      spawnMs: this._spawnChunksMs,
+      fullMs: this._fullChunksMs,
+    };
   }
 }

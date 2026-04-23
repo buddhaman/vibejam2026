@@ -27,6 +27,7 @@ import {
   createVillagerInstancedMeshes,
   createWarbandInstancedMeshes,
   createUnitInstancedMeshes,
+  getUnitModelAssetVersion,
   hasUnitInstancedGlb,
 } from "./unit-instanced-models.js";
 import { applyTeamColorTexturesToMarkedMeshes, secondaryTeamHexFromPrimary } from "./render-texture-recolor.js";
@@ -203,6 +204,7 @@ export class BlobEntity extends Entity {
   /** Instanced parts from `models/units/archer.glb`. */
   private unitsArcher: THREE.InstancedMesh[] = [];
   private archerTeamTexApplied = false;
+  private unitModelAssetVersion = -1;
   private unitsCentaur!: THREE.InstancedMesh;
   /** Flat disc in the left hand of each warband soldier. */
   private unitShield!: THREE.InstancedMesh;
@@ -261,35 +263,21 @@ export class BlobEntity extends Entity {
   protected createMesh(): THREE.Group {
     this.unitsAgent = createVillagerInstancedMeshes(INSTANCE_CAP);
     if (this.unitsAgent.length === 0) {
-      const fallback = new THREE.InstancedMesh(UNIT_GEOM, UNIT_MAT.clone(), INSTANCE_CAP);
-      fallback.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
-      fallback.castShadow = true;
-      fallback.receiveShadow = true;
-      fallback.frustumCulled = false;
-      this.unitsAgent = [fallback];
+      this.unitsAgent = [this.createFallbackUnitMesh()];
     }
 
     this.unitsWarband = createWarbandInstancedMeshes(INSTANCE_CAP);
     if (this.unitsWarband.length === 0) {
-      const fallback = new THREE.InstancedMesh(UNIT_GEOM, UNIT_MAT.clone(), INSTANCE_CAP);
-      fallback.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
-      fallback.castShadow = true;
-      fallback.receiveShadow = true;
-      fallback.frustumCulled = false;
-      this.unitsWarband = [fallback];
+      this.unitsWarband = [this.createFallbackUnitMesh()];
     }
 
     this.unitsSynthaur = createUnitInstancedMeshes("synthaur", INSTANCE_CAP);
 
     this.unitsArcher = createUnitInstancedMeshes("archer", INSTANCE_CAP);
     if (this.unitsArcher.length === 0) {
-      const fallback = new THREE.InstancedMesh(UNIT_GEOM, UNIT_MAT.clone(), INSTANCE_CAP);
-      fallback.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
-      fallback.castShadow = true;
-      fallback.receiveShadow = true;
-      fallback.frustumCulled = false;
-      this.unitsArcher = [fallback];
+      this.unitsArcher = [this.createFallbackUnitMesh()];
     }
+    this.unitModelAssetVersion = getUnitModelAssetVersion();
 
     this.ovalRoot = new THREE.Group();
 
@@ -345,6 +333,44 @@ export class BlobEntity extends Entity {
     group.add(this.unitsCentaur);
     group.add(this.unitShield);
     return group;
+  }
+
+  private createFallbackUnitMesh(): THREE.InstancedMesh {
+    const fallback = new THREE.InstancedMesh(UNIT_GEOM, UNIT_MAT.clone(), INSTANCE_CAP);
+    fallback.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+    fallback.castShadow = true;
+    fallback.receiveShadow = true;
+    fallback.frustumCulled = false;
+    return fallback;
+  }
+
+  private refreshUnitModelMeshesIfNeeded(): void {
+    const nextVersion = getUnitModelAssetVersion();
+    if (this.unitModelAssetVersion === nextVersion) return;
+
+    for (const mesh of this.unitsAgent) this.mesh.remove(mesh);
+    for (const mesh of this.unitsArcher) this.mesh.remove(mesh);
+    for (const mesh of this.unitsWarband) this.mesh.remove(mesh);
+    for (const mesh of this.unitsSynthaur) this.mesh.remove(mesh);
+
+    this.unitsAgent = createVillagerInstancedMeshes(INSTANCE_CAP);
+    if (this.unitsAgent.length === 0) this.unitsAgent = [this.createFallbackUnitMesh()];
+    this.unitsWarband = createWarbandInstancedMeshes(INSTANCE_CAP);
+    if (this.unitsWarband.length === 0) this.unitsWarband = [this.createFallbackUnitMesh()];
+    this.unitsArcher = createUnitInstancedMeshes("archer", INSTANCE_CAP);
+    if (this.unitsArcher.length === 0) this.unitsArcher = [this.createFallbackUnitMesh()];
+    this.unitsSynthaur = createUnitInstancedMeshes("synthaur", INSTANCE_CAP);
+
+    for (const mesh of this.unitsAgent) this.mesh.add(mesh);
+    for (const mesh of this.unitsArcher) this.mesh.add(mesh);
+    for (const mesh of this.unitsWarband) this.mesh.add(mesh);
+    for (const mesh of this.unitsSynthaur) this.mesh.add(mesh);
+
+    this.agentTeamTexApplied = false;
+    this.archerTeamTexApplied = false;
+    this.warbandTeamTexApplied = false;
+    this.synthaurTeamTexApplied = false;
+    this.unitModelAssetVersion = nextVersion;
   }
 
   public sync(blob: BlobRenderView): void {
@@ -1177,6 +1203,7 @@ export class BlobEntity extends Entity {
 
   public render(dt: number): void {
     if (!this.blob) return;
+    this.refreshUnitModelMeshesIfNeeded();
     this.combatAnimT += dt;
 
     this.visualTime += Math.min(0.05, dt);

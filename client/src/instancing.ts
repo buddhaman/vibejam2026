@@ -36,6 +36,10 @@ export function createInstancedVariantSet(variants: InstancedVariant[], capacity
       mesh.count = 0;
       mesh.castShadow = part.castShadow ?? true;
       mesh.receiveShadow = part.receiveShadow ?? true;
+      // The same InstancedMesh is reused for trees/mines across the whole streamed world.
+      // Dynamic instance matrices can leave Three.js with stale bounds, causing forests to
+      // vanish at certain camera distances/angles. Keep these world-decoration sets visible.
+      mesh.frustumCulled = false;
       mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
       root.add(mesh);
       return mesh;
@@ -55,6 +59,7 @@ function rebuildSet(set: InstancedVariantSet, capacity: number): void {
       mesh.count = 0;
       mesh.castShadow = part.castShadow ?? true;
       mesh.receiveShadow = part.receiveShadow ?? true;
+      mesh.frustumCulled = false;
       mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
       set.root.add(mesh);
       return mesh;
@@ -108,6 +113,10 @@ export function syncInstancedVariantSet(
         }
       }
     }
-    for (const mesh of variant.meshes) mesh.instanceMatrix.needsUpdate = true;
+    for (const mesh of variant.meshes) {
+      mesh.instanceMatrix.needsUpdate = true;
+      mesh.computeBoundingBox();
+      mesh.computeBoundingSphere();
+    }
   }
 }

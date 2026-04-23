@@ -13,8 +13,10 @@ export const MessageType = {
   SET_NAME:      "set_name",
   CHAT:          "chat",
   SYSTEM_NOTICE: "system_notice",
+  ROUND_RESET:   "round_reset",
   // Tile streaming — client requests chunks, server replies; server pushes mutations
   TILES_REQUEST: "tiles_req",
+  TILE_CHUNKS_REQUEST: "tile_chunks_req",
   TILE_CHUNK:    "tile_chunk",
   TILE_UPDATE:   "tile_update",
   // Path — server sends A* result to the owning client after each move intent
@@ -126,8 +128,16 @@ export type SystemNoticeMessage = {
   sentAt: number;
 };
 
+export type RoundResetMessage = {
+  terrainSeed: number;
+  sentAt: number;
+};
+
 /** Client → Server: request one chunk of tile data by index. */
 export type TilesRequestMessage = { chunk: number };
+
+/** Client → Server: request specific world chunks by key. */
+export type TileChunksRequestMessage = { keys: string[] };
 
 /** The plain tile data sent over the wire (not a Colyseus Schema). */
 export type TileData = {
@@ -153,6 +163,9 @@ export type TileData = {
 export type TileChunkMessage = {
   chunk: number;   // 0-based index
   total: number;   // total number of chunks
+  key?: string;
+  cx?: number;
+  cz?: number;
   tiles: TileData[];
 };
 

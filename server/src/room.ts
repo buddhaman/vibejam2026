@@ -15,6 +15,8 @@ import {
   getBlobMaxHealth,
   getTileCoordsFromWorld,
   getTileKey,
+  getChunkCoordsFromTile,
+  getChunkKey,
   getBlobMoveRules,
   getUnitBalanceRules,
   getUnitRules,
@@ -51,9 +53,11 @@ import {
   type TileData,
   type TileChunkMessage,
   type TilesRequestMessage,
+  type TileChunksRequestMessage,
   type TileUpdateMessage,
   type SetNameMessage,
   type SystemNoticeMessage,
+  type RoundResetMessage,
   CLIENT_PROTOCOL_VERSION,
 } from "../../shared/protocol.js";
 import { findPath, type Waypoint } from "./astar.js";
@@ -79,6 +83,7 @@ const VILLAGER_CARRY_PER_UNIT = 12;
 const VILLAGER_PICKUP_MS = 1000;
 const VILLAGER_DROPOFF_MS = 1000;
 const CHAT_MAX_CHARS = 280;
+const ROUND_RESET_DELAY_MS = 9000;
 
 const NAME_ADJECTIVES = [
   "Amber",
@@ -142,6 +147,8 @@ export class BattleRoom extends Room<{ state: GameState }> {
   /** Plain tile data — NOT in schema, streamed on demand. */
   private tileData = new Map<string, TileData>();
   private tileChunks: TileData[][] = [];
+  private tileChunkKeys: string[] = [];
+  private tileChunksByKey = new Map<string, TileData[]>();
   /** How many building footprints cover each tile (any owner). */
   private buildingTileOcc = new Map<string, number>();
   private walkBlockingBuildingTileOcc = new Map<string, number>();
@@ -154,6 +161,7 @@ export class BattleRoom extends Room<{ state: GameState }> {
   private combatLinks = new Set<string>();
   /** Explicit retreat orders issued while in melee combat; keeps combat-state rules separate from pathing. */
   private combatRetreatTargets = new Map<string, { x: number; y: number }>();
+  private roundResetTimer: ReturnType<typeof setTimeout> | null = null;
 
   static async onAuth(_token: string, options: unknown) {
     const protocolVersion =
@@ -178,11 +186,36 @@ export class BattleRoom extends Room<{ state: GameState }> {
       if (typeof msg?.chunk !== "number") return;
       const idx = msg.chunk | 0;
       if (idx < 0 || idx >= this.tileChunks.length) return;
+      const key = this.tileChunkKeys[idx] ?? "";
+      const [cx = 0, cz = 0] = key.split(",").map(Number);
       client.send(MessageType.TILE_CHUNK, {
         chunk: idx,
         total: this.tileChunks.length,
+        key,
+        cx,
+        cz,
         tiles: this.tileChunks[idx],
       } satisfies TileChunkMessage);
+    });
+
+    this.onMessage(MessageType.TILE_CHUNKS_REQUEST, (client, raw) => {
+      const msg = raw as TileChunksRequestMessage;
+      if (!Array.isArray(msg?.keys)) return;
+      const keys = msg.keys.filter((key): key is string => typeof key === "string");
+      for (const key of keys) {
+        const tiles = this.tileChunksByKey.get(key);
+        if (!tiles) continue;
+        const chunk = Math.max(0, this.tileChunkKeys.indexOf(key));
+        const [cx = 0, cz = 0] = key.split(",").map(Number);
+        client.send(MessageType.TILE_CHUNK, {
+          chunk,
+          total: this.tileChunkKeys.length,
+          key,
+          cx,
+          cz,
+          tiles,
+        } satisfies TileChunkMessage);
+      }
     });
 
     this.onMessage(MessageType.INTENT, (client, raw) => {
@@ -421,6 +454,13 @@ export class BattleRoom extends Room<{ state: GameState }> {
     }
 
     this.broadcastSystemNotice(`${playerName} left the battle.`, "leave");
+  }
+
+  onDispose() {
+    if (this.roundResetTimer) {
+      clearTimeout(this.roundResetTimer);
+      this.roundResetTimer = null;
+    }
   }
 
   private broadcastSystemNotice(text: string, kind: SystemNoticeMessage["kind"]): void {
@@ -1123,6 +1163,7 @@ export class BattleRoom extends Room<{ state: GameState }> {
   }
 
   private stepKOTH(dtMs: number): void {
+    if (this.roundResetTimer) return;
     // Find blob closest to world center (0,0) within capture radius
     let closestDist: number = GAME_RULES.KOTH_CAPTURE_RADIUS;
     let closestOwnerId = "";
@@ -1138,8 +1179,65 @@ export class BattleRoom extends Room<{ state: GameState }> {
       const owner = this.state.players.get(closestOwnerId);
       if (owner) {
         owner.kothTimeMs = Math.max(0, owner.kothTimeMs - dtMs);
+        if (owner.kothTimeMs <= 0) {
+          this.scheduleRoundReset(owner.sessionId, owner.name);
+        }
       }
     }
+  }
+
+  private scheduleRoundReset(winnerSessionId: string, winnerName: string): void {
+    if (this.roundResetTimer) return;
+    this.broadcastSystemNotice(`${winnerName} captured the server. New round starting soon.`, "info");
+    this.roundResetTimer = setTimeout(() => {
+      this.roundResetTimer = null;
+      this.resetRound(winnerSessionId);
+    }, ROUND_RESET_DELAY_MS);
+  }
+
+  private resetRound(_winnerSessionId: string): void {
+    this.state.kothOwner = "";
+    this.state.terrainSeed = Math.floor(Math.random() * 0xffffffff);
+    this.tileData.clear();
+    this.tileChunks = [];
+    this.tileChunkKeys = [];
+    this.tileChunksByKey.clear();
+    this.buildingTileOcc.clear();
+    this.walkBlockingBuildingTileOcc.clear();
+    this.playerSpawnSlots.clear();
+    this.blobPaths.clear();
+    this.disengageLocks.clear();
+    this.combatLinks.clear();
+    this.combatRetreatTargets.clear();
+
+    for (const id of Array.from(this.state.blobs.keys())) {
+      this.state.blobs.delete(id);
+    }
+    for (const id of Array.from(this.state.buildings.keys())) {
+      this.state.buildings.delete(id);
+    }
+
+    this.initTiles();
+
+    let playerIndex = 0;
+    for (const player of this.state.players.values()) {
+      player.biomass = CONFIG.START_BIOMASS;
+      player.material = CONFIG.START_MATERIAL;
+      player.compute = CONFIG.START_COMPUTE;
+      player.kothTimeMs = CONFIG.KOTH_START_TIME_MS;
+      this.playerSpawnSlots.set(player.sessionId, playerIndex);
+      const townCenter = this.spawnTownCenter(player.sessionId, playerIndex);
+      this.spawnStartingBlob(townCenter, UnitType.VILLAGER, CONFIG.START_AGENT_UNIT_COUNT, 0);
+      this.spawnStartingBlob(townCenter, UnitType.WARBAND, CONFIG.START_WARBAND_UNIT_COUNT, 1);
+      this.spawnStartingBlob(townCenter, UnitType.ARCHER, CONFIG.START_ARCHER_UNIT_COUNT, 2);
+      this.spawnStartingBlob(townCenter, UnitType.SYNTHAUR, CONFIG.START_SYNTHAUR_UNIT_COUNT, 3);
+      playerIndex += 1;
+    }
+
+    this.broadcast(MessageType.ROUND_RESET, {
+      terrainSeed: this.state.terrainSeed,
+      sentAt: Date.now(),
+    } satisfies RoundResetMessage, { afterNextPatch: true });
   }
 
   private tick(dtMs: number) {
@@ -1394,8 +1492,22 @@ export class BattleRoom extends Room<{ state: GameState }> {
         ","
       ) || "(none)"}`
     );
-    // Pre-slice into fixed-size chunks for fast streaming
-    const all = Array.from(this.tileData.values());
+    const chunksByKey = new Map<string, TileData[]>();
+    for (const tile of this.tileData.values()) {
+      const chunk = getChunkCoordsFromTile(tile.tx, tile.tz);
+      const key = getChunkKey(chunk.cx, chunk.cz);
+      const tiles = chunksByKey.get(key);
+      if (tiles) tiles.push(tile);
+      else chunksByKey.set(key, [tile]);
+    }
+    this.tileChunkKeys = Array.from(chunksByKey.keys()).sort((a, b) => {
+      const [ax, az] = a.split(",").map(Number) as [number, number];
+      const [bx, bz] = b.split(",").map(Number) as [number, number];
+      return az - bz || ax - bx;
+    });
+    this.tileChunksByKey = chunksByKey;
+    // Keep the old linear stream shape as a fallback while clients migrate to keyed chunks.
+    const all = this.tileChunkKeys.flatMap((key) => chunksByKey.get(key) ?? []);
     this.tileChunks = [];
     for (let i = 0; i < all.length; i += CHUNK_SIZE) {
       this.tileChunks.push(all.slice(i, i + CHUNK_SIZE));

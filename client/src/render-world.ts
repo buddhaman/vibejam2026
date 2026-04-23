@@ -11,6 +11,7 @@ import { BuildingDestructionFxSystem } from "./building-destruction-fx.js";
 import { BeamDrawer } from "./beam-drawer.js";
 import { BrightBeamDrawer } from "./bright-beam-drawer.js";
 import { CentralServerRenderer } from "./central-server-renderer.js";
+import { ChunkDebugOverlay } from "./chunk-debug-overlay.js";
 
 const SCENE_ENVIRONMENT_INTENSITY = 0.08;
 
@@ -59,6 +60,7 @@ export type RenderWorld = {
   walkabilityOverlay: THREE.InstancedMesh;
   syncWalkabilityOverlay: (visible: boolean, force?: boolean) => void;
   tileDebug: TileDebugOverlay;
+  chunkDebug: ChunkDebugOverlay;
   tileVisuals: TileVisualManager;
   ragdollFx: RagdollFxSystem;
   arrowFx: ArrowFxSystem;
@@ -168,6 +170,10 @@ export function createRenderWorld(game: Game): RenderWorld {
   const tileDebug = new TileDebugOverlay(game.getTilesOrdered(), game.getTiles());
   scene.add(tileDebug.root);
 
+  const chunkDebug = new ChunkDebugOverlay();
+  chunkDebug.root.visible = false;
+  scene.add(chunkDebug.root);
+
   const tileVisuals = new TileVisualManager();
   scene.add(tileVisuals.root);
 
@@ -204,6 +210,7 @@ export function createRenderWorld(game: Game): RenderWorld {
     walkabilityOverlay,
     syncWalkabilityOverlay,
     tileDebug,
+    chunkDebug,
     tileVisuals,
     ragdollFx,
     arrowFx,
@@ -318,6 +325,12 @@ export type FrameStats = {
   programs: number;
   entities: number;
   beamBuckets: number;
+  chunksLoaded: number;
+  chunksTotal: number;
+  chunksPending: number;
+  chunkFirstMs: number | null;
+  chunkSpawnMs: number | null;
+  chunkFullMs: number | null;
 };
 
 export function createInitialFrameStats(): FrameStats {
@@ -338,5 +351,11 @@ export function createInitialFrameStats(): FrameStats {
     programs: 0,
     entities: 0,
     beamBuckets: 0,
+    chunksLoaded: 0,
+    chunksTotal: 0,
+    chunksPending: 0,
+    chunkFirstMs: null,
+    chunkSpawnMs: null,
+    chunkFullMs: null,
   };
 }

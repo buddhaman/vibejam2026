@@ -80,6 +80,7 @@ export const GAME_RULES = {
   WORLD_MIN: -360,
   WORLD_MAX: 360,
   TILE_SIZE: 12,
+  WORLD_CHUNK_TILE_SIZE: 12,
   TARGET_PLAYERS_PER_ROOM: 4,
   KOTH_SPAWN_RADIUS: 258,
   KOTH_START_CLEAR_RADIUS: 60,
@@ -566,6 +567,56 @@ export function getTileCoordsFromWorld(x: number, z: number) {
   const tx = Math.max(0, Math.min(tiles - 1, Math.floor((x - GAME_RULES.WORLD_MIN) / GAME_RULES.TILE_SIZE)));
   const tz = Math.max(0, Math.min(tiles - 1, Math.floor((z - GAME_RULES.WORLD_MIN) / GAME_RULES.TILE_SIZE)));
   return { tx, tz };
+}
+
+export function getWorldChunkCount(): number {
+  return Math.ceil(getWorldTileCount() / GAME_RULES.WORLD_CHUNK_TILE_SIZE);
+}
+
+export function getChunkKey(cx: number, cz: number): string {
+  return `${cx},${cz}`;
+}
+
+export function getChunkCoordsFromTile(tx: number, tz: number) {
+  const count = getWorldChunkCount();
+  const cx = Math.max(0, Math.min(count - 1, Math.floor(tx / GAME_RULES.WORLD_CHUNK_TILE_SIZE)));
+  const cz = Math.max(0, Math.min(count - 1, Math.floor(tz / GAME_RULES.WORLD_CHUNK_TILE_SIZE)));
+  return { cx, cz };
+}
+
+export function getChunkCoordsFromWorld(x: number, z: number) {
+  const tile = getTileCoordsFromWorld(x, z);
+  return getChunkCoordsFromTile(tile.tx, tile.tz);
+}
+
+export function getChunkKeysInRadius(cx: number, cz: number, radius: number): string[] {
+  const count = getWorldChunkCount();
+  const keys: string[] = [];
+  for (let dz = -radius; dz <= radius; dz++) {
+    for (let dx = -radius; dx <= radius; dx++) {
+      const x = cx + dx;
+      const z = cz + dz;
+      if (x < 0 || z < 0 || x >= count || z >= count) continue;
+      keys.push(getChunkKey(x, z));
+    }
+  }
+  keys.sort((a, b) => {
+    const [ax, az] = a.split(",").map(Number) as [number, number];
+    const [bx, bz] = b.split(",").map(Number) as [number, number];
+    return Math.hypot(ax - cx, az - cz) - Math.hypot(bx - cx, bz - cz);
+  });
+  return keys;
+}
+
+export function getAllChunkKeys(): string[] {
+  const count = getWorldChunkCount();
+  const keys: string[] = [];
+  for (let cz = 0; cz < count; cz++) {
+    for (let cx = 0; cx < count; cx++) {
+      keys.push(getChunkKey(cx, cz));
+    }
+  }
+  return keys;
 }
 
 export function getTileCenter(tx: number, tz: number) {

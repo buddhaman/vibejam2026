@@ -34,6 +34,7 @@ type RegrowingCompute = {
 
 let computeMineVariantTemplate: InstancedVariant | null = null;
 let gpuVariantTemplate: InstancedVariant | null = null;
+let tileVisualAssetVersion = 0;
 
 function hash(n: number) {
   const x = Math.sin(n * 127.1) * 43758.5453123;
@@ -497,17 +498,36 @@ export async function ensureTileVisualAssetsLoaded(): Promise<void> {
     loadComputeMineVariant(),
     loadGpuVariant(),
   ]);
+  tileVisualAssetVersion += 1;
+}
+
+export function getTileVisualAssetVersion(): number {
+  return tileVisualAssetVersion;
 }
 
 export class TileVisualManager {
   public readonly root = new THREE.Group();
-  private readonly layers: TileVisualLayer[] = [createForestLayer(), createDatacenterLayer()];
+  private layers: TileVisualLayer[] = [];
+  private assetVersion = -1;
 
   public constructor() {
+    this.rebuildLayers();
+  }
+
+  private rebuildLayers(): void {
+    for (const layer of this.layers) {
+      this.root.remove(layer.set.root);
+    }
+    this.layers = [createForestLayer(), createDatacenterLayer()];
+    this.assetVersion = getTileVisualAssetVersion();
     for (const layer of this.layers) this.root.add(layer.set.root);
   }
 
   public sync(game: Game): void {
+    if (this.assetVersion !== getTileVisualAssetVersion()) {
+      this.rebuildLayers();
+      game.markAllTileVisualsDirty();
+    }
     const dirty = game.consumeTileVisualDirty();
     const layerDirty = new Set<TileVisualLayerId>(dirty.layers);
     for (const layer of this.layers) {

@@ -18,6 +18,12 @@ export type DevOverlayStats = {
   programs: number;
   entities: number;
   beamBuckets: number;
+  chunksLoaded: number;
+  chunksTotal: number;
+  chunksPending: number;
+  chunkFirstMs: number | null;
+  chunkSpawnMs: number | null;
+  chunkFullMs: number | null;
 };
 
 function line(ctx: CanvasRenderingContext2D, label: string, value: string, x: number, y: number, valueColor = "#f3ead7") {
@@ -56,6 +62,11 @@ export function drawDevOverlay(
     { label: "programs", value: `${stats.programs}`, color: "#f3ead7" },
     { label: "entities", value: `${stats.entities}`, color: "#f3ead7" },
     { label: "beam buckets", value: `${stats.beamBuckets}`, color: "#f3ead7" },
+    null,
+    { label: "chunks", value: `${stats.chunksLoaded}/${stats.chunksTotal}  pending:${stats.chunksPending}`, color: "#f3ead7" },
+    { label: "first chunk", value: stats.chunkFirstMs === null ? "—" : `${stats.chunkFirstMs.toFixed(0)} ms`, color: "#f3ead7" },
+    { label: "spawn chunks", value: stats.chunkSpawnMs === null ? "—" : `${stats.chunkSpawnMs.toFixed(0)} ms`, color: "#f3ead7" },
+    { label: "full chunks", value: stats.chunkFullMs === null ? "—" : `${stats.chunkFullMs.toFixed(0)} ms`, color: "#f3ead7" },
     null,
     { label: "down", value: `${net.downKbps.toFixed(1)} KB/s`, color: "#f3ead7" },
     { label: "up", value: `${net.upKbps.toFixed(1)} KB/s`, color: "#f3ead7" },

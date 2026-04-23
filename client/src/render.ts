@@ -11,10 +11,10 @@ import {
   drawHUD,
   drawFloatingResourceTexts,
   drawVictoryOverlay,
-  hitTestSelectionAction,
-  hitTestSelectionCard,
-  hitTestBuildButton,
-  hitTestBuildPanel,
+  hitTestContextBar,
+  hitTestContextBuildAction,
+  hitTestContextCancel,
+  hitTestContextSelectionAction,
   showWarning,
   type KothState,
 } from "./hud.js";
@@ -37,7 +37,7 @@ export function startRender(game: Game) {
   const netPerf = attachDevNetworkPerf(game.room);
   const world = createRenderWorld(game);
   const { scene } = game;
-  const { renderer, canvas, cameraRig, walkabilityOverlay, tileDebug, tileVisuals, buildingDestructionFx, beamDrawer, brightBeamDrawer, sunLight, centralServer } = world;
+  const { renderer, canvas, cameraRig, walkabilityOverlay, tileDebug, chunkDebug, tileVisuals, buildingDestructionFx, beamDrawer, brightBeamDrawer, sunLight, centralServer } = world;
   const camera = cameraRig.camera;
   let tileDebugInspected: TileView | null = null;
   let devModeVisible = false;
@@ -47,6 +47,7 @@ export function startRender(game: Game) {
     if (e.code === TILE_DEBUG_KEY || (e.shiftKey && e.code === DEV_MODE_KEY)) {
       devModeVisible = !devModeVisible;
       tileDebug.root.visible = devModeVisible;
+      chunkDebug.root.visible = devModeVisible;
       if (!devModeVisible) {
         tileDebugInspected = null;
         tileDebug.clearInspect();
@@ -110,9 +111,29 @@ export function startRender(game: Game) {
   const hud = createHudState();
   const chatUi = createChatUi(game);
   const DRAG_THRESHOLD = 8; // slightly larger on touch
+  const DOUBLE_TAP_MS = 300;
+  const DOUBLE_TAP_PX = 16;
+  let lastTap: { x: number; y: number; t: number } | null = null;
+  let buildAnchorWorld: { x: number; z: number } | null = null;
 
   // ── Victory state ────────────────────────────────────────────────────────────
   let victoryState: { name: string; color: number; isMe: boolean; startT: number } | null = null;
+  let observedRoundResetCount = game.getRoundResetCount();
+
+  function resetViewForNewRound(): void {
+    const myTownCenter = game.getMyTownCenterPosition();
+    cameraRig.lookTarget.set(myTownCenter?.x ?? 0, 0, myTownCenter?.z ?? 0);
+    cameraRig.distance = CAMERA_CONFIG.distanceStart;
+    cameraRig.polarFromDownDeg = CAMERA_CONFIG.polarFromDownDeg;
+    cameraRig.azimuthDeg = CAMERA_CONFIG.azimuthDeg;
+    cameraRig.arrowKeysHeld.clear();
+    cameraRig.placeCamera();
+    hud.buildPanelOpen = false;
+    hud.activeBuildType = null;
+    hud.buildAnchorTileKey = null;
+    buildAnchorWorld = null;
+    game.clearSelection();
+  }
 
   function triggerVictoryExplosions(winnerSessionId: string) {
     const snapshots = game.getBuildingSnapshots();
@@ -146,8 +167,6 @@ export function startRender(game: Game) {
     }
     // Hide the central server model when it explodes
     setTimeout(() => { centralServer.root.visible = false; }, serverDelay + 400);
-    // Reload after victory screen
-    setTimeout(() => window.location.reload(), 13_000);
   }
 
   // ── Multi-touch pointer tracking ─────────────────────────────────────────────
@@ -217,63 +236,50 @@ export function startRender(game: Game) {
 
     const selectedInfo = game.getSelectedEntity()?.getSelectionInfo() ?? null;
 
-    // 1. Action buttons inside the selection card (highest priority)
-    const selectionAction = hitTestSelectionAction(clientX, clientY, selectedInfo);
-    if (selectionAction !== null) {
-      game.runSelectionAction(selectionAction);
-      return;
-    }
-
-    // 2. BUILD button — toggle build panel / cancel build mode
-    if (hitTestBuildButton(clientX, clientY)) {
-      if (hud.buildPanelOpen) {
-        hud.buildPanelOpen = false;
-        hud.activeBuildType = null;
-        ghostMesh.visible = false;
-      } else {
-        hud.buildPanelOpen = true;
-      }
-      return;
-    }
-
-    // 3. Build panel — pick building type or dismiss
-    if (hud.buildPanelOpen) {
-      const panelHit = hitTestBuildPanel(clientX, clientY);
-      if (panelHit !== null) {
-        if (panelHit !== "inside") {
-          hud.activeBuildType = panelHit;
-          hud.buildPanelOpen = false;
-        }
-        return;
-      }
-      // Clicked outside panel — close it, keep activeBuildType
+    if (hitTestContextCancel(clientX, clientY)) {
       hud.buildPanelOpen = false;
-      return;
-    }
-
-    // 4. Tapping the selection card (but not an action button) deselects
-    if (hitTestSelectionCard(clientX, clientY, selectedInfo)) {
+      hud.activeBuildType = null;
+      hud.buildAnchorTileKey = null;
+      buildAnchorWorld = null;
+      ghostMesh.visible = false;
       game.clearSelection();
       return;
     }
 
-    // 5. Tap ground while a building type is armed — place it
-    if (hud.activeBuildType !== null) {
-      const point = groundHit(clientX, clientY);
-      if (point) {
-        const tile = game.getTileAtWorld(point.x, point.z);
-        if (!tile?.canBuild) {
+    if (hud.buildPanelOpen) {
+      const buildType = hitTestContextBuildAction(clientX, clientY, true);
+      if (buildType !== null) {
+        const anchor = buildAnchorWorld;
+        const tile = anchor ? game.getTileAtWorld(anchor.x, anchor.z) : null;
+        if (!anchor || !tile?.canBuild) {
           showWarning(hud, getBuildBlockedMessage(tile), performance.now() / 1000);
         } else {
-          game.sendBuildIntent(hud.activeBuildType, point.x, point.z);
+          game.sendBuildIntent(buildType, anchor.x, anchor.z);
+          hud.buildPanelOpen = false;
           hud.activeBuildType = null;
+          hud.buildAnchorTileKey = null;
+          buildAnchorWorld = null;
           ghostMesh.visible = false;
         }
+        return;
       }
+      if (hitTestContextBar(clientX, clientY)) return;
+      hud.buildPanelOpen = false;
+      hud.activeBuildType = null;
+      hud.buildAnchorTileKey = null;
+      buildAnchorWorld = null;
+      ghostMesh.visible = false;
       return;
     }
 
-    // 6. World picking
+    const selectionAction = hitTestContextSelectionAction(clientX, clientY, selectedInfo);
+    if (selectionAction !== null) {
+      game.runSelectionAction(selectionAction);
+      return;
+    }
+    if (hitTestContextBar(clientX, clientY)) return;
+
+    // World picking
     ndcV.set((clientX / window.innerWidth) * 2 - 1, -(clientY / window.innerHeight) * 2 + 1);
     raycaster.setFromCamera(ndcV, camera);
     const point = groundHit(clientX, clientY);
@@ -318,7 +324,7 @@ export function startRender(game: Game) {
         );
         return;
       }
-      game.toggleSelection(picked.id);
+      if (game.getSelectedEntity()?.id !== picked.id) game.toggleSelection(picked.id);
       return;
     }
 
@@ -376,6 +382,38 @@ export function startRender(game: Game) {
     );
   }
 
+  function tryOpenBuildContext(clientX: number, clientY: number): boolean {
+    if (game.getSelectedMyBlobEntity()) return false;
+    ndcV.set((clientX / window.innerWidth) * 2 - 1, -(clientY / window.innerHeight) * 2 + 1);
+    raycaster.setFromCamera(ndcV, camera);
+    const point = groundHit(clientX, clientY);
+    if (!point) return false;
+    const entity =
+      game.pickOwnedEntityFromRay(raycaster) ??
+      game.pickEntityFromRay(raycaster) ??
+      game.pickEntityAtWorldPoint(point.x, point.z);
+    if (entity) return false;
+    const snapped = snapWorldToTileCenter(point.x, point.z);
+    const tile = game.getTileAtWorld(snapped.x, snapped.z);
+    if (!tile?.canBuild) {
+      showWarning(hud, getBuildBlockedMessage(tile), performance.now() / 1000);
+      return true;
+    }
+    hud.buildPanelOpen = true;
+    hud.activeBuildType = null;
+    hud.buildAnchorTileKey = tile.key;
+    buildAnchorWorld = { x: snapped.x, z: snapped.z };
+    game.selectTile(tile.key);
+    ghostMaterial.color.setHex(0x44ff88);
+    ghostMesh.position.set(
+      snapped.x,
+      getTerrainHeightAt(snapped.x, snapped.z, game.getTiles()) + GHOST_HALF_H,
+      snapped.z
+    );
+    ghostMesh.visible = true;
+    return true;
+  }
+
   canvas.addEventListener("pointerdown", (ev) => {
     canvas.setPointerCapture(ev.pointerId);
     activePointers.set(ev.pointerId, { x: ev.clientX, y: ev.clientY });
@@ -429,10 +467,10 @@ export function startRender(game: Game) {
     }
 
     // ── Single-finger ghost preview ─────────────────────────────────────────
-    if (hud.activeBuildType !== null && !(singleDrag?.moved)) {
-      const gPoint = groundHit(ev.clientX, ev.clientY);
-      if (gPoint) {
-        const snapped = snapWorldToTileCenter(gPoint.x, gPoint.z);
+    if ((hud.activeBuildType !== null || hud.buildPanelOpen) && !(singleDrag?.moved)) {
+      const previewPoint = hud.buildPanelOpen && buildAnchorWorld ? buildAnchorWorld : groundHit(ev.clientX, ev.clientY);
+      if (previewPoint) {
+        const snapped = snapWorldToTileCenter(previewPoint.x, previewPoint.z);
         const gTile = game.getTileAtWorld(snapped.x, snapped.z);
         ghostMaterial.color.setHex(gTile?.canBuild ? 0x44ff88 : 0xff4455);
         ghostMesh.position.set(
@@ -454,8 +492,9 @@ export function startRender(game: Game) {
     const dy = ev.clientY - singleDrag.startY;
     if (!singleDrag.moved && Math.hypot(dx, dy) > DRAG_THRESHOLD) {
       singleDrag.moved = true;
-      game.clearSelection();
       hud.buildPanelOpen = false;
+      hud.buildAnchorTileKey = null;
+      buildAnchorWorld = null;
     }
     if (singleDrag.moved) panCamera(singleDrag.prevX, singleDrag.prevY, ev.clientX, ev.clientY);
     singleDrag.prevX = ev.clientX;
@@ -471,8 +510,19 @@ export function startRender(game: Game) {
     if (activePointers.size === 0) {
       // All fingers lifted — fire tap only if this was a clean single-finger tap
       if (!hadTwoFingers && singleDrag && !singleDrag.moved) {
-        if (ev.button === 2) handleSecondaryClick(ev.clientX, ev.clientY);
-        else handleClick(ev.clientX, ev.clientY);
+        const now = performance.now();
+        const isDoubleTap =
+          ev.button !== 2 &&
+          lastTap !== null &&
+          now - lastTap.t <= DOUBLE_TAP_MS &&
+          Math.hypot(ev.clientX - lastTap.x, ev.clientY - lastTap.y) <= DOUBLE_TAP_PX;
+        if (isDoubleTap && tryOpenBuildContext(ev.clientX, ev.clientY)) {
+          lastTap = null;
+        } else {
+          if (ev.button === 2) handleSecondaryClick(ev.clientX, ev.clientY);
+          else handleClick(ev.clientX, ev.clientY);
+          lastTap = ev.button === 2 ? null : { x: ev.clientX, y: ev.clientY, t: now };
+        }
       }
       singleDrag = null;
       hadTwoFingers = false;
@@ -522,6 +572,12 @@ export function startRender(game: Game) {
     const dt = (now - lastFrameTime) / 1000;
     lastFrameTime = now;
     lastRenderTime = now;
+    if (observedRoundResetCount !== game.getRoundResetCount()) {
+      observedRoundResetCount = game.getRoundResetCount();
+      victoryState = null;
+      centralServer.root.visible = true;
+      resetViewForNewRound();
+    }
     cameraRig.applyArrowKeys(dt);
     const perfSync0 = performance.now();
     game.sync();
@@ -536,6 +592,7 @@ export function startRender(game: Game) {
     tileVisuals.sync(game);
     const perfTile1 = performance.now();
     if (devModeVisible) tileDebug.refresh(game.getTilesOrdered(), game.getTiles());
+    if (devModeVisible) chunkDebug.refresh(game.getLoadedChunkKeys());
     const perf0 = performance.now();
     world.syncWalkabilityOverlay(walkabilityOverlayVisible);
     game.setOrbitCameraForFrame(cameraRig.distance, CAMERA_CONFIG.distanceMin, CAMERA_CONFIG.distanceMax);
@@ -550,6 +607,7 @@ export function startRender(game: Game) {
     sunLight.shadow.camera.updateProjectionMatrix();
     renderer.render(scene, camera);
     const perf4 = performance.now();
+    const chunkStats = game.getChunkLoadStats();
     frameStats = {
       fps: dt > 0 ? 1 / dt : 0,
       ms: dt * 1000,
@@ -567,6 +625,12 @@ export function startRender(game: Game) {
       programs: renderer.info.programs?.length ?? 0,
       entities: game.entities.length,
       beamBuckets: beamDrawer.getBucketCount() + brightBeamDrawer.getBucketCount(),
+      chunksLoaded: chunkStats.loaded,
+      chunksTotal: chunkStats.total,
+      chunksPending: chunkStats.pending,
+      chunkFirstMs: chunkStats.firstMs,
+      chunkSpawnMs: chunkStats.spawnMs,
+      chunkFullMs: chunkStats.fullMs,
     };
 
     const myColor = game.getPlayerColor(game.room.sessionId);

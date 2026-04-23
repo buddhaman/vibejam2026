@@ -21,6 +21,7 @@ export const BUILDING_GLB_PATHS: Partial<Record<BuildingTypeValue, string>> = {
 /** One prototype per building type (never added to the scene; clone per `BuildingEntity`). */
 let templateBuildingSet: BuildingSet | null = null;
 let gltfTemplatePromise: Promise<void> | null = null;
+let buildingModelAssetVersion = 0;
 
 function ensureProceduralTemplateSet(): BuildingSet {
   if (!templateBuildingSet) {
@@ -198,6 +199,7 @@ export async function ensureBuildingModelsLoaded(): Promise<void> {
     const procedural = ensureProceduralTemplateSet();
     const gltf = await loadAllGltfOnce();
     templateBuildingSet = mergeTemplateSet(gltf, procedural);
+    buildingModelAssetVersion += 1;
   })();
   await gltfTemplatePromise;
 }
@@ -205,4 +207,8 @@ export async function ensureBuildingModelsLoaded(): Promise<void> {
 /** Throws if `ensureBuildingModelsLoaded` has not completed. */
 export function getBuildingVariantTemplates(): BuildingSet {
   return ensureProceduralTemplateSet();
+}
+
+export function getBuildingModelAssetVersion(): number {
+  return buildingModelAssetVersion;
 }
