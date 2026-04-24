@@ -66,7 +66,9 @@ const OVAL_FILL_MAT = new THREE.MeshBasicMaterial({
   transparent: true,
   opacity: 0.08,
   depthWrite: false,
+  depthTest: false,
   fog: false,
+  toneMapped: false,
 });
 const OVAL_RING_GEOM = new THREE.RingGeometry(0.93, 1, 64);
 const OVAL_RING_MAT = new THREE.MeshBasicMaterial({
@@ -75,7 +77,9 @@ const OVAL_RING_MAT = new THREE.MeshBasicMaterial({
   opacity: 0.26,
   side: THREE.DoubleSide,
   depthWrite: false,
+  depthTest: false,
   fog: false,
+  toneMapped: false,
 });
 const RANGE_RING_GEOM = new THREE.RingGeometry(0.985, 1, 72);
 const RANGE_RING_MAT = new THREE.MeshBasicMaterial({
@@ -84,7 +88,9 @@ const RANGE_RING_MAT = new THREE.MeshBasicMaterial({
   opacity: 0.18,
   side: THREE.DoubleSide,
   depthWrite: false,
+  depthTest: false,
   fog: false,
+  toneMapped: false,
 });
 /** Keep ≥ starter Hoplite squad size — dev server uses a larger START_WARBAND_UNIT_COUNT (see server config). */
 const INSTANCE_CAP = import.meta.env.DEV
@@ -315,14 +321,17 @@ export class BlobEntity extends Entity {
     this.ovalFill = new THREE.Mesh(OVAL_FILL_GEOM, OVAL_FILL_MAT.clone());
     this.ovalFill.rotation.x = -Math.PI / 2;
     this.ovalFill.position.y = 0.02;
+    this.ovalFill.renderOrder = 1002;
 
     this.ovalRing = new THREE.Mesh(OVAL_RING_GEOM, OVAL_RING_MAT.clone());
     this.ovalRing.rotation.x = -Math.PI / 2;
     this.ovalRing.position.y = 0.03;
+    this.ovalRing.renderOrder = 1003;
 
     this.attackRangeRing = new THREE.Mesh(RANGE_RING_GEOM, RANGE_RING_MAT.clone());
     this.attackRangeRing.rotation.x = -Math.PI / 2;
     this.attackRangeRing.position.y = 0.05;
+    this.attackRangeRing.renderOrder = 1004;
     this.attackRangeRing.visible = false;
 
     this.ovalRoot.add(this.ovalFill);
@@ -1351,13 +1360,9 @@ export class BlobEntity extends Entity {
     this.ovalRing.material.color.copy(TEMP_OVAL_RING);
     this.ovalFill.material.color.copy(TEMP_OVAL_FILL);
 
-    this.ovalFill.material.opacity = this.isSelected()
-      ? 0.22
-      : this.isMine()
-        ? 0.12
-        : 0.055 + enemyZoom * 0.14;
+    this.ovalFill.material.opacity = 0;
     this.ovalRing.material.opacity = this.isSelected()
-      ? 0.96
+      ? 1
       : this.isMine()
         ? 0.24 + zoomT * 0.08
         : 0.1 + enemyZoom * 0.28;

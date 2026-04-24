@@ -623,7 +623,9 @@ export function startRender(game: Game) {
       ? selectedEntity.getSelectionOutlineObjects().filter((object) => object.visible)
       : [];
     selectionOutlinePass.selectedObjects = outlineObjects;
-    const selectionColor = selectionInfo ? new THREE.Color(selectionInfo.color) : new THREE.Color(0xffffff);
+    const selectionColor = selectionInfo
+      ? new THREE.Color().setHex(selectionInfo.color, THREE.SRGBColorSpace)
+      : new THREE.Color(0xffffff);
     selectionOutlinePass.visibleEdgeColor.copy(selectionColor);
     selectionOutlinePass.hiddenEdgeColor.copy(selectionColor);
     composer.render();

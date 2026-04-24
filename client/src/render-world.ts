@@ -2,7 +2,6 @@ import * as THREE from "three";
 import { RoomEnvironment } from "three/examples/jsm/environments/RoomEnvironment.js";
 import { EffectComposer } from "three/examples/jsm/postprocessing/EffectComposer.js";
 import { RenderPass } from "three/examples/jsm/postprocessing/RenderPass.js";
-import { OutlinePass } from "three/examples/jsm/postprocessing/OutlinePass.js";
 import { OutputPass } from "three/examples/jsm/postprocessing/OutputPass.js";
 import { GAME_RULES, getTileCenter } from "../../shared/game-rules.js";
 import type { Game } from "./game.js";
@@ -17,6 +16,7 @@ import { BrightBeamDrawer } from "./bright-beam-drawer.js";
 import { CentralServerRenderer } from "./central-server-renderer.js";
 import { ChunkDebugOverlay } from "./chunk-debug-overlay.js";
 import { FogOfWarOverlay } from "./fog-of-war.js";
+import { TrueColorOutlinePass } from "./true-color-outline-pass.js";
 
 const SCENE_ENVIRONMENT_INTENSITY = 0.08;
 
@@ -81,7 +81,7 @@ export type RenderWorld = {
   beamDrawer: BeamDrawer;
   brightBeamDrawer: BrightBeamDrawer;
   composer: EffectComposer;
-  selectionOutlinePass: OutlinePass;
+  selectionOutlinePass: TrueColorOutlinePass;
   sunLight: THREE.DirectionalLight;
   centralServer: CentralServerRenderer;
 };
@@ -108,7 +108,7 @@ export function createRenderWorld(game: Game): RenderWorld {
   const composer = new EffectComposer(renderer);
   const renderPass = new RenderPass(scene, new THREE.PerspectiveCamera());
   composer.addPass(renderPass);
-  const selectionOutlinePass = new OutlinePass(
+  const selectionOutlinePass = new TrueColorOutlinePass(
     new THREE.Vector2(window.innerWidth, window.innerHeight),
     scene,
     renderPass.camera
@@ -120,8 +120,8 @@ export function createRenderWorld(game: Game): RenderWorld {
   selectionOutlinePass.usePatternTexture = false;
   selectionOutlinePass.visibleEdgeColor.setHex(0xffffff);
   selectionOutlinePass.hiddenEdgeColor.setHex(0xffffff);
-  composer.addPass(selectionOutlinePass);
   composer.addPass(new OutputPass());
+  composer.addPass(selectionOutlinePass);
 
   const pmrem = new THREE.PMREMGenerator(renderer);
   scene.environment = pmrem.fromScene(new RoomEnvironment(), 0).texture;

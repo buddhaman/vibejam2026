@@ -113,11 +113,14 @@ export class BuildingEntity extends Entity {
         opacity: 0,
         side: THREE.DoubleSide,
         depthWrite: false,
+        depthTest: false,
         fog: false,
+        toneMapped: false,
       })
     );
     this.selectionFill.rotation.x = -Math.PI / 2;
     this.selectionFill.position.y = 0.04;
+    this.selectionFill.renderOrder = 1002;
     this.selectionRing = new THREE.Mesh(
       BUILDING_SELECTION_RING_GEOM,
       new THREE.MeshBasicMaterial({
@@ -126,11 +129,14 @@ export class BuildingEntity extends Entity {
         opacity: 0,
         side: THREE.DoubleSide,
         depthWrite: false,
+        depthTest: false,
         fog: false,
+        toneMapped: false,
       })
     );
     this.selectionRing.rotation.x = -Math.PI / 2;
     this.selectionRing.position.y = 0.05;
+    this.selectionRing.renderOrder = 1003;
     root.add(this.ownerOrb);
     root.add(this.selectionFill);
     root.add(this.selectionRing);
@@ -209,8 +215,8 @@ export class BuildingEntity extends Entity {
     this.selectionRing.visible = selected;
     this.selectionFill.material.color.copy(selectionColor);
     this.selectionRing.material.color.copy(selectionColor);
-    this.selectionFill.material.opacity = selected ? 0.16 : 0;
-    this.selectionRing.material.opacity = selected ? 0.92 : 0;
+    this.selectionFill.material.opacity = 0;
+    this.selectionRing.material.opacity = selected ? 1 : 0;
     if (this.selectionOutline) {
       BUILDING_SELECTION_OUTLINE_COLOR.copy(selectionColor);
       setSelectionOutlineColor(this.selectionOutline, BUILDING_SELECTION_OUTLINE_COLOR);

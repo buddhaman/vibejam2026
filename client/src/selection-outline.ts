@@ -81,6 +81,9 @@ export function setSelectionOutlineColor(object: THREE.Object3D, color: THREE.Co
 }
 
 export function getBrightTeamSelectionColor(color: THREE.ColorRepresentation): THREE.Color {
+  if (typeof color === "number") {
+    return TMP_OUTLINE_COLOR.setHex(color, THREE.SRGBColorSpace);
+  }
   return TMP_OUTLINE_COLOR.set(color);
 }
 
