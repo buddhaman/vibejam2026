@@ -66,7 +66,7 @@ const OVAL_FILL_MAT = new THREE.MeshBasicMaterial({
   transparent: true,
   opacity: 0.08,
   depthWrite: false,
-  depthTest: false,
+  depthTest: true,
   fog: false,
   toneMapped: false,
 });
@@ -333,12 +333,12 @@ export class BlobEntity extends Entity {
 
     this.ovalFill = new THREE.Mesh(OVAL_FILL_GEOM, OVAL_FILL_MAT.clone());
     this.ovalFill.rotation.x = -Math.PI / 2;
-    this.ovalFill.position.y = 0.02;
+    this.ovalFill.position.y = 0.08;
     this.ovalFill.renderOrder = 1002;
 
     this.ovalRing = new THREE.Mesh(getOvalRingGeometry(0.93), OVAL_RING_MAT.clone());
     this.ovalRing.rotation.x = -Math.PI / 2;
-    this.ovalRing.position.y = 0.08;
+    this.ovalRing.position.y = 0.1;
     this.ovalRing.renderOrder = 1003;
 
     this.attackRangeRing = new THREE.Mesh(RANGE_RING_GEOM, RANGE_RING_MAT.clone());
