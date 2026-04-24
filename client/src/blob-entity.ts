@@ -87,8 +87,11 @@ const INSTANCE_CAP = import.meta.env.DEV
 const GOLDEN_ANGLE = Math.PI * (3 - Math.sqrt(5));
 const VISUAL_STEP = 1 / 120;
 const VISUAL_CATCHUP = 12;
-const SELECTED_RING_THICKNESS_PX = 5;
+const SELECTED_RING_THICKNESS_PX = 4;
+const UNSELECTED_RING_THICKNESS_PX = 6;
 const SELECTED_RING_MIN_THICKNESS_WORLD = 0.025;
+const SELECTED_RING_OUTER_SCALE = 1.1;
+const UNSELECTED_RING_OUTER_SCALE = 1.04;
 const DIRECTION_SMOOTHING = 3.2;
 const MIN_DIRECTION_SPEED = 0.2;
 const UNIT_SPRING = 20;
@@ -310,12 +313,12 @@ export class BlobEntity extends Entity {
 
     this.ovalFill = new THREE.Mesh(OVAL_FILL_GEOM, OVAL_FILL_MAT.clone());
     this.ovalFill.rotation.x = -Math.PI / 2;
-    this.ovalFill.position.y = 0.08;
+    this.ovalFill.position.y = 0.14;
     this.ovalFill.renderOrder = 1002;
 
     this.ovalRing = new THREE.Mesh(OVAL_RING_BASE_GEOM, OVAL_RING_MAT.clone());
     this.ovalRing.rotation.x = -Math.PI / 2;
-    this.ovalRing.position.y = 0.1;
+    this.ovalRing.position.y = 0.18;
     this.ovalRing.renderOrder = 1003;
 
     this.attackRangeRing = new THREE.Mesh(RANGE_RING_GEOM, RANGE_RING_MAT.clone());
@@ -1332,15 +1335,16 @@ export class BlobEntity extends Entity {
     this.ovalRoot.rotation.y = layout.heading;
 
     this.ovalFill.scale.set(layout.minor, layout.major, 1);
-    const selectedScale = this.isSelected() ? 1.14 : 1.04;
+    const selectedScale = this.isSelected() ? SELECTED_RING_OUTER_SCALE : UNSELECTED_RING_OUTER_SCALE;
     const ringOuterMinor = layout.minor * selectedScale;
     const ringOuterMajor = layout.major * selectedScale;
+    const ringThicknessPx = this.isSelected() ? SELECTED_RING_THICKNESS_PX : UNSELECTED_RING_THICKNESS_PX;
     applySelectionRingScreenThickness(
       this.ovalRing,
       ringOuterMinor,
       ringOuterMajor,
       this.game.getOrbitWorldUnitsPerScreenPixel(),
-      SELECTED_RING_THICKNESS_PX,
+      ringThicknessPx,
       SELECTED_RING_MIN_THICKNESS_WORLD,
       64
     );

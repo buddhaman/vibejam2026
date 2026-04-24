@@ -66,7 +66,7 @@ const BUILDING_SELECTION_OUTLINE_SCALE = 1.1;
 const BUILDING_SELECTION_OUTLINE_COLOR = new THREE.Color();
 const BUILDING_SELECTION_RING_GEOM = new THREE.RingGeometry(0.92, 1, 72);
 const BUILDING_SELECTION_FILL_GEOM = new THREE.CircleGeometry(1, 56);
-const BUILDING_SELECTION_RING_THICKNESS_PX = 5;
+const BUILDING_SELECTION_RING_THICKNESS_PX = 4;
 const BUILDING_SELECTION_RING_MIN_THICKNESS_WORLD = 0.025;
 
 function getEffectiveUnitTrainTimeMs(unitType: UnitTypeValue): number {
@@ -117,14 +117,14 @@ export class BuildingEntity extends Entity {
       createSelectionFillMaterial()
     );
     this.selectionFill.rotation.x = -Math.PI / 2;
-    this.selectionFill.position.y = 0.08;
+    this.selectionFill.position.y = 0.14;
     this.selectionFill.renderOrder = 1002;
     this.selectionRing = new THREE.Mesh(
       BUILDING_SELECTION_RING_GEOM,
       createSelectionRingMaterial()
     );
     this.selectionRing.rotation.x = -Math.PI / 2;
-    this.selectionRing.position.y = 0.1;
+    this.selectionRing.position.y = 0.18;
     this.selectionRing.renderOrder = 1003;
     root.add(this.ownerOrb);
     root.add(this.selectionFill);
@@ -201,8 +201,8 @@ export class BuildingEntity extends Entity {
     this.selectionFill.scale.set(ringScaleX, ringScaleZ, 1);
     applySelectionRingScreenThickness(
       this.selectionRing,
-      ringScaleX * 1.07,
-      ringScaleZ * 1.07,
+      ringScaleX * BUILDING_SELECTION_OUTLINE_SCALE,
+      ringScaleZ * BUILDING_SELECTION_OUTLINE_SCALE,
       this.game.getOrbitWorldUnitsPerScreenPixel(),
       BUILDING_SELECTION_RING_THICKNESS_PX,
       BUILDING_SELECTION_RING_MIN_THICKNESS_WORLD
