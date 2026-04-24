@@ -11,6 +11,7 @@ import { BuildingType, formatResourceCost, getBuildingRules, type BuildingType a
 import { CarriedResourceType } from "../../shared/protocol.js";
 import type { SelectionInfo } from "./entity.js";
 import type { TileView } from "./terrain.js";
+import { publicAssetUrl } from "./asset-url.js";
 
 type Rect = { x: number; y: number; w: number; h: number };
 type ResourceIconKey = "biomass" | "material" | "gpu";
@@ -131,9 +132,9 @@ const F_BODY_SM     = "11px system-ui, sans-serif";
 const F_BODY_XS     = "10px system-ui, sans-serif";
 
 const RESOURCE_ICON_PATHS: Record<ResourceIconKey, string> = {
-  biomass: "/assets/icons/biomass_icon.png",
-  material: "/assets/icons/material_icon.png",
-  gpu: "/assets/icons/gpu_icon.png",
+  biomass: publicAssetUrl("assets/icons/biomass_icon.png"),
+  material: publicAssetUrl("assets/icons/material_icon.png"),
+  gpu: publicAssetUrl("assets/icons/gpu_icon.png"),
 };
 
 const RESOURCE_ICON_IMAGES: Record<ResourceIconKey, HTMLImageElement | null> = {

@@ -24,6 +24,11 @@ import {
   getBrightTeamSelectionColor,
   setSelectionOutlineColor,
 } from "./selection-outline.js";
+import {
+  applySelectionRingScreenThickness,
+  createSelectionFillMaterial,
+  createSelectionRingMaterial,
+} from "./selection-ring.js";
 
 const ORB_RADIUS = 0.525;
 const ORB_Y_ABOVE_ROOF = 1.55;
@@ -61,6 +66,8 @@ const BUILDING_SELECTION_OUTLINE_SCALE = 1.1;
 const BUILDING_SELECTION_OUTLINE_COLOR = new THREE.Color();
 const BUILDING_SELECTION_RING_GEOM = new THREE.RingGeometry(0.92, 1, 72);
 const BUILDING_SELECTION_FILL_GEOM = new THREE.CircleGeometry(1, 56);
+const BUILDING_SELECTION_RING_THICKNESS_PX = 5;
+const BUILDING_SELECTION_RING_MIN_THICKNESS_WORLD = 0.025;
 
 function getEffectiveUnitTrainTimeMs(unitType: UnitTypeValue): number {
   return Math.max(1, Math.ceil(getUnitTrainTimeMs(unitType) * UNIT_TRAIN_TIME_MULTIPLIER));
@@ -107,35 +114,17 @@ export class BuildingEntity extends Entity {
     this.ownerOrb.castShadow = true;
     this.selectionFill = new THREE.Mesh(
       BUILDING_SELECTION_FILL_GEOM,
-      new THREE.MeshBasicMaterial({
-        color: 0xffffff,
-        transparent: true,
-        opacity: 0,
-        side: THREE.DoubleSide,
-        depthWrite: false,
-        depthTest: false,
-        fog: false,
-        toneMapped: false,
-      })
+      createSelectionFillMaterial()
     );
     this.selectionFill.rotation.x = -Math.PI / 2;
-    this.selectionFill.position.y = 0.04;
+    this.selectionFill.position.y = 0.08;
     this.selectionFill.renderOrder = 1002;
     this.selectionRing = new THREE.Mesh(
       BUILDING_SELECTION_RING_GEOM,
-      new THREE.MeshBasicMaterial({
-        color: 0xffffff,
-        transparent: true,
-        opacity: 0,
-        side: THREE.DoubleSide,
-        depthWrite: false,
-        depthTest: false,
-        fog: false,
-        toneMapped: false,
-      })
+      createSelectionRingMaterial()
     );
     this.selectionRing.rotation.x = -Math.PI / 2;
-    this.selectionRing.position.y = 0.05;
+    this.selectionRing.position.y = 0.1;
     this.selectionRing.renderOrder = 1003;
     root.add(this.ownerOrb);
     root.add(this.selectionFill);
@@ -210,7 +199,14 @@ export class BuildingEntity extends Entity {
     const ringScaleX = rules.selectionWidth * 0.64;
     const ringScaleZ = rules.selectionDepth * 0.64;
     this.selectionFill.scale.set(ringScaleX, ringScaleZ, 1);
-    this.selectionRing.scale.set(ringScaleX * 1.07, ringScaleZ * 1.07, 1);
+    applySelectionRingScreenThickness(
+      this.selectionRing,
+      ringScaleX * 1.07,
+      ringScaleZ * 1.07,
+      this.game.getOrbitWorldUnitsPerScreenPixel(),
+      BUILDING_SELECTION_RING_THICKNESS_PX,
+      BUILDING_SELECTION_RING_MIN_THICKNESS_WORLD
+    );
     this.selectionFill.visible = selected;
     this.selectionRing.visible = selected;
     this.selectionFill.material.color.copy(selectionColor);

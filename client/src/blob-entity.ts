@@ -53,6 +53,11 @@ import {
 } from "./selection-outline.js";
 import { BeamDrawer } from "./beam-drawer.js";
 import { BrightBeamDrawer } from "./bright-beam-drawer.js";
+import {
+  applySelectionRingScreenThickness,
+  createSelectionFillMaterial,
+  createSelectionRingMaterial,
+} from "./selection-ring.js";
 
 const UNIT_GEOM = createUnitBodyGeometry();
 const UNIT_MAT = applyStylizedShading(new THREE.MeshStandardMaterial({
@@ -61,27 +66,9 @@ const UNIT_MAT = applyStylizedShading(new THREE.MeshStandardMaterial({
   metalness: 0.02,
 }));
 const OVAL_FILL_GEOM = new THREE.CircleGeometry(1, 48);
-const OVAL_FILL_MAT = new THREE.MeshBasicMaterial({
-  color: 0xffffff,
-  transparent: true,
-  opacity: 0.08,
-  depthWrite: false,
-  depthTest: true,
-  fog: false,
-  toneMapped: false,
-});
-const OVAL_RING_SEGMENTS = 64;
-const OVAL_RING_GEOM_CACHE = new Map<number, THREE.RingGeometry>();
-const OVAL_RING_MAT = new THREE.MeshBasicMaterial({
-  color: 0xffffff,
-  transparent: true,
-  opacity: 0.26,
-  side: THREE.DoubleSide,
-  depthWrite: false,
-  depthTest: true,
-  fog: false,
-  toneMapped: false,
-});
+const OVAL_FILL_MAT = createSelectionFillMaterial();
+const OVAL_RING_MAT = createSelectionRingMaterial();
+const OVAL_RING_BASE_GEOM = new THREE.RingGeometry(0.93, 1, 64);
 const RANGE_RING_GEOM = new THREE.RingGeometry(0.985, 1, 72);
 const RANGE_RING_MAT = new THREE.MeshBasicMaterial({
   color: 0xffffff,
@@ -147,16 +134,6 @@ const _ovalHsl = { h: 0, s: 0, l: 0 };
 const SHIELD_RADIUS    = 0.44;
 const SHIELD_THICKNESS = 0.055;
 const UNIT_SELECTION_OUTLINE_COLOR = new THREE.Color();
-
-function getOvalRingGeometry(innerRadius: number): THREE.RingGeometry {
-  const quantized = Math.max(0.5, Math.min(0.995, Math.round(innerRadius * 1000) / 1000));
-  let geom = OVAL_RING_GEOM_CACHE.get(quantized);
-  if (!geom) {
-    geom = new THREE.RingGeometry(quantized, 1, OVAL_RING_SEGMENTS);
-    OVAL_RING_GEOM_CACHE.set(quantized, geom);
-  }
-  return geom;
-}
 
 type UnitCombatMode = "formation" | "chase" | "attack";
 
@@ -336,7 +313,7 @@ export class BlobEntity extends Entity {
     this.ovalFill.position.y = 0.08;
     this.ovalFill.renderOrder = 1002;
 
-    this.ovalRing = new THREE.Mesh(getOvalRingGeometry(0.93), OVAL_RING_MAT.clone());
+    this.ovalRing = new THREE.Mesh(OVAL_RING_BASE_GEOM, OVAL_RING_MAT.clone());
     this.ovalRing.rotation.x = -Math.PI / 2;
     this.ovalRing.position.y = 0.1;
     this.ovalRing.renderOrder = 1003;
@@ -1358,19 +1335,15 @@ export class BlobEntity extends Entity {
     const selectedScale = this.isSelected() ? 1.14 : 1.04;
     const ringOuterMinor = layout.minor * selectedScale;
     const ringOuterMajor = layout.major * selectedScale;
-    this.ovalRing.scale.set(ringOuterMinor, ringOuterMajor, 1);
-
-    // Keep ring radius world-space, but keep line thickness roughly constant in screen px.
-    const worldPerPx = this.game.getOrbitWorldUnitsPerScreenPixel();
-    const targetWorldThickness = Math.max(
+    applySelectionRingScreenThickness(
+      this.ovalRing,
+      ringOuterMinor,
+      ringOuterMajor,
+      this.game.getOrbitWorldUnitsPerScreenPixel(),
+      SELECTED_RING_THICKNESS_PX,
       SELECTED_RING_MIN_THICKNESS_WORLD,
-      worldPerPx * SELECTED_RING_THICKNESS_PX
+      64
     );
-    const avgOuterRadius = Math.max(0.001, (ringOuterMinor + ringOuterMajor) * 0.5);
-    const localThickness = Math.max(0.01, Math.min(0.45, targetWorldThickness / avgOuterRadius));
-    const innerRadius = 1 - localThickness;
-    const nextRingGeometry = getOvalRingGeometry(innerRadius);
-    if (this.ovalRing.geometry !== nextRingGeometry) this.ovalRing.geometry = nextRingGeometry;
 
     const zoomT = this.game.getCameraZoomOut01();
     const enemyZoom = !this.isMine() ? zoomT : 0;
