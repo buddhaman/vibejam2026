@@ -51,6 +51,8 @@ import {
   createInstancedSelectionOutline,
   getBrightTeamSelectionColor,
 } from "./selection-outline.js";
+import { BeamDrawer } from "./beam-drawer.js";
+import { BrightBeamDrawer } from "./bright-beam-drawer.js";
 
 const UNIT_GEOM = createUnitBodyGeometry();
 const UNIT_MAT = applyStylizedShading(new THREE.MeshStandardMaterial({
@@ -227,6 +229,8 @@ export class BlobEntity extends Entity {
   private unitsArcherOutline: THREE.InstancedMesh[] = [];
   private unitsCentaurOutline!: THREE.InstancedMesh;
   private unitShieldOutline!: THREE.InstancedMesh;
+  private selectionBeamDrawer!: BeamDrawer;
+  private selectionBrightBeamDrawer!: BrightBeamDrawer;
   private blobSnapshot: BlobRenderView | null = null;
   private blob: BlobRenderView | null = null;
   private heading = 0;
@@ -262,13 +266,21 @@ export class BlobEntity extends Entity {
 
   protected override init(): void {
     super.init();
+    this.selectionBeamDrawer = new BeamDrawer(1024);
+    this.selectionBrightBeamDrawer = new BrightBeamDrawer(1024);
+    this.selectionBeamDrawer.root.visible = false;
+    this.selectionBrightBeamDrawer.root.visible = false;
     this.buildTargetIndicator();
+    this.game.scene.add(this.selectionBeamDrawer.root);
+    this.game.scene.add(this.selectionBrightBeamDrawer.root);
     this.game.scene.add(this.targetGroup);
     this.game.scene.add(this.targetConnector);
     this.game.scene.add(this.carriedResources.root);
   }
 
   public override destroy(): void {
+    this.game.scene.remove(this.selectionBeamDrawer.root);
+    this.game.scene.remove(this.selectionBrightBeamDrawer.root);
     this.game.scene.remove(this.targetGroup);
     this.game.scene.remove(this.targetConnector);
     this.game.scene.remove(this.carriedResources.root);
@@ -438,7 +450,18 @@ export class BlobEntity extends Entity {
   }
 
   public override getSelectionOutlineObjects(): THREE.Object3D[] {
-    return [
+    return this.isSelected()
+      ? [
+      ...this.unitsAgent,
+      ...this.unitsArcher,
+      ...this.unitsWarband,
+      ...this.unitsSynthaur,
+      this.unitsCentaur,
+      this.unitShield,
+      this.selectionBeamDrawer.root,
+      this.selectionBrightBeamDrawer.root,
+    ]
+      : [
       ...this.unitsAgent,
       ...this.unitsArcher,
       ...this.unitsWarband,
@@ -1296,7 +1319,11 @@ export class BlobEntity extends Entity {
       this.blob.ownerId === this.game.room.sessionId ||
       this.game.isWorldVisibleToMe(layout.x, layout.y);
     this.mesh.visible = visibleToMe;
-    if (!visibleToMe) return;
+    if (!visibleToMe) {
+      this.selectionBeamDrawer.root.visible = false;
+      this.selectionBrightBeamDrawer.root.visible = false;
+      return;
+    }
     const terrainY = getTerrainHeightAt(layout.x, layout.y, this.game.getTiles());
     const teamTint = new THREE.Color(this.game.getPlayerColor(this.blob.ownerId));
     UNIT_SELECTION_OUTLINE_COLOR.copy(getBrightTeamSelectionColor(teamTint));
@@ -1512,18 +1539,16 @@ export class BlobEntity extends Entity {
         }
       }
     }
-    const selectionBeamColor = UNIT_SELECTION_OUTLINE_COLOR;
-    const drawBeam = this.isSelected()
-      ? ((from: THREE.Vector3, to: THREE.Vector3, width: number, depth: number, color: THREE.Color) => {
-          this.game.drawBrightBeam(from, to, width * 1.85, depth * 1.85, selectionBeamColor);
-          this.game.drawBeam(from, to, width, depth, color);
-        })
+    this.selectionBeamDrawer.beginFrame();
+    this.selectionBrightBeamDrawer.beginFrame();
+    const useSelectionBeamDrawers = this.isSelected();
+    this.selectionBeamDrawer.root.visible = useSelectionBeamDrawers;
+    this.selectionBrightBeamDrawer.root.visible = useSelectionBeamDrawers;
+    const drawBeam = useSelectionBeamDrawers
+      ? this.selectionBeamDrawer.drawBeam.bind(this.selectionBeamDrawer)
       : this.game.drawBeam.bind(this.game);
-    const drawBrightBeam = this.isSelected()
-      ? ((from: THREE.Vector3, to: THREE.Vector3, width: number, depth: number, color: THREE.Color) => {
-          this.game.drawBrightBeam(from, to, width * 1.6, depth * 1.6, selectionBeamColor);
-          this.game.drawBrightBeam(from, to, width, depth, color);
-        })
+    const drawBrightBeam = useSelectionBeamDrawers
+      ? this.selectionBrightBeamDrawer.drawBeam.bind(this.selectionBrightBeamDrawer)
       : this.game.drawBrightBeam.bind(this.game);
     const pickupProgress =
       this.blob.gatherPhase === BlobGatherPhase.PICKING_UP
@@ -1852,6 +1877,8 @@ export class BlobEntity extends Entity {
     this.unitsCentaur.instanceMatrix.needsUpdate = true;
     this.unitShield.instanceMatrix.needsUpdate = true;
     for (const m of this.unitsWarband) m.instanceMatrix.needsUpdate = true;
+    this.selectionBeamDrawer.finishFrame();
+    this.selectionBrightBeamDrawer.finishFrame();
     this.syncSelectionOutlineMeshes(UNIT_SELECTION_OUTLINE_COLOR);
     this.carriedResources.sync(carriedResourceInstances);
 
