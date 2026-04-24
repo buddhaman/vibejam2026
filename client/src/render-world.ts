@@ -12,6 +12,7 @@ import { BeamDrawer } from "./beam-drawer.js";
 import { BrightBeamDrawer } from "./bright-beam-drawer.js";
 import { CentralServerRenderer } from "./central-server-renderer.js";
 import { ChunkDebugOverlay } from "./chunk-debug-overlay.js";
+import { FogOfWarOverlay } from "./fog-of-war.js";
 
 const SCENE_ENVIRONMENT_INTENSITY = 0.08;
 
@@ -22,6 +23,13 @@ const SUN = {
   shadowDepth: 160,
   shadowDistance: 90,
   mapSize: 2048,
+} as const;
+
+const ATMOSPHERE = {
+  skyTop: new THREE.Color(0x6ca7d8),
+  skyHorizon: new THREE.Color(0xe6d2aa),
+  groundHaze: new THREE.Color(0xb4c5c7),
+  radius: 2600,
 } as const;
 
 export const CAMERA_CONFIG = {
@@ -65,6 +73,7 @@ export type RenderWorld = {
   ragdollFx: RagdollFxSystem;
   arrowFx: ArrowFxSystem;
   buildingDestructionFx: BuildingDestructionFxSystem;
+  fogOfWar: FogOfWarOverlay;
   beamDrawer: BeamDrawer;
   brightBeamDrawer: BrightBeamDrawer;
   sunLight: THREE.DirectionalLight;
@@ -85,7 +94,7 @@ export function createRenderWorld(game: Game): RenderWorld {
   });
   renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
   renderer.setSize(window.innerWidth, window.innerHeight);
-  renderer.setClearColor(0x62c8ff, 1);
+  renderer.setClearColor(0x8eb7d6, 1);
   renderer.shadowMap.enabled = true;
   renderer.shadowMap.type = THREE.PCFShadowMap;
   renderer.toneMapping = THREE.ACESFilmicToneMapping;
@@ -96,7 +105,8 @@ export function createRenderWorld(game: Game): RenderWorld {
   scene.environmentIntensity = SCENE_ENVIRONMENT_INTENSITY;
   pmrem.dispose();
 
-  scene.fog = new THREE.Fog(0x62c8ff, 420, 1280);
+  scene.fog = new THREE.Fog(0x9bb5c9, 180, 520);
+  scene.add(createAtmosphereDome());
   scene.add(new THREE.AmbientLight(0xfff0c0, 0.28));
   scene.add(new THREE.HemisphereLight(0x98d8ff, 0x72c83a, 0.68));
 
@@ -214,6 +224,10 @@ export function createRenderWorld(game: Game): RenderWorld {
   const tileVisuals = new TileVisualManager();
   scene.add(tileVisuals.root);
 
+  const fogOfWar = new FogOfWarOverlay();
+  scene.add(fogOfWar.mesh);
+  game.setFogOfWarVisibilityQuery((x, z) => fogOfWar.isWorldVisible(x, z));
+
   const ragdollFx = new RagdollFxSystem();
   scene.add(ragdollFx.root);
   game.setRagdollFxSystem(ragdollFx);
@@ -249,6 +263,7 @@ export function createRenderWorld(game: Game): RenderWorld {
     tileDebug,
     chunkDebug,
     tileVisuals,
+    fogOfWar,
     ragdollFx,
     arrowFx,
     buildingDestructionFx,
@@ -258,6 +273,44 @@ export function createRenderWorld(game: Game): RenderWorld {
     centralServer,
   });
   return world;
+}
+
+function createAtmosphereDome(): THREE.Mesh {
+  const geometry = new THREE.SphereGeometry(ATMOSPHERE.radius, 32, 18);
+  const material = new THREE.ShaderMaterial({
+    side: THREE.BackSide,
+    depthWrite: false,
+    fog: false,
+    uniforms: {
+      topColor: { value: ATMOSPHERE.skyTop },
+      horizonColor: { value: ATMOSPHERE.skyHorizon },
+      bottomColor: { value: ATMOSPHERE.groundHaze },
+    },
+    vertexShader: `
+      varying vec3 vWorldPos;
+      void main() {
+        vec4 worldPos = modelMatrix * vec4(position, 1.0);
+        vWorldPos = worldPos.xyz;
+        gl_Position = projectionMatrix * viewMatrix * worldPos;
+      }
+    `,
+    fragmentShader: `
+      uniform vec3 topColor;
+      uniform vec3 horizonColor;
+      uniform vec3 bottomColor;
+      varying vec3 vWorldPos;
+
+      void main() {
+        float h = normalize(vWorldPos).y * 0.5 + 0.5;
+        float horizonBand = 1.0 - abs(h - 0.5) * 2.0;
+        horizonBand = smoothstep(0.0, 1.0, horizonBand);
+        vec3 base = mix(bottomColor, topColor, smoothstep(0.02, 0.98, h));
+        vec3 color = mix(base, horizonColor, horizonBand * 0.72);
+        gl_FragColor = vec4(color, 1.0);
+      }
+    `,
+  });
+  return new THREE.Mesh(geometry, material);
 }
 
 function createCameraRig(game: Game, sunLight: THREE.DirectionalLight): CameraRig {

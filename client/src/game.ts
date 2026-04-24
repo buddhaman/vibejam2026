@@ -106,6 +106,7 @@ export class Game {
     resourceType: number;
     bornAt: number;
   }> = [];
+  private _fogOfWarVisibilityQuery: ((x: number, z: number) => boolean) | null = null;
   private _uiFeed: Array<
     | ({ type: "chat"; senderId: string; senderName: string; text: string; sentAt: number } & { id: string })
     | ({ type: "system"; text: string; kind: SystemNoticeMessage["kind"]; sentAt: number } & { id: string })
@@ -565,7 +566,9 @@ export class Game {
   }
 
   public getSelectedEntity(): Entity | null {
-    return this.selectedEntityId ? this.findEntity(this.selectedEntityId) : null;
+    if (!this.selectedEntityId) return null;
+    const entity = this.findEntity(this.selectedEntityId);
+    return entity && entity.mesh.visible ? entity : null;
   }
 
   /** Any selected squad (yours or enemy) — for UI. */
@@ -599,6 +602,7 @@ export class Game {
     let best: Entity | null = null;
     let bestDistance = Infinity;
     for (const entity of this.entities) {
+      if (!entity.mesh.visible) continue;
       if (!entity.isOwnedByMe() || !entity.containsWorldPoint(x, z)) continue;
       const distance = entity.worldDistanceTo(x, z);
       if (distance < bestDistance) {
@@ -613,6 +617,7 @@ export class Game {
     let best: Entity | null = null;
     let bestDistance = Infinity;
     for (const entity of this.entities) {
+      if (!entity.mesh.visible) continue;
       if (!entity.containsWorldPoint(x, z)) continue;
       const distance = entity.worldDistanceTo(x, z);
       if (distance < bestDistance) {
@@ -627,6 +632,7 @@ export class Game {
     let best: BlobEntity | null = null;
     let bestDistance = Infinity;
     for (const entity of this.entities) {
+      if (!entity.mesh.visible) continue;
       if (!(entity instanceof BlobEntity) || !entity.containsWorldPoint(x, z)) continue;
       if (options?.enemyOnly && entity.isMine()) continue;
       if (options?.mineOnly && !entity.isMine()) continue;
@@ -643,6 +649,7 @@ export class Game {
     let best: BlobEntity | null = null;
     let bestDistance = Infinity;
     for (const entity of this.entities) {
+      if (!entity.mesh.visible) continue;
       if (!(entity instanceof BlobEntity)) continue;
       if (options?.enemyOnly && entity.isMine()) continue;
       if (options?.mineOnly && !entity.isMine()) continue;
@@ -665,6 +672,7 @@ export class Game {
     let best: BlobEntity | BuildingEntity | null = null;
     let bestDistance = Infinity;
     for (const entity of this.entities) {
+      if (!entity.mesh.visible) continue;
       if (!(entity instanceof BlobEntity) && !(entity instanceof BuildingEntity)) continue;
       if (!entity.containsWorldPoint(x, z)) continue;
       if (options?.enemyOnly && entity.isOwnedByMe()) continue;
@@ -685,6 +693,7 @@ export class Game {
     let best: BlobEntity | BuildingEntity | null = null;
     let bestDistance = Infinity;
     for (const entity of this.entities) {
+      if (!entity.mesh.visible) continue;
       if (!(entity instanceof BlobEntity) && !(entity instanceof BuildingEntity)) continue;
       if (options?.enemyOnly && entity.isOwnedByMe()) continue;
       if (options?.mineOnly && !entity.isOwnedByMe()) continue;
@@ -704,6 +713,7 @@ export class Game {
     let bestDistance = Infinity;
 
     for (const entity of this.entities) {
+      if (!entity.mesh.visible) continue;
       if (!entity.isOwnedByMe()) continue;
       const hits = raycaster.intersectObject(entity.mesh, true);
       if (hits.length === 0) continue;
@@ -723,6 +733,7 @@ export class Game {
     let bestDistance = Infinity;
 
     for (const entity of this.entities) {
+      if (!entity.mesh.visible) continue;
       const hits = raycaster.intersectObject(entity.mesh, true);
       if (hits.length === 0) continue;
       const distance = hits[0].distance;
@@ -912,6 +923,14 @@ export class Game {
 
   public isMyBlob(ownerId: string): boolean {
     return ownerId === this.room.sessionId;
+  }
+
+  public setFogOfWarVisibilityQuery(query: ((x: number, z: number) => boolean) | null): void {
+    this._fogOfWarVisibilityQuery = query;
+  }
+
+  public isWorldVisibleToMe(x: number, z: number): boolean {
+    return this._fogOfWarVisibilityQuery ? this._fogOfWarVisibilityQuery(x, z) : true;
   }
 
   public setBeamDrawer(beamDrawer: BeamDrawer): void {

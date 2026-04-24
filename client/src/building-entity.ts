@@ -130,6 +130,11 @@ export class BuildingEntity extends Entity {
 
   public render(_dt: number): void {
     if (!this.building) return;
+    const visibleToMe =
+      this.building.ownerId === this.game.room.sessionId ||
+      this.game.isWorldVisibleToMe(this.building.x, this.building.y);
+    this.mesh.visible = visibleToMe;
+    if (!visibleToMe) return;
     if (
       !this.variant ||
       this.variantType !== this.building.buildingType ||

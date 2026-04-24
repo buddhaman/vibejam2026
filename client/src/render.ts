@@ -38,7 +38,7 @@ export function startRender(game: Game) {
   const netPerf = attachDevNetworkPerf(game.room);
   const world = createRenderWorld(game);
   const { scene } = game;
-  const { renderer, canvas, cameraRig, walkabilityOverlay, tileDebug, chunkDebug, tileVisuals, buildingDestructionFx, beamDrawer, brightBeamDrawer, sunLight, centralServer } = world;
+  const { renderer, canvas, cameraRig, walkabilityOverlay, tileDebug, chunkDebug, tileVisuals, buildingDestructionFx, fogOfWar, beamDrawer, brightBeamDrawer, sunLight, centralServer } = world;
   const camera = cameraRig.camera;
   let tileDebugInspected: TileView | null = null;
   let devModeVisible = false;
@@ -608,6 +608,7 @@ export function startRender(game: Game) {
     game.updateRagdollFx(dt);
     game.updateArrowFx(dt);
     buildingDestructionFx.update(dt, game.getTiles());
+    fogOfWar.update(game, now / 1000);
     const perf1 = performance.now();
     for (const entity of game.entities) entity.render(dt);
     const perf2 = performance.now();

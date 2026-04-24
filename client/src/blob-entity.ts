@@ -1217,6 +1217,11 @@ export class BlobEntity extends Entity {
     }
 
     const layout = this.getLayout();
+    const visibleToMe =
+      this.blob.ownerId === this.game.room.sessionId ||
+      this.game.isWorldVisibleToMe(layout.x, layout.y);
+    this.mesh.visible = visibleToMe;
+    if (!visibleToMe) return;
     const terrainY = getTerrainHeightAt(layout.x, layout.y, this.game.getTiles());
     const teamTint = new THREE.Color(this.game.getPlayerColor(this.blob.ownerId));
 
