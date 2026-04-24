@@ -196,7 +196,7 @@ export function startRender(game: Game) {
     ndcV.set((clientX / window.innerWidth) * 2 - 1, -(clientY / window.innerHeight) * 2 + 1);
     raycaster.setFromCamera(ndcV, camera);
     terrainHits.length = 0;
-    raycaster.intersectObject(world.terrain, false, terrainHits);
+    raycaster.intersectObject(world.terrain, true, terrainHits);
     for (const terrainHit of terrainHits) {
       if (terrainHit.face) return terrainHit.point.clone();
     }
@@ -592,8 +592,9 @@ export function startRender(game: Game) {
     chatUi.update();
     const perfSync1 = performance.now();
     game.clearBeamDraws();
-    if (game.consumeTerrainDirty()) {
-      world.rebuildTerrain();
+    const terrainDirty = game.consumeTerrainDirty();
+    if (terrainDirty.all || terrainDirty.chunkKeys.size > 0) {
+      world.rebuildTerrain(terrainDirty.all ? undefined : terrainDirty.chunkKeys);
     }
 
     const perfTile0 = performance.now();

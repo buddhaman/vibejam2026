@@ -6,6 +6,8 @@ import {
   SquadSpread,
   UnitType,
   getAllChunkKeys,
+  getChunkCoordsFromTile,
+  getChunkKey,
   getChunkCoordsFromWorld,
   getChunkKeysInRadius,
   getTileCoordsFromWorld,
@@ -74,6 +76,7 @@ export class Game {
 
   private _tiles = new Map<string, TileView>();
   private _tilesOrdered: TileView[] = [];
+  private _tilesByChunkKey = new Map<string, TileView[]>();
   private _streamResolve: (() => void) | null = null;
   private _pendingChunkResolvers = new Map<string, Array<() => void>>();
   private _loadedChunkKeys = new Set<string>();
@@ -84,7 +87,8 @@ export class Game {
   private _dirtyTileVisualLayers = new Set<"forest" | "datacenters">(["forest", "datacenters"]);
   private _allTileVisualsDirty = true;
   private _walkabilityDirty = true;
-  private _terrainDirty = true;
+  private _terrainAllDirty = true;
+  private _dirtyTerrainChunkKeys = new Set<string>();
   /** A* paths received from server per blob (owner client only). */
   private _blobPaths = new Map<string, { x: number; y: number }[]>();
   private _blobCarrySnapshots = new Map<string, {
@@ -221,12 +225,15 @@ export class Game {
   private _onTileChunk(msg: TileChunkMessage): void {
     const key = typeof msg.key === "string" && msg.key.length > 0 ? msg.key : null;
     if (this._chunkLoadStartedAt <= 0) this._chunkLoadStartedAt = performance.now();
+    const chunkTiles: TileView[] = [];
     for (const raw of msg.tiles) {
       const t = raw as TileView;
       if (typeof t.maxCompute !== "number") t.maxCompute = 0;
       this._tiles.set(t.key, t);
+      chunkTiles.push(t);
     }
     if (key) {
+      this._tilesByChunkKey.set(key, chunkTiles);
       this._loadedChunkKeys.add(key);
       if (this._firstChunkMs === null) {
         this._firstChunkMs = performance.now() - this._chunkLoadStartedAt;
@@ -243,7 +250,7 @@ export class Game {
       this._dirtyTileVisualLayers.add("forest");
       this._dirtyTileVisualLayers.add("datacenters");
       this._walkabilityDirty = true;
-      this._terrainDirty = true;
+      this._dirtyTerrainChunkKeys.add(key);
       return;
     }
     const next = msg.chunk + 1;
@@ -262,7 +269,8 @@ export class Game {
       this._dirtyTileVisualLayers.add("forest");
       this._dirtyTileVisualLayers.add("datacenters");
       this._walkabilityDirty = true;
-      this._terrainDirty = true;
+      this.rebuildChunkTileBuckets();
+      this._terrainAllDirty = true;
       this._streamResolve?.();
       this._streamResolve = null;
       this._streamPromise = null;
@@ -280,11 +288,23 @@ export class Game {
     }
   }
 
+  private rebuildChunkTileBuckets(): void {
+    this._tilesByChunkKey.clear();
+    for (const tile of this._tiles.values()) {
+      const { cx, cz } = getChunkCoordsFromTile(tile.tx, tile.tz);
+      const key = getChunkKey(cx, cz);
+      const bucket = this._tilesByChunkKey.get(key);
+      if (bucket) bucket.push(tile);
+      else this._tilesByChunkKey.set(key, [tile]);
+    }
+  }
+
   private resetForNewRound(): void {
     this.selectedEntityId = null;
     this.selectedTileKey = null;
     this._tiles.clear();
     this._tilesOrdered = [];
+    this._tilesByChunkKey.clear();
     this._loadedChunkKeys.clear();
     this._pendingChunkResolvers.clear();
     this._chunkLoadStartedAt = 0;
@@ -299,7 +319,8 @@ export class Game {
     this._dirtyTileVisualLayers.add("datacenters");
     this._allTileVisualsDirty = true;
     this._walkabilityDirty = true;
-    this._terrainDirty = true;
+    this._terrainAllDirty = true;
+    this._dirtyTerrainChunkKeys.clear();
     this._streamResolve = null;
     this._streamPromise = null;
     this._roundResetCount += 1;
@@ -343,7 +364,8 @@ export class Game {
       heightChanged = true;
     }
     if (heightChanged) {
-      this._terrainDirty = true;
+      const chunk = getChunkCoordsFromTile(tile.tx, tile.tz);
+      this._dirtyTerrainChunkKeys.add(getChunkKey(chunk.cx, chunk.cz));
       this._allTileVisualsDirty = true;
       this._dirtyTileVisualLayers.add("forest");
       this._dirtyTileVisualLayers.add("datacenters");
@@ -760,6 +782,8 @@ export class Game {
   /** Ordered (tz, tx) array for terrain/forest rendering — object refs are live. */
   public getTilesOrdered(): TileView[] { return this._tilesOrdered; }
 
+  public getTilesForChunk(key: string): TileView[] { return this._tilesByChunkKey.get(key) ?? []; }
+
   public getCarriedTreeCountByTile(): Map<string, number> {
     const counts = new Map<string, number>();
     this.room.state.blobs.forEach((raw) => {
@@ -838,9 +862,13 @@ export class Game {
     return dirty;
   }
 
-  public consumeTerrainDirty(): boolean {
-    const dirty = this._terrainDirty;
-    this._terrainDirty = false;
+  public consumeTerrainDirty(): { all: boolean; chunkKeys: Set<string> } {
+    const dirty = {
+      all: this._terrainAllDirty,
+      chunkKeys: new Set(this._dirtyTerrainChunkKeys),
+    };
+    this._terrainAllDirty = false;
+    this._dirtyTerrainChunkKeys.clear();
     return dirty;
   }
 

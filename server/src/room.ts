@@ -18,6 +18,7 @@ import {
   getChunkCoordsFromTile,
   getChunkKey,
   getBlobMoveRules,
+  getTerrainVertexHeight,
   getUnitBalanceRules,
   getUnitRules,
   getUnitTrainCost,
@@ -1164,19 +1165,21 @@ export class BattleRoom extends Room<{ state: GameState }> {
 
   private stepKOTH(dtMs: number): void {
     if (this.roundResetTimer) return;
-    // Find blob closest to world center (0,0) within capture radius
-    let closestDist: number = GAME_RULES.KOTH_CAPTURE_RADIUS;
-    let closestOwnerId = "";
+    // Count blobs inside capture radius per player; owner is the player with the most
+    const countByOwner = new Map<string, number>();
     for (const blob of this.state.blobs.values()) {
-      const dist = Math.hypot(blob.x, blob.y);
-      if (dist < closestDist) {
-        closestDist = dist;
-        closestOwnerId = blob.ownerId;
+      if (Math.hypot(blob.x, blob.y) < GAME_RULES.KOTH_CAPTURE_RADIUS) {
+        countByOwner.set(blob.ownerId, (countByOwner.get(blob.ownerId) ?? 0) + 1);
       }
     }
-    this.state.kothOwner = closestOwnerId;
-    if (closestOwnerId) {
-      const owner = this.state.players.get(closestOwnerId);
+    let bestOwnerId = "";
+    let bestCount = 0;
+    for (const [ownerId, count] of countByOwner) {
+      if (count > bestCount) { bestCount = count; bestOwnerId = ownerId; }
+    }
+    this.state.kothOwner = bestOwnerId;
+    if (bestOwnerId) {
+      const owner = this.state.players.get(bestOwnerId);
       if (owner) {
         owner.kothTimeMs = Math.max(0, owner.kothTimeMs - dtMs);
         if (owner.kothTimeMs <= 0) {
@@ -1427,11 +1430,8 @@ export class BattleRoom extends Room<{ state: GameState }> {
       }
       touched.add(key);
     });
-    for (const key of touched) {
-      this.flattenTileForBuilding(key);
-      this.syncTileNavForKey(key);
-      this.broadcastTileUpdate(key);
-    }
+    for (const key of touched) this.syncTileNavForKey(key);
+    for (const key of this.recomputeBuildingTerrainHeights()) this.broadcastTileUpdate(key);
   }
 
   private removeBuildingFootprint(building: Building): void {
@@ -1449,6 +1449,7 @@ export class BattleRoom extends Room<{ state: GameState }> {
       touched.add(key);
     });
     for (const key of touched) this.syncTileNavForKey(key);
+    for (const key of this.recomputeBuildingTerrainHeights()) this.broadcastTileUpdate(key);
   }
 
   private syncTileNavForKey(key: string): void {
@@ -1533,15 +1534,99 @@ export class BattleRoom extends Room<{ state: GameState }> {
     } satisfies TileUpdateMessage);
   }
 
-  private flattenTileForBuilding(key: string): void {
-    const tile = this.tileData.get(key);
-    if (!tile) return;
-    const avg = (tile.h00 + tile.h10 + tile.h11 + tile.h01) * 0.25;
-    tile.h00 = avg;
-    tile.h10 = avg;
-    tile.h11 = avg;
-    tile.h01 = avg;
-    tile.height = avg;
+  private resetTileHeightToBase(tile: TileData): void {
+    tile.h00 = getTerrainVertexHeight(tile.tx, tile.tz, this.state.terrainSeed, this.maxClients);
+    tile.h10 = getTerrainVertexHeight(tile.tx + 1, tile.tz, this.state.terrainSeed, this.maxClients);
+    tile.h11 = getTerrainVertexHeight(tile.tx + 1, tile.tz + 1, this.state.terrainSeed, this.maxClients);
+    tile.h01 = getTerrainVertexHeight(tile.tx, tile.tz + 1, this.state.terrainSeed, this.maxClients);
+    tile.height = (tile.h00 + tile.h10 + tile.h11 + tile.h01) * 0.25;
+  }
+
+  private setTileHeightFromSharedVertex(vx: number, vz: number, height: number): void {
+    const corners = [
+      { key: getTileKey(vx, vz), corner: "h00" as const },
+      { key: getTileKey(vx - 1, vz), corner: "h10" as const },
+      { key: getTileKey(vx - 1, vz - 1), corner: "h11" as const },
+      { key: getTileKey(vx, vz - 1), corner: "h01" as const },
+    ];
+    for (const { key, corner } of corners) {
+      const tile = this.tileData.get(key);
+      if (!tile) continue;
+      tile[corner] = height;
+    }
+  }
+
+  private recomputeBuildingTerrainHeights(): Set<string> {
+    const before = new Map<string, { h00: number; h10: number; h11: number; h01: number; height: number }>();
+    for (const tile of this.tileData.values()) {
+      before.set(tile.key, {
+        h00: tile.h00,
+        h10: tile.h10,
+        h11: tile.h11,
+        h01: tile.h01,
+        height: tile.height,
+      });
+      this.resetTileHeightToBase(tile);
+    }
+
+    const occupied = new Set<string>();
+    for (const [key, count] of this.buildingTileOcc.entries()) {
+      if (count > 0) occupied.add(key);
+    }
+
+    const visited = new Set<string>();
+    for (const startKey of occupied) {
+      if (visited.has(startKey)) continue;
+      const queue = [startKey];
+      const component: TileData[] = [];
+      let sum = 0;
+      while (queue.length > 0) {
+        const key = queue.pop()!;
+        if (visited.has(key) || !occupied.has(key)) continue;
+        visited.add(key);
+        const tile = this.tileData.get(key);
+        if (!tile) continue;
+        component.push(tile);
+        sum += tile.height;
+        for (let dz = -1; dz <= 1; dz++) {
+          for (let dx = -1; dx <= 1; dx++) {
+            if (dx === 0 && dz === 0) continue;
+            const nextKey = getTileKey(tile.tx + dx, tile.tz + dz);
+            if (occupied.has(nextKey) && !visited.has(nextKey)) queue.push(nextKey);
+          }
+        }
+      }
+      if (component.length === 0) continue;
+      const level = sum / component.length;
+      const vertices = new Set<string>();
+      for (const tile of component) {
+        vertices.add(`${tile.tx},${tile.tz}`);
+        vertices.add(`${tile.tx + 1},${tile.tz}`);
+        vertices.add(`${tile.tx + 1},${tile.tz + 1}`);
+        vertices.add(`${tile.tx},${tile.tz + 1}`);
+      }
+      for (const vertex of vertices) {
+        const [vx, vz] = vertex.split(",").map(Number);
+        this.setTileHeightFromSharedVertex(vx, vz, level);
+      }
+    }
+
+    const changed = new Set<string>();
+    for (const tile of this.tileData.values()) {
+      tile.height = (tile.h00 + tile.h10 + tile.h11 + tile.h01) * 0.25;
+      const prev = before.get(tile.key);
+      if (
+        !prev ||
+        prev.h00 !== tile.h00 ||
+        prev.h10 !== tile.h10 ||
+        prev.h11 !== tile.h11 ||
+        prev.h01 !== tile.h01 ||
+        prev.height !== tile.height
+      ) {
+        changed.add(tile.key);
+      }
+    }
+    return changed;
   }
 
   /** Villagers idle on a tile harvest material (forest) or compute (data center). */

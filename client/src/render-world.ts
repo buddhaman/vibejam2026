@@ -55,8 +55,8 @@ export type RenderWorld = {
   renderer: THREE.WebGLRenderer;
   canvas: HTMLCanvasElement;
   cameraRig: CameraRig;
-  terrain: THREE.Mesh;
-  rebuildTerrain: () => void;
+  terrain: THREE.Group;
+  rebuildTerrain: (chunkKeys?: Iterable<string>) => void;
   walkabilityOverlay: THREE.InstancedMesh;
   syncWalkabilityOverlay: (visible: boolean, force?: boolean) => void;
   tileDebug: TileDebugOverlay;
@@ -114,8 +114,9 @@ export function createRenderWorld(game: Game): RenderWorld {
   scene.add(sunLight);
   scene.add(sunLight.target);
 
-  let terrain = createTerrainMesh(game.getTilesOrdered());
+  const terrain = new THREE.Group();
   scene.add(terrain);
+  const terrainMeshes = new Map<string, THREE.Mesh>();
 
   const walkabilityOverlay = new THREE.InstancedMesh(
     new THREE.PlaneGeometry(GAME_RULES.TILE_SIZE * 0.9, GAME_RULES.TILE_SIZE * 0.9),
@@ -153,19 +154,55 @@ export function createRenderWorld(game: Game): RenderWorld {
     walkabilityOverlay.instanceMatrix.needsUpdate = true;
   }
 
-  function rebuildTerrain() {
-    scene.remove(terrain);
-    terrain.geometry.dispose();
-    const material = terrain.material;
+  function disposeTerrainMesh(mesh: THREE.Mesh) {
+    mesh.geometry.dispose();
+    const material = mesh.material;
     if (Array.isArray(material)) {
       for (const mat of material) mat.dispose();
     } else {
       material.dispose();
     }
-    terrain = createTerrainMesh(game.getTilesOrdered());
-    scene.add(terrain);
+  }
+
+  function rebuildTerrain(chunkKeys?: Iterable<string>) {
+    if (chunkKeys == null) {
+      const loadedKeys = new Set(game.getLoadedChunkKeys());
+      for (const [key, mesh] of terrainMeshes.entries()) {
+        if (loadedKeys.has(key)) continue;
+        terrain.remove(mesh);
+        disposeTerrainMesh(mesh);
+        terrainMeshes.delete(key);
+      }
+      for (const key of loadedKeys) {
+        const prev = terrainMeshes.get(key);
+        if (prev) {
+          terrain.remove(prev);
+          disposeTerrainMesh(prev);
+        }
+        const mesh = createTerrainMesh(game.getTilesForChunk(key));
+        terrain.add(mesh);
+        terrainMeshes.set(key, mesh);
+      }
+      world.terrain = terrain;
+      return;
+    }
+    for (const key of chunkKeys) {
+      const prev = terrainMeshes.get(key);
+      if (prev) {
+        terrain.remove(prev);
+        disposeTerrainMesh(prev);
+        terrainMeshes.delete(key);
+      }
+      const tiles = game.getTilesForChunk(key);
+      if (tiles.length === 0) continue;
+      const mesh = createTerrainMesh(tiles);
+      terrain.add(mesh);
+      terrainMeshes.set(key, mesh);
+    }
     world.terrain = terrain;
   }
+
+  rebuildTerrain();
 
   const tileDebug = new TileDebugOverlay(game.getTilesOrdered(), game.getTiles());
   scene.add(tileDebug.root);
