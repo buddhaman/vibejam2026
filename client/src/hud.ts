@@ -13,6 +13,7 @@ import type { SelectionInfo } from "./entity.js";
 import type { TileView } from "./terrain.js";
 
 type Rect = { x: number; y: number; w: number; h: number };
+type ResourceIconKey = "biomass" | "material" | "gpu";
 
 const BUILD_ITEM_THEME: Record<BuildingType, { icon: string; color: string; colorLight: string; glow: string }> = {
   [BuildingType.BARRACKS]: { icon: "⚔", color: "#7A1A1A", colorLight: "#B82626", glow: "#FF4040" },
@@ -128,6 +129,27 @@ const F_NUM_MD      = "bold 13px system-ui, sans-serif";
 const F_NUM_LG      = "bold 16px system-ui, sans-serif";
 const F_BODY_SM     = "11px system-ui, sans-serif";
 const F_BODY_XS     = "10px system-ui, sans-serif";
+
+const RESOURCE_ICON_PATHS: Record<ResourceIconKey, string> = {
+  biomass: "/assets/icons/biomass_icon.png",
+  material: "/assets/icons/material_icon.png",
+  gpu: "/assets/icons/gpu_icon.png",
+};
+
+const RESOURCE_ICON_IMAGES: Record<ResourceIconKey, HTMLImageElement | null> = {
+  biomass: null,
+  material: null,
+  gpu: null,
+};
+
+if (typeof Image !== "undefined") {
+  for (const key of Object.keys(RESOURCE_ICON_PATHS) as ResourceIconKey[]) {
+    const img = new Image();
+    img.decoding = "async";
+    img.src = RESOURCE_ICON_PATHS[key];
+    RESOURCE_ICON_IMAGES[key] = img;
+  }
+}
 
 // ─── State ───────────────────────────────────────────────────────────────────
 
@@ -429,6 +451,7 @@ export function drawFloatingResourceTexts(
     const alpha = u < 0.15 ? u / 0.15 : 1 - (u - 0.15) / 0.85;
     const scale = 0.92 + Math.sin(Math.min(1, u / 0.24) * Math.PI) * 0.08;
     const icon = resourceGlyph(text.resourceType);
+    const iconImg = resourceIconImage(text.resourceType);
     const color = resourceColor(text.resourceType);
     const label = `+${text.amount} ${resourceLabel(text.resourceType)}`;
     const x = text.sx;
@@ -448,12 +471,15 @@ export function drawFloatingResourceTexts(
     ctx.fillStyle = MARBLE_TEXT;
     ctx.fillText(label, 0, 0);
 
-    ctx.font = "700 18px system-ui, sans-serif";
-    ctx.lineWidth = 3;
-    ctx.strokeStyle = "rgba(6, 12, 28, 0.85)";
-    ctx.strokeText(icon, 0, -18);
-    ctx.fillStyle = color;
-    ctx.fillText(icon, 0, -18);
+    const iconDrawn = drawResourceIcon(ctx, iconImg, -11, -33, 22);
+    if (!iconDrawn) {
+      ctx.font = "700 18px system-ui, sans-serif";
+      ctx.lineWidth = 3;
+      ctx.strokeStyle = "rgba(6, 12, 28, 0.85)";
+      ctx.strokeText(icon, 0, -18);
+      ctx.fillStyle = color;
+      ctx.fillText(icon, 0, -18);
+    }
     ctx.restore();
   }
 }
@@ -509,6 +535,32 @@ function resourceGlyph(resourceType: number): string {
     case CarriedResourceType.BIOMASS: return "✿";
     default: return "+";
   }
+}
+
+function resourceIconKey(resourceType: number): ResourceIconKey | null {
+  switch (resourceType) {
+    case CarriedResourceType.MATERIAL: return "material";
+    case CarriedResourceType.COMPUTE: return "gpu";
+    case CarriedResourceType.BIOMASS: return "biomass";
+    default: return null;
+  }
+}
+
+function resourceIconImage(resourceType: number): HTMLImageElement | null {
+  const key = resourceIconKey(resourceType);
+  return key ? RESOURCE_ICON_IMAGES[key] : null;
+}
+
+function drawResourceIcon(
+  ctx: CanvasRenderingContext2D,
+  img: HTMLImageElement | null,
+  x: number,
+  y: number,
+  size: number
+): boolean {
+  if (!img || !img.complete || img.naturalWidth <= 0 || img.naturalHeight <= 0) return false;
+  ctx.drawImage(img, x, y, size, size);
+  return true;
 }
 
 function resourceColor(resourceType: number): string {
@@ -895,15 +947,16 @@ function drawTopResourceStack(
   ctx.fillText("STOCK", panel.x + 30, panel.y + 17);
   ctx.restore();
 
-  drawMiniResource(ctx, panel.x + 10, panel.y + 34, "#59B96A", "BIO", resources.biomass, bounce.biomass, t);
-  drawMiniResource(ctx, panel.x + 10, panel.y + 52, "#D4A84C", "MAT", resources.material, bounce.material, t);
-  drawMiniResource(ctx, panel.x + 10, panel.y + 70, DIVINE_CYAN, "GPU", resources.compute, bounce.compute, t);
+  drawMiniResource(ctx, panel.x + 10, panel.y + 34, CarriedResourceType.BIOMASS, "#59B96A", "BIO", resources.biomass, bounce.biomass, t);
+  drawMiniResource(ctx, panel.x + 10, panel.y + 52, CarriedResourceType.MATERIAL, "#D4A84C", "MAT", resources.material, bounce.material, t);
+  drawMiniResource(ctx, panel.x + 10, panel.y + 70, CarriedResourceType.COMPUTE, DIVINE_CYAN, "GPU", resources.compute, bounce.compute, t);
 }
 
 function drawMiniResource(
   ctx: CanvasRenderingContext2D,
   x: number,
   y: number,
+  resourceType: number,
   color: string,
   label: string,
   value: number,
@@ -919,10 +972,11 @@ function drawMiniResource(
   ctx.shadowBlur = pulse * 10;
   ctx.fillRect(x, y - 5, 3, 10);
   ctx.shadowBlur = 0;
+  const iconDrawn = drawResourceIcon(ctx, resourceIconImage(resourceType), x + 7, y - 7, 14);
   ctx.fillStyle = MARBLE_MUTED;
   ctx.font = "700 8px 'Cinzel', serif";
   ctx.textBaseline = "middle";
-  ctx.fillText(label, x + 10, y);
+  ctx.fillText(label, iconDrawn ? x + 24 : x + 10, y);
   ctx.fillStyle = MARBLE_TEXT;
   ctx.font = F_NUM_SM;
   ctx.textAlign = "right";

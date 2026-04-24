@@ -507,6 +507,10 @@ type RadialKothLayout = {
 function getRadialKothLayout(seed: number, playerCount = GAME_RULES.TARGET_PLAYERS_PER_ROOM): RadialKothLayout {
   const count = Math.max(2, Math.round(playerCount));
   const sectorAngle = TAU / count;
+  const forestDistance = GAME_RULES.KOTH_PER_PLAYER_FOREST_DISTANCE + Math.round(seededFraction(seed, 902) * 6 - 3);
+  const forestAngleOffset = sectorAngle * (0.19 + seededFraction(seed, 903) * 0.05);
+  const computeDistance = forestDistance - GAME_RULES.TILE_SIZE * 0.85 + Math.round(seededFraction(seed, 904) * 3 - 1.5);
+  const computeAngleOffset = forestAngleOffset + sectorAngle * (0.11 + seededFraction(seed, 905) * 0.03);
   return {
     playerCount: count,
     sectorAngle,
@@ -514,10 +518,10 @@ function getRadialKothLayout(seed: number, playerCount = GAME_RULES.TARGET_PLAYE
     spawnRadius: GAME_RULES.KOTH_SPAWN_RADIUS,
     centerValleyRadius: GAME_RULES.KOTH_CENTER_VALLEY_RADIUS,
     startClearRadius: GAME_RULES.KOTH_START_CLEAR_RADIUS,
-    forestDistance: GAME_RULES.KOTH_PER_PLAYER_FOREST_DISTANCE + Math.round(seededFraction(seed, 902) * 6 - 3),
-    forestAngleOffset: sectorAngle * (0.19 + seededFraction(seed, 903) * 0.05),
-    computeDistance: GAME_RULES.KOTH_PER_PLAYER_COMPUTE_DISTANCE + Math.round(seededFraction(seed, 904) * 6 - 3),
-    computeAngleOffset: sectorAngle * (0.12 + seededFraction(seed, 905) * 0.05),
+    forestDistance,
+    forestAngleOffset,
+    computeDistance,
+    computeAngleOffset,
     computeSideSign: seededFraction(seed, 906) < 0.5 ? -1 : 1,
     mountainHalfAngle: sectorAngle * (0.12 + seededFraction(seed, 907) * 0.025),
   };
@@ -794,9 +798,9 @@ function stampForestPatch(
   const lobes = 3 + Math.floor(seededFraction(seed, 1301) * 2);
   for (let lobeIndex = 0; lobeIndex < lobes; lobeIndex++) {
     const lobeAngle = seededFraction(seed, 1310 + lobeIndex) * Math.PI * 2;
-    const lobeDistance = seededFraction(seed, 1320 + lobeIndex) * GAME_RULES.TILE_SIZE * 1.6;
-    const lobeRadiusTiles = 1.35 + seededFraction(seed, 1330 + lobeIndex) * 1.2;
-    const lobeScale = amountScale * (0.58 + seededFraction(seed, 1340 + lobeIndex) * 0.38);
+    const lobeDistance = seededFraction(seed, 1320 + lobeIndex) * GAME_RULES.TILE_SIZE * 1.65;
+    const lobeRadiusTiles = 1.2 + seededFraction(seed, 1330 + lobeIndex) * 1.1;
+    const lobeScale = amountScale * (0.58 + seededFraction(seed, 1340 + lobeIndex) * 0.36);
     const lobeX = centerX + Math.cos(lobeAngle) * lobeDistance;
     const lobeZ = centerZ + Math.sin(lobeAngle) * lobeDistance;
     const { tx, tz } = getTileCoordsFromWorld(lobeX, lobeZ);
@@ -817,6 +821,67 @@ function stampForestPatch(
   }
 }
 
+function softenForestPatchEdges(tiles: Map<string, GeneratedTile>): void {
+  const additions: Array<{ tile: GeneratedTile; amount: number }> = [];
+  for (const tile of tiles.values()) {
+    if (tile.isMountain || tile.compute > 0 || tile.maxCompute > 0 || tile.maxMaterial > 0) continue;
+    let neighborWeight = 0;
+    let neighborForest = 0;
+    let neighborAmount = 0;
+    for (let dz = -1; dz <= 1; dz++) {
+      for (let dx = -1; dx <= 1; dx++) {
+        if (dx === 0 && dz === 0) continue;
+        const neighbor = tiles.get(getTileKey(tile.tx + dx, tile.tz + dz));
+        if (!neighbor || neighbor.maxMaterial <= 0) continue;
+        const weight = Math.abs(dx) + Math.abs(dz) === 2 ? 0.7 : 1;
+        neighborWeight += weight;
+        neighborForest += weight;
+        neighborAmount += neighbor.maxMaterial * weight;
+      }
+    }
+    if (neighborForest < 4.6 || neighborWeight <= 0) continue;
+    const avgAmount = neighborAmount / neighborWeight;
+    additions.push({
+      tile,
+      amount: Math.round(avgAmount * 0.34),
+    });
+  }
+  for (const entry of additions) {
+    setForestTile(entry.tile, Math.max(1, entry.amount));
+  }
+}
+
+function stampAmbientForestPatches(
+  tiles: Map<string, GeneratedTile>,
+  layout: RadialKothLayout,
+  seed: number
+): void {
+  for (const tile of tiles.values()) {
+    if (tile.isMountain || tile.compute > 0 || tile.maxCompute > 0) continue;
+    const center = getTileCenter(tile.tx, tile.tz);
+    const radius = Math.hypot(center.x, center.z);
+    if (radius < GAME_RULES.KOTH_CAPTURE_RADIUS + GAME_RULES.TILE_SIZE * 2.5) continue;
+    if (getNearestSpawnDistance(center.x, center.z, layout) < layout.startClearRadius + GAME_RULES.TILE_SIZE * 1.6) continue;
+
+    const angle = Math.atan2(center.z, center.x);
+    const mountainDistance = getNearestMountainBoundaryDistance(angle, layout);
+    const mountainBias = clamp01(1 - mountainDistance / Math.max(0.001, layout.mountainHalfAngle * 2.2));
+    const openFieldBias = clamp01((radius - layout.centerValleyRadius) / (layout.spawnRadius + 80 - layout.centerValleyRadius));
+    const patchChance = 0.0025 + mountainBias * 0.065 + openFieldBias * 0.004;
+    const patchRoll = seededFraction(seed, 1900 + tile.tx * 37 + tile.tz * 101);
+    if (patchRoll > patchChance) continue;
+
+    const amountScale = 0.14 + mountainBias * 0.16 + seededFraction(seed, 1910 + tile.tx * 53 + tile.tz * 79) * 0.06;
+    stampForestPatch(
+      tiles,
+      center.x,
+      center.z,
+      amountScale,
+      seed + 2000 + tile.tx * 67 + tile.tz * 131
+    );
+  }
+}
+
 function stampComputeSite(tiles: Map<string, GeneratedTile>, worldX: number, worldZ: number, amount: number): void {
   const { tx, tz } = getTileCoordsFromWorld(worldX, worldZ);
   const tile = tiles.get(getTileKey(tx, tz));
@@ -825,21 +890,27 @@ function stampComputeSite(tiles: Map<string, GeneratedTile>, worldX: number, wor
 }
 
 function stampCentralServer(tiles: Map<string, GeneratedTile>): void {
-  const center = snapWorldToTileCenter(0, 0);
-  const { tx, tz } = getTileCoordsFromWorld(center.x, center.z);
-  const cluster = [
-    { dx: 0, dz: 0, weight: 1.0 },
-    { dx: 1, dz: 0, weight: 0.72 },
-    { dx: -1, dz: 0, weight: 0.72 },
-    { dx: 0, dz: 1, weight: 0.72 },
-    { dx: 0, dz: -1, weight: 0.72 },
-  ] as const;
+  const { tx, tz } = getTileCoordsFromWorld(0, 0);
 
-  for (const entry of cluster) {
-    const tile = tiles.get(getTileKey(tx + entry.dx, tz + entry.dz));
-    if (!tile) continue;
-    const amount = Math.round(GAME_RULES.KOTH_CENTER_SERVER_COMPUTE * entry.weight);
-    setComputeTile(tile, amount);
+  // Center tile is the building — block walk and build, no compute (so no GPU mine model)
+  const centerTile = tiles.get(getTileKey(tx, tz));
+  if (centerTile) {
+    centerTile.canWalk = false;
+    centerTile.canBuild = false;
+  }
+
+  // Adjacent tiles: compute resources surrounding the server
+  for (const [dx, dz] of [[ 1, 0], [-1, 0], [0,  1], [0, -1]] as const) {
+    const tile = tiles.get(getTileKey(tx + dx, tz + dz));
+    if (tile) setComputeTile(tile, Math.round(GAME_RULES.KOTH_CENTER_SERVER_COMPUTE * 0.72));
+  }
+
+  // Entire capture zone: no building allowed (contested battle area)
+  for (const tile of tiles.values()) {
+    const c = getTileCenter(tile.tx, tile.tz);
+    if (Math.hypot(c.x, c.z) < GAME_RULES.KOTH_CAPTURE_RADIUS) {
+      tile.canBuild = false;
+    }
   }
 }
 
@@ -874,6 +945,8 @@ export function decorateRadialKothResources(
     stampComputeSite(tiles, computeX, computeZ, GAME_RULES.KOTH_PLAYER_COMPUTE);
   }
 
+  stampAmbientForestPatches(tiles, layout, seed);
+  softenForestPatchEdges(tiles);
   stampCentralServer(tiles);
 }
 

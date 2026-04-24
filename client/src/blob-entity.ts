@@ -559,7 +559,7 @@ export class BlobEntity extends Entity {
     if (!this.blob?.gatherTargetKey) return null;
     const tile = this.game.getTiles().get(this.blob.gatherTargetKey);
     if (!tile) return null;
-    const slots = ensureTreeSlots(tile);
+    const slots = ensureTreeSlots(tile, this.game.getTiles());
     if (slots.length === 0) return null;
     const slot = slots[carryIndex % slots.length]!;
     return {
