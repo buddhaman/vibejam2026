@@ -19,6 +19,11 @@ import {
   applyTeamColorTexturesToObject3D,
   secondaryTeamHexFromPrimary,
 } from "./render-texture-recolor.js";
+import {
+  createSelectionOutlineClone,
+  getBrightTeamSelectionColor,
+  setSelectionOutlineColor,
+} from "./selection-outline.js";
 
 const ORB_RADIUS = 0.525;
 const ORB_Y_ABOVE_ROOF = 1.55;
@@ -52,6 +57,10 @@ const TOWER_WHITE = new THREE.Color(0xffffff);
 const TOWER_ELECTRIC_GLOW = new THREE.Color(0x49a6ff);
 const TOWER_ALT_AXIS = new THREE.Vector3(1, 0, 0);
 const UNIT_TRAIN_TIME_MULTIPLIER = import.meta.env.DEV ? 0.1 : GAME_RULES.UNIT_TRAIN_TIME_MULTIPLIER;
+const BUILDING_SELECTION_OUTLINE_SCALE = 1.1;
+const BUILDING_SELECTION_OUTLINE_COLOR = new THREE.Color();
+const BUILDING_SELECTION_RING_GEOM = new THREE.RingGeometry(0.92, 1, 72);
+const BUILDING_SELECTION_FILL_GEOM = new THREE.CircleGeometry(1, 56);
 
 function getEffectiveUnitTrainTimeMs(unitType: UnitTypeValue): number {
   return Math.max(1, Math.ceil(getUnitTrainTimeMs(unitType) * UNIT_TRAIN_TIME_MULTIPLIER));
@@ -67,6 +76,9 @@ export class BuildingEntity extends Entity {
   /** Single unlit sphere — full-brightness player palette color. */
   private ownerOrb!: THREE.Mesh;
   private ownerOrbMaterial!: THREE.MeshBasicMaterial;
+  private selectionOutline: THREE.Object3D | null = null;
+  private selectionRing!: THREE.Mesh<THREE.RingGeometry, THREE.MeshBasicMaterial>;
+  private selectionFill!: THREE.Mesh<THREE.CircleGeometry, THREE.MeshBasicMaterial>;
   private localAge = 0;
 
   private building: {
@@ -93,7 +105,35 @@ export class BuildingEntity extends Entity {
     this.ownerOrbMaterial = new THREE.MeshBasicMaterial({ color: 0xffffff });
     this.ownerOrb = new THREE.Mesh(new THREE.SphereGeometry(ORB_RADIUS, 32, 26), this.ownerOrbMaterial);
     this.ownerOrb.castShadow = true;
+    this.selectionFill = new THREE.Mesh(
+      BUILDING_SELECTION_FILL_GEOM,
+      new THREE.MeshBasicMaterial({
+        color: 0xffffff,
+        transparent: true,
+        opacity: 0,
+        side: THREE.DoubleSide,
+        depthWrite: false,
+        fog: false,
+      })
+    );
+    this.selectionFill.rotation.x = -Math.PI / 2;
+    this.selectionFill.position.y = 0.04;
+    this.selectionRing = new THREE.Mesh(
+      BUILDING_SELECTION_RING_GEOM,
+      new THREE.MeshBasicMaterial({
+        color: 0xffffff,
+        transparent: true,
+        opacity: 0,
+        side: THREE.DoubleSide,
+        depthWrite: false,
+        fog: false,
+      })
+    );
+    this.selectionRing.rotation.x = -Math.PI / 2;
+    this.selectionRing.position.y = 0.05;
     root.add(this.ownerOrb);
+    root.add(this.selectionFill);
+    root.add(this.selectionRing);
     return root;
   }
 
@@ -128,6 +168,10 @@ export class BuildingEntity extends Entity {
     return this.building?.buildingType ?? null;
   }
 
+  public override getSelectionOutlineObjects(): THREE.Object3D[] {
+    return this.variant ? [this.variant.root] : [this.mesh];
+  }
+
   public render(_dt: number): void {
     if (!this.building) return;
     const visibleToMe =
@@ -155,6 +199,23 @@ export class BuildingEntity extends Entity {
     const playerHex = this.game.getPlayerColor(this.building.ownerId);
     this.ownerOrbMaterial.color.setHex(playerHex);
     this.ownerOrb.position.set(0, rules.height + ORB_Y_ABOVE_ROOF, 0);
+    const selected = this.game.selectedEntityId === this.id;
+    const selectionColor = getBrightTeamSelectionColor(playerHex);
+    const ringScaleX = rules.selectionWidth * 0.64;
+    const ringScaleZ = rules.selectionDepth * 0.64;
+    this.selectionFill.scale.set(ringScaleX, ringScaleZ, 1);
+    this.selectionRing.scale.set(ringScaleX * 1.07, ringScaleZ * 1.07, 1);
+    this.selectionFill.visible = selected;
+    this.selectionRing.visible = selected;
+    this.selectionFill.material.color.copy(selectionColor);
+    this.selectionRing.material.color.copy(selectionColor);
+    this.selectionFill.material.opacity = selected ? 0.16 : 0;
+    this.selectionRing.material.opacity = selected ? 0.92 : 0;
+    if (this.selectionOutline) {
+      BUILDING_SELECTION_OUTLINE_COLOR.copy(selectionColor);
+      setSelectionOutlineColor(this.selectionOutline, BUILDING_SELECTION_OUTLINE_COLOR);
+      this.selectionOutline.visible = false;
+    }
 
     if (!this.buildingTeamTexturesApplied && this.building.ownerId.length > 0) {
       const auth = this.game.room.state.players.get(this.building.ownerId) as { color?: number } | undefined;
@@ -176,13 +237,23 @@ export class BuildingEntity extends Entity {
   }
 
   private replaceVariant(type: BuildingTypeValue): void {
+    if (this.selectionOutline) {
+      this.mesh.remove(this.selectionOutline);
+      this.selectionOutline = null;
+    }
     if (this.variant) {
       this.mesh.remove(this.variant.root);
     }
     this.variant = instantiateBuildingVariant(type);
+    this.variant.root.traverse((child) => {
+      if (child instanceof THREE.Mesh) child.renderOrder = 2;
+    });
     this.variantType = type;
     this.variantAssetVersion = getBuildingModelAssetVersion();
     this.buildingTeamTexturesApplied = false;
+    this.selectionOutline = createSelectionOutlineClone(this.variant.root, BUILDING_SELECTION_OUTLINE_SCALE);
+    this.selectionOutline.visible = false;
+    this.mesh.add(this.selectionOutline);
     this.mesh.add(this.variant.root);
   }
 

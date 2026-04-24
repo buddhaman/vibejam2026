@@ -52,6 +52,10 @@ export abstract class Entity {
   public abstract worldDistanceTo(x: number, z: number): number;
   public abstract getSelectionInfo(): SelectionInfo | null;
 
+  public getSelectionOutlineObjects(): THREE.Object3D[] {
+    return [this.mesh];
+  }
+
   public destroy(): void {
     this.game.remove(this);
   }

@@ -38,7 +38,7 @@ export function startRender(game: Game) {
   const netPerf = attachDevNetworkPerf(game.room);
   const world = createRenderWorld(game);
   const { scene } = game;
-  const { renderer, canvas, cameraRig, walkabilityOverlay, tileDebug, chunkDebug, tileVisuals, buildingDestructionFx, fogOfWar, beamDrawer, brightBeamDrawer, sunLight, centralServer } = world;
+  const { renderer, composer, selectionOutlinePass, canvas, cameraRig, walkabilityOverlay, tileDebug, chunkDebug, tileVisuals, buildingDestructionFx, fogOfWar, beamDrawer, brightBeamDrawer, sunLight, centralServer } = world;
   const camera = cameraRig.camera;
   let tileDebugInspected: TileView | null = null;
   let devModeVisible = false;
@@ -563,6 +563,8 @@ export function startRender(game: Game) {
   window.addEventListener("resize", () => {
     cameraRig.resize(window.innerWidth, window.innerHeight);
     renderer.setSize(window.innerWidth, window.innerHeight);
+    composer.setSize(window.innerWidth, window.innerHeight);
+    selectionOutlinePass.setSize(window.innerWidth, window.innerHeight);
   });
 
   const prefersCoarsePointer = window.matchMedia?.("(pointer: coarse)").matches ?? false;
@@ -615,7 +617,16 @@ export function startRender(game: Game) {
     game.flushBeamDraws();
     const perf3 = performance.now();
     sunLight.shadow.camera.updateProjectionMatrix();
-    renderer.render(scene, camera);
+    const selectedEntity = game.getSelectedEntity();
+    const selectionInfo = selectedEntity?.getSelectionInfo() ?? null;
+    const outlineObjects = selectedEntity
+      ? selectedEntity.getSelectionOutlineObjects().filter((object) => object.visible)
+      : [];
+    selectionOutlinePass.selectedObjects = outlineObjects;
+    const selectionColor = selectionInfo ? new THREE.Color(selectionInfo.color) : new THREE.Color(0xffffff);
+    selectionOutlinePass.visibleEdgeColor.copy(selectionColor);
+    selectionOutlinePass.hiddenEdgeColor.copy(selectionColor);
+    composer.render();
     const perf4 = performance.now();
     const chunkStats = game.getChunkLoadStats();
     frameStats = {
@@ -646,7 +657,7 @@ export function startRender(game: Game) {
     const myColor = game.getPlayerColor(game.room.sessionId);
     const mySquadCount = game.getMySquadCount();
     const myResources = game.getMyResources();
-    const selectedInfo: SelectionInfo | null = game.getSelectedEntity()?.getSelectionInfo() ?? null;
+    const selectedInfo: SelectionInfo | null = selectionInfo;
     const selectedTile: TileView | null = game.getSelectedTile();
     const kothState: KothState = game.getKothState();
     // Sync central server model color + terrain height

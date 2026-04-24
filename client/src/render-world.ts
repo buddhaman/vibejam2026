@@ -1,5 +1,9 @@
 import * as THREE from "three";
 import { RoomEnvironment } from "three/examples/jsm/environments/RoomEnvironment.js";
+import { EffectComposer } from "three/examples/jsm/postprocessing/EffectComposer.js";
+import { RenderPass } from "three/examples/jsm/postprocessing/RenderPass.js";
+import { OutlinePass } from "three/examples/jsm/postprocessing/OutlinePass.js";
+import { OutputPass } from "three/examples/jsm/postprocessing/OutputPass.js";
 import { GAME_RULES, getTileCenter } from "../../shared/game-rules.js";
 import type { Game } from "./game.js";
 import { createTerrainMesh, getTerrainHeightAt, type TileView } from "./terrain.js";
@@ -76,6 +80,8 @@ export type RenderWorld = {
   fogOfWar: FogOfWarOverlay;
   beamDrawer: BeamDrawer;
   brightBeamDrawer: BrightBeamDrawer;
+  composer: EffectComposer;
+  selectionOutlinePass: OutlinePass;
   sunLight: THREE.DirectionalLight;
   centralServer: CentralServerRenderer;
 };
@@ -99,6 +105,23 @@ export function createRenderWorld(game: Game): RenderWorld {
   renderer.shadowMap.type = THREE.PCFShadowMap;
   renderer.toneMapping = THREE.ACESFilmicToneMapping;
   renderer.toneMappingExposure = 1.75;
+  const composer = new EffectComposer(renderer);
+  const renderPass = new RenderPass(scene, new THREE.PerspectiveCamera());
+  composer.addPass(renderPass);
+  const selectionOutlinePass = new OutlinePass(
+    new THREE.Vector2(window.innerWidth, window.innerHeight),
+    scene,
+    renderPass.camera
+  );
+  selectionOutlinePass.edgeStrength = 6;
+  selectionOutlinePass.edgeThickness = 1.8;
+  selectionOutlinePass.edgeGlow = 0;
+  selectionOutlinePass.pulsePeriod = 0;
+  selectionOutlinePass.usePatternTexture = false;
+  selectionOutlinePass.visibleEdgeColor.setHex(0xffffff);
+  selectionOutlinePass.hiddenEdgeColor.setHex(0xffffff);
+  composer.addPass(selectionOutlinePass);
+  composer.addPass(new OutputPass());
 
   const pmrem = new THREE.PMREMGenerator(renderer);
   scene.environment = pmrem.fromScene(new RoomEnvironment(), 0).texture;
@@ -252,10 +275,14 @@ export function createRenderWorld(game: Game): RenderWorld {
   scene.add(centralServer.root);
   centralServer.load();
 
+  const cameraRig = createCameraRig(game, sunLight);
+  renderPass.camera = cameraRig.camera;
+  selectionOutlinePass.renderCamera = cameraRig.camera;
+
   Object.assign(world, {
     renderer,
     canvas,
-    cameraRig: createCameraRig(game, sunLight),
+    cameraRig,
     terrain,
     rebuildTerrain,
     walkabilityOverlay,
@@ -269,6 +296,8 @@ export function createRenderWorld(game: Game): RenderWorld {
     buildingDestructionFx,
     beamDrawer,
     brightBeamDrawer,
+    composer,
+    selectionOutlinePass,
     sunLight,
     centralServer,
   });

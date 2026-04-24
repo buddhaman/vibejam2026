@@ -47,6 +47,10 @@ import {
   type CarriedResourceInstance,
 } from "./carried-resource-renderer.js";
 import { ensureComputeSlots, ensureTreeSlots } from "./tile-visuals.js";
+import {
+  createInstancedSelectionOutline,
+  getBrightTeamSelectionColor,
+} from "./selection-outline.js";
 
 const UNIT_GEOM = createUnitBodyGeometry();
 const UNIT_MAT = applyStylizedShading(new THREE.MeshStandardMaterial({
@@ -60,6 +64,7 @@ const OVAL_FILL_MAT = new THREE.MeshBasicMaterial({
   transparent: true,
   opacity: 0.08,
   depthWrite: false,
+  fog: false,
 });
 const OVAL_RING_GEOM = new THREE.RingGeometry(0.93, 1, 64);
 const OVAL_RING_MAT = new THREE.MeshBasicMaterial({
@@ -68,6 +73,7 @@ const OVAL_RING_MAT = new THREE.MeshBasicMaterial({
   opacity: 0.26,
   side: THREE.DoubleSide,
   depthWrite: false,
+  fog: false,
 });
 const RANGE_RING_GEOM = new THREE.RingGeometry(0.985, 1, 72);
 const RANGE_RING_MAT = new THREE.MeshBasicMaterial({
@@ -76,6 +82,7 @@ const RANGE_RING_MAT = new THREE.MeshBasicMaterial({
   opacity: 0.18,
   side: THREE.DoubleSide,
   depthWrite: false,
+  fog: false,
 });
 /** Keep ≥ starter Hoplite squad size — dev server uses a larger START_WARBAND_UNIT_COUNT (see server config). */
 const INSTANCE_CAP = import.meta.env.DEV
@@ -128,6 +135,7 @@ const _ovalHsl = { h: 0, s: 0, l: 0 };
 
 const SHIELD_RADIUS    = 0.44;
 const SHIELD_THICKNESS = 0.055;
+const UNIT_SELECTION_OUTLINE_COLOR = new THREE.Color();
 
 type UnitCombatMode = "formation" | "chase" | "attack";
 
@@ -212,6 +220,13 @@ export class BlobEntity extends Entity {
   private ovalFill!: THREE.Mesh<THREE.CircleGeometry, THREE.MeshBasicMaterial>;
   private ovalRing!: THREE.Mesh<THREE.RingGeometry, THREE.MeshBasicMaterial>;
   private attackRangeRing!: THREE.Mesh<THREE.RingGeometry, THREE.MeshBasicMaterial>;
+  private selectionOutlineRoot!: THREE.Group;
+  private unitsAgentOutline: THREE.InstancedMesh[] = [];
+  private unitsWarbandOutline: THREE.InstancedMesh[] = [];
+  private unitsSynthaurOutline: THREE.InstancedMesh[] = [];
+  private unitsArcherOutline: THREE.InstancedMesh[] = [];
+  private unitsCentaurOutline!: THREE.InstancedMesh;
+  private unitShieldOutline!: THREE.InstancedMesh;
   private blobSnapshot: BlobRenderView | null = null;
   private blob: BlobRenderView | null = null;
   private heading = 0;
@@ -278,6 +293,10 @@ export class BlobEntity extends Entity {
       this.unitsArcher = [this.createFallbackUnitMesh()];
     }
     this.unitModelAssetVersion = getUnitModelAssetVersion();
+    this.setBaseRenderOrder(this.unitsAgent);
+    this.setBaseRenderOrder(this.unitsWarband);
+    this.setBaseRenderOrder(this.unitsSynthaur);
+    this.setBaseRenderOrder(this.unitsArcher);
 
     this.ovalRoot = new THREE.Group();
 
@@ -319,11 +338,17 @@ export class BlobEntity extends Entity {
     this.unitShield.receiveShadow = true;
     this.unitShield.frustumCulled = false;
     this.unitShield.count = 0;
+    this.unitShield.renderOrder = 2;
 
     this.unitsCentaur = createSynthaurFallbackMesh(INSTANCE_CAP);
+    this.unitsCentaur.renderOrder = 2;
     this.carriedResources = new CarriedResourceRenderer(INSTANCE_CAP);
+    this.selectionOutlineRoot = new THREE.Group();
+    this.selectionOutlineRoot.visible = false;
+    this.rebuildSelectionOutlineMeshes();
 
     const group = new THREE.Group();
+    group.add(this.selectionOutlineRoot);
     group.add(this.ovalRoot);
     for (const m of this.unitsAgent) group.add(m);
     group.add(this.villagerPickProxy);
@@ -341,7 +366,12 @@ export class BlobEntity extends Entity {
     fallback.castShadow = true;
     fallback.receiveShadow = true;
     fallback.frustumCulled = false;
+    fallback.renderOrder = 2;
     return fallback;
+  }
+
+  private setBaseRenderOrder(meshes: THREE.InstancedMesh[]): void {
+    for (const mesh of meshes) mesh.renderOrder = 2;
   }
 
   private refreshUnitModelMeshesIfNeeded(): void {
@@ -360,6 +390,10 @@ export class BlobEntity extends Entity {
     this.unitsArcher = createUnitInstancedMeshes("archer", INSTANCE_CAP);
     if (this.unitsArcher.length === 0) this.unitsArcher = [this.createFallbackUnitMesh()];
     this.unitsSynthaur = createUnitInstancedMeshes("synthaur", INSTANCE_CAP);
+    this.setBaseRenderOrder(this.unitsAgent);
+    this.setBaseRenderOrder(this.unitsWarband);
+    this.setBaseRenderOrder(this.unitsArcher);
+    this.setBaseRenderOrder(this.unitsSynthaur);
 
     for (const mesh of this.unitsAgent) this.mesh.add(mesh);
     for (const mesh of this.unitsArcher) this.mesh.add(mesh);
@@ -371,6 +405,47 @@ export class BlobEntity extends Entity {
     this.warbandTeamTexApplied = false;
     this.synthaurTeamTexApplied = false;
     this.unitModelAssetVersion = nextVersion;
+    this.rebuildSelectionOutlineMeshes();
+  }
+
+  private rebuildSelectionOutlineMeshes(): void {
+    for (const mesh of this.unitsAgentOutline) this.selectionOutlineRoot.remove(mesh);
+    for (const mesh of this.unitsArcherOutline) this.selectionOutlineRoot.remove(mesh);
+    for (const mesh of this.unitsWarbandOutline) this.selectionOutlineRoot.remove(mesh);
+    for (const mesh of this.unitsSynthaurOutline) this.selectionOutlineRoot.remove(mesh);
+    if (this.unitsCentaurOutline) this.selectionOutlineRoot.remove(this.unitsCentaurOutline);
+    if (this.unitShieldOutline) this.selectionOutlineRoot.remove(this.unitShieldOutline);
+
+    this.unitsAgentOutline = this.unitsAgent.map((mesh) => createInstancedSelectionOutline(mesh));
+    this.unitsArcherOutline = this.unitsArcher.map((mesh) => createInstancedSelectionOutline(mesh));
+    this.unitsWarbandOutline = this.unitsWarband.map((mesh) => createInstancedSelectionOutline(mesh));
+    this.unitsSynthaurOutline = this.unitsSynthaur.map((mesh) => createInstancedSelectionOutline(mesh));
+    this.unitsCentaurOutline = createInstancedSelectionOutline(this.unitsCentaur);
+    this.unitShieldOutline = createInstancedSelectionOutline(this.unitShield);
+
+    for (const mesh of this.unitsAgentOutline) this.selectionOutlineRoot.add(mesh);
+    for (const mesh of this.unitsArcherOutline) this.selectionOutlineRoot.add(mesh);
+    for (const mesh of this.unitsWarbandOutline) this.selectionOutlineRoot.add(mesh);
+    for (const mesh of this.unitsSynthaurOutline) this.selectionOutlineRoot.add(mesh);
+    this.selectionOutlineRoot.add(this.unitsCentaurOutline);
+    this.selectionOutlineRoot.add(this.unitShieldOutline);
+  }
+
+  private syncSelectionOutlineMeshes(color: THREE.Color): void {
+    this.selectionOutlineRoot.visible = false;
+    return;
+
+  }
+
+  public override getSelectionOutlineObjects(): THREE.Object3D[] {
+    return [
+      ...this.unitsAgent,
+      ...this.unitsArcher,
+      ...this.unitsWarband,
+      ...this.unitsSynthaur,
+      this.unitsCentaur,
+      this.unitShield,
+    ];
   }
 
   public sync(blob: BlobRenderView): void {
@@ -1224,13 +1299,18 @@ export class BlobEntity extends Entity {
     if (!visibleToMe) return;
     const terrainY = getTerrainHeightAt(layout.x, layout.y, this.game.getTiles());
     const teamTint = new THREE.Color(this.game.getPlayerColor(this.blob.ownerId));
+    UNIT_SELECTION_OUTLINE_COLOR.copy(getBrightTeamSelectionColor(teamTint));
 
     this.mesh.position.set(layout.x, terrainY, layout.y);
     this.mesh.rotation.y = 0;
     this.ovalRoot.rotation.y = layout.heading;
 
     this.ovalFill.scale.set(layout.minor, layout.major, 1);
-    this.ovalRing.scale.set(layout.minor * 1.04, layout.major * 1.04, 1);
+    this.ovalRing.scale.set(
+      layout.minor * (this.isSelected() ? 1.14 : 1.04),
+      layout.major * (this.isSelected() ? 1.14 : 1.04),
+      1
+    );
 
     const zoomT = this.game.getCameraZoomOut01();
     const enemyZoom = !this.isMine() ? zoomT : 0;
@@ -1238,15 +1318,19 @@ export class BlobEntity extends Entity {
     TEMP_OVAL_RING.copy(teamTint);
     TEMP_OVAL_RING.getHSL(_ovalHsl, THREE.SRGBColorSpace);
     if (_ovalHsl.l < 0.42) TEMP_OVAL_RING.offsetHSL(0, 0, 0.07);
-    if (this.isSelected()) TEMP_OVAL_RING.offsetHSL(0, 0.04, 0.1);
-    TEMP_OVAL_FILL.copy(TEMP_OVAL_RING).offsetHSL(0, -0.1, 0.11);
+    if (this.isSelected()) TEMP_OVAL_RING.copy(UNIT_SELECTION_OUTLINE_COLOR);
+    TEMP_OVAL_FILL.copy(TEMP_OVAL_RING);
 
     this.ovalRing.material.color.copy(TEMP_OVAL_RING);
     this.ovalFill.material.color.copy(TEMP_OVAL_FILL);
 
-    this.ovalFill.material.opacity = this.isMine() ? 0.12 : 0.055 + enemyZoom * 0.14;
+    this.ovalFill.material.opacity = this.isSelected()
+      ? 0.22
+      : this.isMine()
+        ? 0.12
+        : 0.055 + enemyZoom * 0.14;
     this.ovalRing.material.opacity = this.isSelected()
-      ? 0.7 + enemyZoom * 0.1
+      ? 0.96
       : this.isMine()
         ? 0.24 + zoomT * 0.08
         : 0.1 + enemyZoom * 0.28;
@@ -1428,8 +1512,19 @@ export class BlobEntity extends Entity {
         }
       }
     }
-    const drawBeam = this.game.drawBeam.bind(this.game);
-    const drawBrightBeam = this.game.drawBrightBeam.bind(this.game);
+    const selectionBeamColor = UNIT_SELECTION_OUTLINE_COLOR;
+    const drawBeam = this.isSelected()
+      ? ((from: THREE.Vector3, to: THREE.Vector3, width: number, depth: number, color: THREE.Color) => {
+          this.game.drawBrightBeam(from, to, width * 1.85, depth * 1.85, selectionBeamColor);
+          this.game.drawBeam(from, to, width, depth, color);
+        })
+      : this.game.drawBeam.bind(this.game);
+    const drawBrightBeam = this.isSelected()
+      ? ((from: THREE.Vector3, to: THREE.Vector3, width: number, depth: number, color: THREE.Color) => {
+          this.game.drawBrightBeam(from, to, width * 1.6, depth * 1.6, selectionBeamColor);
+          this.game.drawBrightBeam(from, to, width, depth, color);
+        })
+      : this.game.drawBrightBeam.bind(this.game);
     const pickupProgress =
       this.blob.gatherPhase === BlobGatherPhase.PICKING_UP
         ? this.getGatherPhaseProgress(stepDt, BlobGatherPhase.PICKING_UP)
@@ -1757,6 +1852,7 @@ export class BlobEntity extends Entity {
     this.unitsCentaur.instanceMatrix.needsUpdate = true;
     this.unitShield.instanceMatrix.needsUpdate = true;
     for (const m of this.unitsWarband) m.instanceMatrix.needsUpdate = true;
+    this.syncSelectionOutlineMeshes(UNIT_SELECTION_OUTLINE_COLOR);
     this.carriedResources.sync(carriedResourceInstances);
 
     this.updatePathLine(teamTint);
