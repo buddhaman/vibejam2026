@@ -118,6 +118,7 @@ export class Game {
   private _orbitCameraDistance = 165;
   private _orbitCameraDistanceMin = 26;
   private _orbitCameraDistanceMax = 420;
+  private _orbitCameraFovDeg = 52;
 
   public constructor(room: Room) {
     this.room = room;
@@ -379,10 +380,19 @@ export class Game {
     return typeof player?.color === "number" ? player.color : 0x8899aa;
   }
 
-  public setOrbitCameraForFrame(distance: number, distanceMin: number, distanceMax: number): void {
+  public setOrbitCameraForFrame(distance: number, distanceMin: number, distanceMax: number, fovDeg: number): void {
     this._orbitCameraDistance = distance;
     this._orbitCameraDistanceMin = distanceMin;
     this._orbitCameraDistanceMax = distanceMax;
+    this._orbitCameraFovDeg = fovDeg;
+  }
+
+  /** Approximate world-units occupied by one screen pixel at the current orbit distance. */
+  public getOrbitWorldUnitsPerScreenPixel(): number {
+    const viewportH = Math.max(1, window.innerHeight || 1);
+    const fovRad = THREE.MathUtils.degToRad(this._orbitCameraFovDeg);
+    const worldHeightAtDistance = 2 * this._orbitCameraDistance * Math.tan(fovRad * 0.5);
+    return worldHeightAtDistance / viewportH;
   }
 
   /** 0 = zoomed in (min distance), 1 = zoomed out (max distance). */

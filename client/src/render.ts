@@ -606,7 +606,7 @@ export function startRender(game: Game) {
     if (devModeVisible) chunkDebug.refresh(game.getLoadedChunkKeys());
     const perf0 = performance.now();
     world.syncWalkabilityOverlay(walkabilityOverlayVisible);
-    game.setOrbitCameraForFrame(cameraRig.distance, CAMERA_CONFIG.distanceMin, CAMERA_CONFIG.distanceMax);
+    game.setOrbitCameraForFrame(cameraRig.distance, CAMERA_CONFIG.distanceMin, CAMERA_CONFIG.distanceMax, camera.fov);
     game.updateRagdollFx(dt);
     game.updateArrowFx(dt);
     buildingDestructionFx.update(dt, game.getTiles());

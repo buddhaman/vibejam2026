@@ -113,15 +113,15 @@ export function createRenderWorld(game: Game): RenderWorld {
     scene,
     renderPass.camera
   );
-  selectionOutlinePass.edgeStrength = 6;
-  selectionOutlinePass.edgeThickness = 1.8;
+  selectionOutlinePass.edgeStrength = 4.2;
+  selectionOutlinePass.edgeThickness = 1.15;
   selectionOutlinePass.edgeGlow = 0;
   selectionOutlinePass.pulsePeriod = 0;
   selectionOutlinePass.usePatternTexture = false;
   selectionOutlinePass.visibleEdgeColor.setHex(0xffffff);
   selectionOutlinePass.hiddenEdgeColor.setHex(0xffffff);
-  composer.addPass(new OutputPass());
   composer.addPass(selectionOutlinePass);
+  composer.addPass(new OutputPass());
 
   const pmrem = new THREE.PMREMGenerator(renderer);
   scene.environment = pmrem.fromScene(new RoomEnvironment(), 0).texture;

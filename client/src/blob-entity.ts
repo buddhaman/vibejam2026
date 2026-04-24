@@ -70,14 +70,15 @@ const OVAL_FILL_MAT = new THREE.MeshBasicMaterial({
   fog: false,
   toneMapped: false,
 });
-const OVAL_RING_GEOM = new THREE.RingGeometry(0.93, 1, 64);
+const OVAL_RING_SEGMENTS = 64;
+const OVAL_RING_GEOM_CACHE = new Map<number, THREE.RingGeometry>();
 const OVAL_RING_MAT = new THREE.MeshBasicMaterial({
   color: 0xffffff,
   transparent: true,
   opacity: 0.26,
   side: THREE.DoubleSide,
   depthWrite: false,
-  depthTest: false,
+  depthTest: true,
   fog: false,
   toneMapped: false,
 });
@@ -99,6 +100,8 @@ const INSTANCE_CAP = import.meta.env.DEV
 const GOLDEN_ANGLE = Math.PI * (3 - Math.sqrt(5));
 const VISUAL_STEP = 1 / 120;
 const VISUAL_CATCHUP = 12;
+const SELECTED_RING_THICKNESS_PX = 5;
+const SELECTED_RING_MIN_THICKNESS_WORLD = 0.025;
 const DIRECTION_SMOOTHING = 3.2;
 const MIN_DIRECTION_SPEED = 0.2;
 const UNIT_SPRING = 20;
@@ -144,6 +147,16 @@ const _ovalHsl = { h: 0, s: 0, l: 0 };
 const SHIELD_RADIUS    = 0.44;
 const SHIELD_THICKNESS = 0.055;
 const UNIT_SELECTION_OUTLINE_COLOR = new THREE.Color();
+
+function getOvalRingGeometry(innerRadius: number): THREE.RingGeometry {
+  const quantized = Math.max(0.5, Math.min(0.995, Math.round(innerRadius * 1000) / 1000));
+  let geom = OVAL_RING_GEOM_CACHE.get(quantized);
+  if (!geom) {
+    geom = new THREE.RingGeometry(quantized, 1, OVAL_RING_SEGMENTS);
+    OVAL_RING_GEOM_CACHE.set(quantized, geom);
+  }
+  return geom;
+}
 
 type UnitCombatMode = "formation" | "chase" | "attack";
 
@@ -323,9 +336,9 @@ export class BlobEntity extends Entity {
     this.ovalFill.position.y = 0.02;
     this.ovalFill.renderOrder = 1002;
 
-    this.ovalRing = new THREE.Mesh(OVAL_RING_GEOM, OVAL_RING_MAT.clone());
+    this.ovalRing = new THREE.Mesh(getOvalRingGeometry(0.93), OVAL_RING_MAT.clone());
     this.ovalRing.rotation.x = -Math.PI / 2;
-    this.ovalRing.position.y = 0.03;
+    this.ovalRing.position.y = 0.08;
     this.ovalRing.renderOrder = 1003;
 
     this.attackRangeRing = new THREE.Mesh(RANGE_RING_GEOM, RANGE_RING_MAT.clone());
@@ -1342,11 +1355,22 @@ export class BlobEntity extends Entity {
     this.ovalRoot.rotation.y = layout.heading;
 
     this.ovalFill.scale.set(layout.minor, layout.major, 1);
-    this.ovalRing.scale.set(
-      layout.minor * (this.isSelected() ? 1.14 : 1.04),
-      layout.major * (this.isSelected() ? 1.14 : 1.04),
-      1
+    const selectedScale = this.isSelected() ? 1.14 : 1.04;
+    const ringOuterMinor = layout.minor * selectedScale;
+    const ringOuterMajor = layout.major * selectedScale;
+    this.ovalRing.scale.set(ringOuterMinor, ringOuterMajor, 1);
+
+    // Keep ring radius world-space, but keep line thickness roughly constant in screen px.
+    const worldPerPx = this.game.getOrbitWorldUnitsPerScreenPixel();
+    const targetWorldThickness = Math.max(
+      SELECTED_RING_MIN_THICKNESS_WORLD,
+      worldPerPx * SELECTED_RING_THICKNESS_PX
     );
+    const avgOuterRadius = Math.max(0.001, (ringOuterMinor + ringOuterMajor) * 0.5);
+    const localThickness = Math.max(0.01, Math.min(0.45, targetWorldThickness / avgOuterRadius));
+    const innerRadius = 1 - localThickness;
+    const nextRingGeometry = getOvalRingGeometry(innerRadius);
+    if (this.ovalRing.geometry !== nextRingGeometry) this.ovalRing.geometry = nextRingGeometry;
 
     const zoomT = this.game.getCameraZoomOut01();
     const enemyZoom = !this.isMine() ? zoomT : 0;
