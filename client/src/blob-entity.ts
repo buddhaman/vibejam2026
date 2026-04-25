@@ -103,7 +103,8 @@ const UNIT_BODY_COMBAT_MAX_SPEED = 4.8;
 const UNIT_BODY_COMBAT_CATCHUP_GAIN = 0;
 const UNIT_MAX_TURN_RATE = Math.PI * 5.2;
 const UNIT_COMBAT_TURN_RATE = Math.PI * 7.2;
-const UNIT_COLLISION_RADIUS_SCALE = 0.92;
+const UNIT_COLLISION_RADIUS_SCALE = 0.82;
+const FORMATION_SLOT_SCALE = 0.82;
 const FOOT_IDLE_SPEED = 0.01;
 const FOOT_STRIDE = GAME_RULES.UNIT_RADIUS * 1.05;
 const COMBAT_TARGET_STANDOFF = GAME_RULES.UNIT_RADIUS * 1.9;
@@ -889,8 +890,8 @@ export class BlobEntity extends Entity {
     const radius = Math.sqrt(t);
     const angle = index * GOLDEN_ANGLE;
     return {
-      x: Math.cos(angle) * radius * minor * 0.82,
-      z: Math.sin(angle) * radius * major * 0.82,
+      x: Math.cos(angle) * radius * minor * FORMATION_SLOT_SCALE,
+      z: Math.sin(angle) * radius * major * FORMATION_SLOT_SCALE,
     };
   }
 
@@ -1650,7 +1651,10 @@ export class BlobEntity extends Entity {
         fallbackX: collisionFallbackX,
         fallbackZ: collisionFallbackZ,
         radius: collisionRadius,
-        resolveUnits: state.combatMode !== "formation",
+        moveTo: (x, z) => {
+          state.bodyX = x;
+          state.bodyZ = z;
+        },
       });
       state.bodyX = resolvedBody.x;
       state.bodyZ = resolvedBody.z;

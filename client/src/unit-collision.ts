@@ -10,6 +10,7 @@ type Circle = {
   x: number;
   z: number;
   radius: number;
+  moveTo: (x: number, z: number) => void;
 };
 
 export type UnitCollisionQuery = Circle & {
@@ -17,15 +18,14 @@ export type UnitCollisionQuery = Circle & {
   previousZ: number;
   fallbackX: number;
   fallbackZ: number;
-  resolveUnits?: boolean;
+  moveTo: (x: number, z: number) => void;
 };
 
 const CELL_SIZE = GAME_RULES.UNIT_RADIUS * 4.2;
 const TILE_PADDING = 0.015;
-const UNIT_PADDING = 0.018;
+const UNIT_SLOP = 0.035;
 const TILE_ITERATIONS = 3;
 const UNIT_ITERATIONS = 1;
-const UNIT_CORRECTION = 0.55;
 
 function cellKey(cx: number, cz: number): string {
   return `${cx},${cz}`;
@@ -52,12 +52,11 @@ export class UnitCollisionSystem {
     const radius = Math.max(0.05, query.radius);
 
     ({ x, z } = this.resolveTiles(x, z, radius));
-    if (query.resolveUnits !== false) {
-      ({ x, z } = this.resolveUnits(x, z, radius, query));
-    }
+    ({ x, z } = this.resolveUnits(x, z, radius, query));
     ({ x, z } = this.resolveTiles(x, z, radius));
 
-    const circle = { x, z, radius };
+    query.moveTo(x, z);
+    const circle = { x, z, radius, moveTo: query.moveTo };
     const minCx = Math.floor((x - radius) / CELL_SIZE);
     const maxCx = Math.floor((x + radius) / CELL_SIZE);
     const minCz = Math.floor((z - radius) / CELL_SIZE);
@@ -183,7 +182,7 @@ export class UnitCollisionSystem {
           const bucket = this.grid.get(cellKey(cxCell, czCell));
           if (!bucket) continue;
           for (const other of bucket) {
-            const minDist = radius + other.radius + UNIT_PADDING;
+            const minDist = Math.max(0.01, radius + other.radius - UNIT_SLOP);
             let dx = x - other.x;
             let dz = z - other.z;
             let dist = Math.hypot(dx, dz);
@@ -199,9 +198,15 @@ export class UnitCollisionSystem {
                 dist = 1;
               }
             }
-            const correction = (minDist - dist) * UNIT_CORRECTION;
+            const correction = (minDist - dist) * 0.5;
             x += (dx / dist) * correction;
             z += (dz / dist) * correction;
+            const otherX = other.x - (dx / dist) * correction;
+            const otherZ = other.z - (dz / dist) * correction;
+            const resolvedOther = this.resolveTiles(otherX, otherZ, other.radius);
+            other.x = resolvedOther.x;
+            other.z = resolvedOther.z;
+            other.moveTo(other.x, other.z);
             moved = true;
           }
         }

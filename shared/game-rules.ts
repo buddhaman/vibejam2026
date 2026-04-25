@@ -149,7 +149,7 @@ const TILE_CENTER_MAX = GAME_RULES.WORLD_MAX - TILE_HALF;
 /** All buildings occupy exactly one tile for placement, blocking, and walk/build flags (`footprint*` / `selection*`). */
 export const BUILDING_RULES = {
   [BuildingType.BARRACKS]: {
-    label: "Stratégion",
+    label: "Barracks",
     detail: "Produces hoplites",
     health: GAME_RULES.BARRACKS_HEALTH,
     buildable: true,
@@ -166,7 +166,7 @@ export const BUILDING_RULES = {
     producibleUnits: [UnitType.WARBAND],
   },
   [BuildingType.TOWER]: {
-    label: "Pyrgos",
+    label: "Tower",
     detail: "Lightning tower",
     health: GAME_RULES.TOWER_HEALTH,
     buildable: true,
@@ -183,7 +183,7 @@ export const BUILDING_RULES = {
     producibleUnits: [],
   },
   [BuildingType.TOWN_CENTER]: {
-    label: "Agora",
+    label: "Town Center",
     detail: "Produces agents",
     health: GAME_RULES.TOWN_CENTER_HEALTH,
     buildable: false,
@@ -200,7 +200,7 @@ export const BUILDING_RULES = {
     producibleUnits: [UnitType.VILLAGER],
   },
   [BuildingType.ARCHERY_RANGE]: {
-    label: "Toxotikon",
+    label: "Archery Range",
     detail: "Produces archers",
     health: GAME_RULES.ARCHERY_RANGE_HEALTH,
     buildable: true,
@@ -217,7 +217,7 @@ export const BUILDING_RULES = {
     producibleUnits: [UnitType.ARCHER],
   },
   [BuildingType.STABLE]: {
-    label: "Synthaurion",
+    label: "Stable",
     detail: "Produces synthaurs",
     health: GAME_RULES.STABLE_HEALTH,
     buildable: true,
@@ -234,7 +234,7 @@ export const BUILDING_RULES = {
     producibleUnits: [UnitType.SYNTHAUR],
   },
   [BuildingType.FARM]: {
-    label: "Kleros",
+    label: "Farm",
     detail: "Food field",
     health: GAME_RULES.FARM_HEALTH,
     buildable: true,

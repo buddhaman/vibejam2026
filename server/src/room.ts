@@ -379,6 +379,7 @@ export class BattleRoom extends Room<{ state: GameState }> {
       building.y = snapped.z;
       building.buildingType = msg.type;
       building.health = buildingRules.health;
+      this.initializeBuildingSpawnTarget(building);
 
       spendPlayerResources(player, buildingRules.cost);
 
@@ -416,7 +417,7 @@ export class BattleRoom extends Room<{ state: GameState }> {
       }
       const building = this.state.buildings.get(msg.buildingId);
       if (!building || building.ownerId !== client.sessionId) return;
-      const rally = this.findNearestWalkablePoint(msg.worldX, msg.worldZ, 4);
+      const rally = this.findNearestOpenSpawnPoint(msg.worldX, msg.worldZ, 4);
       if (!rally) return;
       building.rallySet = 1;
       building.rallyX = rally.x;
@@ -1103,6 +1104,42 @@ export class BattleRoom extends Room<{ state: GameState }> {
     return null;
   }
 
+  private findNearestOpenSpawnPoint(x: number, y: number, maxRadiusTiles = 0): { x: number; y: number } | null {
+    const goalX = clamp(x, CONFIG.WORLD_MIN, CONFIG.WORLD_MAX);
+    const goalY = clamp(y, CONFIG.WORLD_MIN, CONFIG.WORLD_MAX);
+    const start = getTileCoordsFromWorld(goalX, goalY);
+    const isOpen = (tx: number, tz: number) => {
+      const tile = this.tileData.get(getTileKey(tx, tz));
+      return !!tile && tile.canWalk && tile.canBuild;
+    };
+
+    if (isOpen(start.tx, start.tz)) return { x: goalX, y: goalY };
+
+    let best: { x: number; y: number } | null = null;
+    let bestDistance = Infinity;
+    const tileCount = getWorldTileCount();
+
+    for (let radius = 1; radius <= maxRadiusTiles; radius++) {
+      for (let dz = -radius; dz <= radius; dz++) {
+        for (let dx = -radius; dx <= radius; dx++) {
+          if (Math.max(Math.abs(dx), Math.abs(dz)) !== radius) continue;
+          const tx = start.tx + dx;
+          const tz = start.tz + dz;
+          if (tx < 0 || tz < 0 || tx >= tileCount || tz >= tileCount || !isOpen(tx, tz)) continue;
+          const center = getTileCenter(tx, tz);
+          const distance = Math.hypot(center.x - goalX, center.z - goalY);
+          if (distance < bestDistance) {
+            bestDistance = distance;
+            best = { x: center.x, y: center.z };
+          }
+        }
+      }
+      if (best) return best;
+    }
+
+    return null;
+  }
+
   /**
    * Attack move goal: the enemy squad center (nearest walkable point).
    * Engagement triggers as soon as centers are within range — no stop at a ring outside the target.
@@ -1388,6 +1425,7 @@ export class BattleRoom extends Room<{ state: GameState }> {
     townCenter.y = snapped.z;
     townCenter.buildingType = BuildingType.TOWN_CENTER;
     townCenter.health = getBuildingRules(BuildingType.TOWN_CENTER).health;
+    this.initializeBuildingSpawnTarget(townCenter);
     this.state.buildings.set(townCenter.id, townCenter);
     this.addBuildingFootprint(townCenter);
     return townCenter;
@@ -2010,18 +2048,20 @@ export class BattleRoom extends Room<{ state: GameState }> {
 
     let best: { x: number; y: number; score: number } | null = null;
     for (const candidate of candidates) {
-      const point = this.findNearestWalkablePoint(candidate.x, candidate.y, 1);
+      const point = this.findNearestOpenSpawnPoint(candidate.x, candidate.y, 1);
       if (!point) continue;
       const score = Math.hypot(point.x - candidate.x, point.y - candidate.y) + Math.hypot(point.x - building.x, point.y - building.y) * 0.08;
       if (!best || score < best.score) best = { ...point, score };
     }
-    return best ?? { x: building.x, y: building.y };
+    return (
+      best ??
+      this.findNearestOpenSpawnPoint(building.x, building.y, 6) ??
+      this.findNearestWalkablePoint(building.x, building.y, 6) ??
+      { x: building.x, y: building.y }
+    );
   }
 
-  private getBuildingRallyPoint(building: Building, spawn: { x: number; y: number }): { x: number; y: number } {
-    if (building.rallySet) {
-      return this.findNearestWalkablePoint(building.rallyX, building.rallyY, 4) ?? spawn;
-    }
+  private getDefaultBuildingSpawnTarget(building: Building, spawn: { x: number; y: number }): { x: number; y: number } {
     const dx = spawn.x - building.x;
     const dy = spawn.y - building.y;
     const len = Math.hypot(dx, dy) || 1;
@@ -2029,7 +2069,24 @@ export class BattleRoom extends Room<{ state: GameState }> {
       x: building.x + (dx / len) * GAME_RULES.TILE_SIZE * 2.2,
       y: building.y + (dy / len) * GAME_RULES.TILE_SIZE * 2.2,
     };
-    return this.findNearestWalkablePoint(target.x, target.y, 4) ?? spawn;
+    return this.findNearestOpenSpawnPoint(target.x, target.y, 4) ?? spawn;
+  }
+
+  private initializeBuildingSpawnTarget(building: Building): void {
+    const spawn = this.findBuildingSpawnPoint(building);
+    const target = this.getDefaultBuildingSpawnTarget(building, spawn);
+    building.rallyX = target.x;
+    building.rallyY = target.y;
+    building.rallySet = 0;
+  }
+
+  private getBuildingRallyPoint(building: Building, spawn: { x: number; y: number }): { x: number; y: number } {
+    const target = this.findNearestOpenSpawnPoint(building.rallyX, building.rallyY, 4);
+    if (target) return target;
+    const fallback = this.getDefaultBuildingSpawnTarget(building, spawn);
+    building.rallyX = fallback.x;
+    building.rallyY = fallback.y;
+    return fallback;
   }
 
   private resolveBlobCombat(dt: number): void {

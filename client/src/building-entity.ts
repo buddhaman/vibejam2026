@@ -68,6 +68,18 @@ const BUILDING_SELECTION_RING_GEOM = new THREE.RingGeometry(0.92, 1, 72);
 const BUILDING_SELECTION_FILL_GEOM = new THREE.CircleGeometry(1, 56);
 const BUILDING_SELECTION_RING_THICKNESS_PX = 4;
 const BUILDING_SELECTION_RING_MIN_THICKNESS_WORLD = 0.025;
+const SPAWN_POINT_MARKER_RADIUS = 0.5;
+const SPAWN_POINT_MIN_THICKNESS_WORLD = 0.025;
+const SPAWN_POINT_OFFSET_Y = 0.25;
+const SPAWN_POINT_MIN_DISTANCE = 0.6;
+const SPAWN_POINT_DASH_WORLD = 1.4;
+const SPAWN_POINT_GAP_WORLD = 1.1;
+const BUILDING_CENTER = new THREE.Vector3();
+const SPAWN_POINT_WORLD = new THREE.Vector3();
+const SPAWN_LINE_START = new THREE.Vector3();
+const SPAWN_LINE_END = new THREE.Vector3();
+const SPAWN_SEGMENT_START = new THREE.Vector3();
+const SPAWN_SEGMENT_END = new THREE.Vector3();
 
 function getEffectiveUnitTrainTimeMs(unitType: UnitTypeValue): number {
   return Math.max(1, Math.ceil(getUnitTrainTimeMs(unitType) * UNIT_TRAIN_TIME_MULTIPLIER));
@@ -86,6 +98,7 @@ export class BuildingEntity extends Entity {
   private selectionOutline: THREE.Object3D | null = null;
   private selectionRing!: THREE.Mesh<THREE.RingGeometry, THREE.MeshBasicMaterial>;
   private selectionFill!: THREE.Mesh<THREE.CircleGeometry, THREE.MeshBasicMaterial>;
+  private spawnPointMarker!: THREE.Mesh<THREE.SphereGeometry, THREE.MeshBasicMaterial>;
   private localAge = 0;
 
   private building: {
@@ -129,9 +142,16 @@ export class BuildingEntity extends Entity {
     this.selectionRing.rotation.x = -Math.PI / 2;
     this.selectionRing.position.y = 0.18;
     this.selectionRing.renderOrder = 1003;
+    this.spawnPointMarker = new THREE.Mesh(
+      new THREE.SphereGeometry(SPAWN_POINT_MARKER_RADIUS, 18, 14),
+      new THREE.MeshBasicMaterial({ color: 0xffffff })
+    );
+    this.spawnPointMarker.visible = false;
+    this.spawnPointMarker.renderOrder = 1004;
     root.add(this.ownerOrb);
     root.add(this.selectionFill);
     root.add(this.selectionRing);
+    root.add(this.spawnPointMarker);
     return root;
   }
 
@@ -245,6 +265,7 @@ export class BuildingEntity extends Entity {
     } else if (this.building.buildingType === BuildingType.TOWER) {
       this.renderTowerLightning(terrainY);
     }
+    this.renderSpawnPointGuide(terrainY, selected, selectionColor);
   }
 
   private replaceVariant(type: BuildingTypeValue): void {
@@ -380,6 +401,55 @@ export class BuildingEntity extends Entity {
     leavesB.instanceMatrix.needsUpdate = true;
   }
 
+  private renderSpawnPointGuide(terrainY: number, selected: boolean, selectionColor: THREE.Color): void {
+    if (!this.building) return;
+    const rules = getBuildingRules(this.building.buildingType);
+    if (rules.producibleUnits.length === 0 || !this.isOwnedByMe() || !selected) {
+      this.spawnPointMarker.visible = false;
+      return;
+    }
+    const spawnX = this.building.rallyX;
+    const spawnZ = this.building.rallyY;
+    const spawnY = getTerrainHeightAt(spawnX, spawnZ, this.game.getTiles()) + SPAWN_POINT_OFFSET_Y;
+
+    this.spawnPointMarker.visible = true;
+    this.spawnPointMarker.material.color.copy(selectionColor);
+    this.spawnPointMarker.position.set(
+      spawnX - this.building.x,
+      spawnY - terrainY,
+      spawnZ - this.building.y
+    );
+
+    BUILDING_CENTER.set(this.building.x, terrainY + SPAWN_POINT_OFFSET_Y, this.building.y);
+    SPAWN_POINT_WORLD.set(spawnX, spawnY, spawnZ);
+    if (BUILDING_CENTER.distanceToSquared(SPAWN_POINT_WORLD) < SPAWN_POINT_MIN_DISTANCE * SPAWN_POINT_MIN_DISTANCE) {
+      return;
+    }
+    const lineThickness = Math.max(
+      SPAWN_POINT_MIN_THICKNESS_WORLD,
+      this.game.getOrbitWorldUnitsPerScreenPixel() * BUILDING_SELECTION_RING_THICKNESS_PX
+    );
+    const totalDistance = Math.sqrt(BUILDING_CENTER.distanceToSquared(SPAWN_POINT_WORLD));
+    const cycle = SPAWN_POINT_DASH_WORLD + SPAWN_POINT_GAP_WORLD;
+    const dashCount = Math.max(1, Math.ceil(totalDistance / cycle));
+    for (let i = 0; i < dashCount; i++) {
+      const dashStartDist = i * cycle;
+      const dashEndDist = Math.min(totalDistance, dashStartDist + SPAWN_POINT_DASH_WORLD);
+      if (dashEndDist <= dashStartDist) continue;
+      const t0 = dashStartDist / totalDistance;
+      const t1 = dashEndDist / totalDistance;
+      SPAWN_SEGMENT_START.lerpVectors(BUILDING_CENTER, SPAWN_POINT_WORLD, t0);
+      SPAWN_SEGMENT_END.lerpVectors(BUILDING_CENTER, SPAWN_POINT_WORLD, t1);
+      this.game.drawBrightBeam(
+        SPAWN_SEGMENT_START,
+        SPAWN_SEGMENT_END,
+        lineThickness,
+        lineThickness * 0.8,
+        selectionColor
+      );
+    }
+  }
+
   private setFarmBeamMatrix(
     start: THREE.Vector3,
     end: THREE.Vector3,
@@ -496,7 +566,7 @@ export class BuildingEntity extends Entity {
           ...(rules.producibleUnits.length > 0
             ? [{
                 id: "set_rally",
-                label: "Rally",
+                label: "Spawn Point",
                 active: this.building.rallySet > 0,
               }]
             : []),
