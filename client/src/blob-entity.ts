@@ -220,17 +220,14 @@ export class BlobEntity extends Entity {
   private ovalRoot!: THREE.Group;
   /** Cylinder fallback or instanced parts from `models/units/agent.glb`. */
   private unitsAgent: THREE.InstancedMesh[] = [];
-  private agentTeamTexApplied = false;
+  private tintedOwnerId: string | null = null;
   /** Invisible geometry so `Raycaster` can select villagers without pixel-hunting. */
   private villagerPickProxy!: THREE.Mesh;
   /** One mesh (cylinder fallback) or multiple parts from `models/units/hoplite.glb`. */
   private unitsWarband: THREE.InstancedMesh[] = [];
-  private warbandTeamTexApplied = false;
   private unitsSynthaur: THREE.InstancedMesh[] = [];
-  private synthaurTeamTexApplied = false;
   /** Instanced parts from `models/units/archer.glb`. */
   private unitsArcher: THREE.InstancedMesh[] = [];
-  private archerTeamTexApplied = false;
   private unitModelAssetVersion = -1;
   private unitsCentaur!: THREE.InstancedMesh;
   /** Flat disc in the left hand of each warband soldier. */
@@ -407,10 +404,7 @@ export class BlobEntity extends Entity {
     for (const mesh of meshes) mesh.renderOrder = 2;
   }
 
-  private refreshUnitModelMeshesIfNeeded(): void {
-    const nextVersion = getUnitModelAssetVersion();
-    if (this.unitModelAssetVersion === nextVersion) return;
-
+  private rebuildUnitModelMeshes(nextVersion = getUnitModelAssetVersion()): void {
     for (const mesh of this.unitsAgent) this.mesh.remove(mesh);
     for (const mesh of this.unitsArcher) this.mesh.remove(mesh);
     for (const mesh of this.unitsWarband) this.mesh.remove(mesh);
@@ -433,12 +427,36 @@ export class BlobEntity extends Entity {
     for (const mesh of this.unitsWarband) this.mesh.add(mesh);
     for (const mesh of this.unitsSynthaur) this.mesh.add(mesh);
 
-    this.agentTeamTexApplied = false;
-    this.archerTeamTexApplied = false;
-    this.warbandTeamTexApplied = false;
-    this.synthaurTeamTexApplied = false;
+    this.tintedOwnerId = null;
     this.unitModelAssetVersion = nextVersion;
     this.rebuildSelectionOutlineMeshes();
+    this.applyOwnerTintToUnitMeshes();
+  }
+
+  private refreshUnitModelMeshesIfNeeded(): void {
+    const nextVersion = getUnitModelAssetVersion();
+    if (this.unitModelAssetVersion === nextVersion) return;
+    this.rebuildUnitModelMeshes(nextVersion);
+  }
+
+  private applyOwnerTintToUnitMeshes(): void {
+    const ownerId = this.blob?.ownerId ?? null;
+    if (!ownerId || this.tintedOwnerId === ownerId) return;
+    const primary = this.game.getPlayerColor(ownerId);
+    const secondary = secondaryTeamHexFromPrimary(primary);
+    if (this.unitsAgent.length > 0 && hasUnitInstancedGlb("agent")) {
+      applyTeamColorTexturesToMarkedMeshes(this.unitsAgent, primary, secondary);
+    }
+    if (this.unitsWarband.length > 0 && hasUnitInstancedGlb("hoplite")) {
+      applyTeamColorTexturesToMarkedMeshes(this.unitsWarband, primary, secondary);
+    }
+    if (this.unitsArcher.length > 0 && hasUnitInstancedGlb("archer")) {
+      applyTeamColorTexturesToMarkedMeshes(this.unitsArcher, primary, secondary);
+    }
+    if (this.unitsSynthaur.length > 0 && hasUnitInstancedGlb("synthaur")) {
+      applyTeamColorTexturesToMarkedMeshes(this.unitsSynthaur, primary, secondary);
+    }
+    this.tintedOwnerId = ownerId;
   }
 
   private rebuildSelectionOutlineMeshes(): void {
@@ -587,6 +605,11 @@ export class BlobEntity extends Entity {
       carriedResourceType: blob.carriedResourceType,
       carriedAmount: blob.carriedAmount,
     };
+    if (previousOwnerId !== blob.ownerId) {
+      this.tintedOwnerId = null;
+      this.rebuildUnitModelMeshes();
+    }
+    this.applyOwnerTintToUnitMeshes();
   }
 
   private getGatherPhaseProgress(dt: number, phase: number): number {
@@ -1434,53 +1457,6 @@ export class BlobEntity extends Entity {
       this.attackRangeRing.scale.setScalar(unitRules.attackRange);
       this.attackRangeRing.material.color.copy(teamTint).offsetHSL(0, -0.08, 0.16);
       this.attackRangeRing.material.opacity = serverRangedAttacking || rangedTargetInRange ? 0.32 : 0.18;
-    }
-
-    if (usesAgentMeshes && this.unitsAgent.length > 0 && hasUnitInstancedGlb("agent") && !this.agentTeamTexApplied) {
-      const primary = this.game.getPlayerColor(this.blob.ownerId);
-      applyTeamColorTexturesToMarkedMeshes(
-        this.unitsAgent,
-        primary,
-        secondaryTeamHexFromPrimary(primary)
-      );
-      this.agentTeamTexApplied = true;
-    }
-
-    if (
-      !usesAgentMeshes &&
-      !usesArcherMeshes &&
-      !usesSynthaurMeshes &&
-      this.unitsWarband.length > 0 &&
-      hasUnitInstancedGlb("hoplite") &&
-      !this.warbandTeamTexApplied
-    ) {
-      const primary = this.game.getPlayerColor(this.blob.ownerId);
-      applyTeamColorTexturesToMarkedMeshes(
-        this.unitsWarband,
-        primary,
-        secondaryTeamHexFromPrimary(primary)
-      );
-      this.warbandTeamTexApplied = true;
-    }
-
-    if (usesArcherMeshes && this.unitsArcher.length > 0 && hasUnitInstancedGlb("archer") && !this.archerTeamTexApplied) {
-      const primary = this.game.getPlayerColor(this.blob.ownerId);
-      applyTeamColorTexturesToMarkedMeshes(
-        this.unitsArcher,
-        primary,
-        secondaryTeamHexFromPrimary(primary)
-      );
-      this.archerTeamTexApplied = true;
-    }
-
-    if (usesSynthaurMeshes && this.unitsSynthaur.length > 0 && hasUnitInstancedGlb("synthaur") && !this.synthaurTeamTexApplied) {
-      const primary = this.game.getPlayerColor(this.blob.ownerId);
-      applyTeamColorTexturesToMarkedMeshes(
-        this.unitsSynthaur,
-        primary,
-        secondaryTeamHexFromPrimary(primary)
-      );
-      this.synthaurTeamTexApplied = true;
     }
 
     const agentGlb = hasUnitInstancedGlb("agent");

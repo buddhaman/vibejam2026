@@ -23,6 +23,8 @@ const _pix = /* @__PURE__ */ new THREE.Color();
 const _hslPix = { h: 0, s: 0, l: 0 };
 const _hslPri = { h: 0, s: 0, l: 0 };
 const _hslSec = { h: 0, s: 0, l: 0 };
+const recoloredTextureCache = new Map<string, THREE.Texture>();
+const neutralTextureCache = new Map<string, THREE.Texture>();
 
 /** RGB 0–1 → HSL with h,s,l in [0,1] (same convention as `THREE.Color.getHSL`). */
 function rgbToHsl(r: number, g: number, b: number): { h: number; s: number; l: number } {
@@ -194,6 +196,10 @@ export function remapBrightFactionTexture(
 ): THREE.Texture {
   const size = getDrawableImageSize(src.image);
   if (!size) return src;
+  const blueUsesSecondary = options?.blueChannelUsesSecondary !== false;
+  const cacheKey = `${src.uuid}:${primaryHex}:${secondaryHex}:${blueUsesSecondary ? 1 : 0}`;
+  const cached = recoloredTextureCache.get(cacheKey);
+  if (cached) return cached;
 
   const canvas = document.createElement("canvas");
   canvas.width = size.w;
@@ -209,7 +215,9 @@ export function remapBrightFactionTexture(
   replaceTeamColorPixelsInImageData(imgData, primaryHex, secondaryHex, options);
   ctx.putImageData(imgData, 0, 0);
 
-  return newTextureFromCanvasLike(src, canvas);
+  const remapped = newTextureFromCanvasLike(src, canvas);
+  recoloredTextureCache.set(cacheKey, remapped);
+  return remapped;
 }
 
 /**
@@ -220,6 +228,8 @@ export function remapBrightFactionTexture(
 export function remapBrightFactionTextureToNeutral(src: THREE.Texture): THREE.Texture {
   const size = getDrawableImageSize(src.image);
   if (!size) return src;
+  const cached = neutralTextureCache.get(src.uuid);
+  if (cached) return cached;
 
   const canvas = document.createElement("canvas");
   canvas.width = size.w;
@@ -247,7 +257,9 @@ export function remapBrightFactionTextureToNeutral(src: THREE.Texture): THREE.Te
     d[i] = v; d[i + 1] = v; d[i + 2] = v;
   }
   ctx.putImageData(imgData, 0, 0);
-  return newTextureFromCanvasLike(src, canvas);
+  const remapped = newTextureFromCanvasLike(src, canvas);
+  neutralTextureCache.set(src.uuid, remapped);
+  return remapped;
 }
 
 /**

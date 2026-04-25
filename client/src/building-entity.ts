@@ -90,8 +90,8 @@ export class BuildingEntity extends Entity {
   private variant: BuildingVariant | null = null;
   private variantType: BuildingTypeValue | null = null;
   private variantAssetVersion = -1;
-  /** One-time CPU recolor of GLB albedo/emissive maps to this owner’s palette. */
-  private buildingTeamTexturesApplied = false;
+  /** Owner palette currently baked into the cloned variant materials. */
+  private tintedOwnerId: string | null = null;
   /** Single unlit sphere — full-brightness player palette color. */
   private ownerOrb!: THREE.Mesh;
   private ownerOrbMaterial!: THREE.MeshBasicMaterial;
@@ -170,6 +170,7 @@ export class BuildingEntity extends Entity {
     rallyY?: number;
   }): void {
     const firstSync = this.building === null;
+    const previousOwnerId = this.building?.ownerId ?? null;
     this.building = {
       ...building,
       productionQueue: Array.from(building.productionQueue ?? []),
@@ -177,6 +178,10 @@ export class BuildingEntity extends Entity {
       rallyX: building.rallyX ?? 0,
       rallyY: building.rallyY ?? 0,
     };
+    const ownerChanged = previousOwnerId !== null && previousOwnerId !== this.building.ownerId;
+    if (this.tintedOwnerId !== this.building.ownerId) {
+      this.tintedOwnerId = null;
+    }
 
     // Defer the clone to the next event-loop turn so it doesn’t stall the Colyseus schema callback.
     if (firstSync) {
@@ -185,7 +190,23 @@ export class BuildingEntity extends Entity {
         if (this.isStale()) return; // building already destroyed before clone finished
         this.replaceVariant(type);
       }, 0);
+    } else if (ownerChanged && this.variant) {
+      this.replaceVariant(this.building.buildingType);
+    } else if (this.variant && this.variantType === this.building.buildingType) {
+      this.applyVariantTeamTintIfNeeded();
     }
+  }
+
+  private applyVariantTeamTintIfNeeded(): void {
+    if (!this.variant || !this.building) return;
+    const ownerId = this.building.ownerId;
+    if (!ownerId || this.tintedOwnerId === ownerId) return;
+    const playerHex = this.game.getPlayerColor(ownerId);
+    const secondary = secondaryTeamHexFromPrimary(playerHex);
+    applyTeamColorTexturesToObject3D(this.variant.root, playerHex, secondary, {
+      blueChannelUsesSecondary: false,
+    });
+    this.tintedOwnerId = ownerId;
   }
 
   public getBuildingType(): BuildingTypeValue | null {
@@ -248,17 +269,6 @@ export class BuildingEntity extends Entity {
       this.selectionOutline.visible = false;
     }
 
-    if (!this.buildingTeamTexturesApplied && this.building.ownerId.length > 0) {
-      const auth = this.game.room.state.players.get(this.building.ownerId) as { color?: number } | undefined;
-      if (typeof auth?.color === "number") {
-        const secondary = secondaryTeamHexFromPrimary(playerHex);
-        applyTeamColorTexturesToObject3D(this.variant.root, playerHex, secondary, {
-          blueChannelUsesSecondary: false,
-        });
-        this.buildingTeamTexturesApplied = true;
-      }
-    }
-
     this.mesh.position.set(this.building.x, terrainY, this.building.y);
     if (this.building.buildingType === BuildingType.FARM) {
       this.updateFarmGrowth();
@@ -282,11 +292,12 @@ export class BuildingEntity extends Entity {
     });
     this.variantType = type;
     this.variantAssetVersion = getBuildingModelAssetVersion();
-    this.buildingTeamTexturesApplied = false;
+    this.tintedOwnerId = null;
     this.selectionOutline = createSelectionOutlineClone(this.variant.root, BUILDING_SELECTION_OUTLINE_SCALE);
     this.selectionOutline.visible = false;
     this.mesh.add(this.selectionOutline);
     this.mesh.add(this.variant.root);
+    this.applyVariantTeamTintIfNeeded();
   }
 
   private renderTowerLightning(terrainY: number): void {
