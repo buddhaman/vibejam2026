@@ -462,11 +462,11 @@ export function drawAgentStatusLabels(
   if (labels.length === 0) return;
   const ctx = canvas.getContext("2d")!;
   for (const label of labels) {
-    const h = 22;
+    const h = 14;
     ctx.save();
-    const w = 22;
+    const w = 14;
     const x = label.sx - w * 0.5;
-    const y = label.sy - h * 0.5;
+    const y = label.sy - h - 3;
     const accent = resourceColor(label.resourceType);
     ctx.fillStyle = "rgba(8, 16, 34, 0.86)";
     rr(ctx, x, y, w, h, 6);
@@ -476,13 +476,13 @@ export function drawAgentStatusLabels(
     rr(ctx, x, y, w, h, 6);
     ctx.stroke();
     const icon = resourceIconImage(label.resourceType);
-    const drawn = drawResourceIcon(ctx, icon, label.sx - 7, label.sy - 7, 14);
+    const drawn = drawResourceIcon(ctx, icon, x + 2, y + 2, 10);
     if (!drawn) {
       ctx.textAlign = "center";
       ctx.textBaseline = "middle";
       ctx.fillStyle = accent;
-      ctx.font = "700 12px system-ui, sans-serif";
-      ctx.fillText(resourceGlyph(label.resourceType), label.sx, label.sy + 0.5);
+      ctx.font = "700 9px system-ui, sans-serif";
+      ctx.fillText(resourceGlyph(label.resourceType), label.sx, y + h * 0.5 + 0.5);
     }
     ctx.restore();
   }

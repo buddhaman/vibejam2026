@@ -59,7 +59,7 @@ export function projectAgentStatusLabels(
     const resourceType = entity.getAgentResourceMarker();
     if (resourceType === null) continue;
     const center = entity.getPredictedWorldCenter();
-    PROJECTED_TEXT_POS.set(center.x, getTerrainHeightAt(center.x, center.z, game.getTiles()) + 7.8, center.z);
+    PROJECTED_TEXT_POS.set(center.x, getTerrainHeightAt(center.x, center.z, game.getTiles()) + 3.7, center.z);
     PROJECTED_TEXT_POS.project(camera);
     if (PROJECTED_TEXT_POS.z < -1 || PROJECTED_TEXT_POS.z > 1) continue;
     const sx = (PROJECTED_TEXT_POS.x * 0.5 + 0.5) * canvas.width;
