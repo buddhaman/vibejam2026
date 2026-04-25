@@ -771,6 +771,25 @@ function setGrassTile(tile: GeneratedTile): void {
   tile.maxMaterial = 0;
 }
 
+/**
+ * Per-player GPU mine tiles and the 8 surrounding tiles: never stamp forest there during
+ * `decorateRadialKothResources` (server worldgen). Central server compute uses a different
+ * maxCompute and is not included.
+ */
+function collectNoForestKeysAroundPlayerGpuMines(tiles: Map<string, GeneratedTile>): Set<string> {
+  const keys = new Set<string>();
+  for (const t of tiles.values()) {
+    if (t.maxCompute !== GAME_RULES.KOTH_PLAYER_COMPUTE) continue;
+    for (let dz = -1; dz <= 1; dz++) {
+      for (let dx = -1; dx <= 1; dx++) {
+        if (dx === 0 && dz === 0) continue;
+        keys.add(getTileKey(t.tx + dx, t.tz + dz));
+      }
+    }
+  }
+  return keys;
+}
+
 function setForestTile(tile: GeneratedTile, amount: number): void {
   if (tile.isMountain) return;
   if (tile.compute > 0 || tile.maxCompute > 0) return;
@@ -793,6 +812,7 @@ function stampForestPatch(
   centerX: number,
   centerZ: number,
   amountScale: number,
+  noForestKeys: ReadonlySet<string>,
   seed = 0
 ): void {
   const lobes = 3 + Math.floor(seededFraction(seed, 1301) * 2);
@@ -810,6 +830,7 @@ function stampForestPatch(
       for (let dx = -radiusCeil; dx <= radiusCeil; dx++) {
         const tile = tiles.get(getTileKey(tx + dx, tz + dz));
         if (!tile) continue;
+        if (noForestKeys.has(tile.key)) continue;
         const noise = seededFraction(seed, 1400 + lobeIndex * 97 + dx * 13 + dz * 29);
         const ellipticalDistance = Math.hypot(dx * (0.88 + noise * 0.32), dz * (1.04 - noise * 0.24));
         if (ellipticalDistance > lobeRadiusTiles + noise * 0.35) continue;
@@ -821,9 +842,10 @@ function stampForestPatch(
   }
 }
 
-function softenForestPatchEdges(tiles: Map<string, GeneratedTile>): void {
+function softenForestPatchEdges(tiles: Map<string, GeneratedTile>, noForestKeys: ReadonlySet<string>): void {
   const additions: Array<{ tile: GeneratedTile; amount: number }> = [];
   for (const tile of tiles.values()) {
+    if (noForestKeys.has(tile.key)) continue;
     if (tile.isMountain || tile.compute > 0 || tile.maxCompute > 0 || tile.maxMaterial > 0) continue;
     let neighborWeight = 0;
     let neighborForest = 0;
@@ -847,6 +869,7 @@ function softenForestPatchEdges(tiles: Map<string, GeneratedTile>): void {
     });
   }
   for (const entry of additions) {
+    if (noForestKeys.has(entry.tile.key)) continue;
     setForestTile(entry.tile, Math.max(1, entry.amount));
   }
 }
@@ -854,7 +877,8 @@ function softenForestPatchEdges(tiles: Map<string, GeneratedTile>): void {
 function stampAmbientForestPatches(
   tiles: Map<string, GeneratedTile>,
   layout: RadialKothLayout,
-  seed: number
+  seed: number,
+  noForestKeys: ReadonlySet<string>
 ): void {
   for (const tile of tiles.values()) {
     if (tile.isMountain || tile.compute > 0 || tile.maxCompute > 0) continue;
@@ -877,6 +901,7 @@ function stampAmbientForestPatches(
       center.x,
       center.z,
       amountScale,
+      noForestKeys,
       seed + 2000 + tile.tx * 67 + tile.tz * 131
     );
   }
@@ -932,21 +957,35 @@ export function decorateRadialKothResources(
     const spawnAngle = getSectorAngle(playerIndex, layout);
     const spawn = polarToWorld(layout.spawnRadius, spawnAngle);
 
-    for (const dir of [-1, 1] as const) {
-      const forestAngle = spawnAngle + dir * layout.forestAngleOffset;
-      const fx = spawn.x + Math.cos(forestAngle) * layout.forestDistance;
-      const fz = spawn.z + Math.sin(forestAngle) * layout.forestDistance;
-      stampForestPatch(tiles, fx, fz, forestScale, seed + playerIndex * 101 + (dir < 0 ? 17 : 41));
-    }
-
     const computeAngle = spawnAngle + layout.computeSideSign * layout.computeAngleOffset;
     const computeX = spawn.x + Math.cos(computeAngle) * layout.computeDistance;
     const computeZ = spawn.z + Math.sin(computeAngle) * layout.computeDistance;
     stampComputeSite(tiles, computeX, computeZ, GAME_RULES.KOTH_PLAYER_COMPUTE);
   }
 
-  stampAmbientForestPatches(tiles, layout, seed);
-  softenForestPatchEdges(tiles);
+  const noForestNextToPlayerGpu = collectNoForestKeysAroundPlayerGpuMines(tiles);
+
+  for (let playerIndex = 0; playerIndex < layout.playerCount; playerIndex++) {
+    const spawnAngle = getSectorAngle(playerIndex, layout);
+    const spawn = polarToWorld(layout.spawnRadius, spawnAngle);
+
+    for (const dir of [-1, 1] as const) {
+      const forestAngle = spawnAngle + dir * layout.forestAngleOffset;
+      const fx = spawn.x + Math.cos(forestAngle) * layout.forestDistance;
+      const fz = spawn.z + Math.sin(forestAngle) * layout.forestDistance;
+      stampForestPatch(
+        tiles,
+        fx,
+        fz,
+        forestScale,
+        noForestNextToPlayerGpu,
+        seed + playerIndex * 101 + (dir < 0 ? 17 : 41)
+      );
+    }
+  }
+
+  stampAmbientForestPatches(tiles, layout, seed, noForestNextToPlayerGpu);
+  softenForestPatchEdges(tiles, noForestNextToPlayerGpu);
   stampCentralServer(tiles);
 }
 
