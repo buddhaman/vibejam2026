@@ -84,6 +84,7 @@ const VILLAGER_DROP_OFF_PADDING = GAME_RULES.TILE_SIZE * 0.35;
 const VILLAGER_CARRY_PER_UNIT = 12;
 const VILLAGER_PICKUP_MS = 1000;
 const VILLAGER_DROPOFF_MS = 1000;
+const VILLAGER_GATHER_RETARGET_RADIUS_TILES = 8;
 const CHAT_MAX_CHARS = 280;
 const ROUND_RESET_DELAY_MS = 9000;
 
@@ -874,6 +875,73 @@ export class BattleRoom extends Room<{ state: GameState }> {
     if (tile.material > 0) return CarriedResourceType.MATERIAL;
     if (tile.compute > 0) return CarriedResourceType.COMPUTE;
     return CarriedResourceType.NONE;
+  }
+
+  private getTileGatherDepositType(tile: TileData | null): CarriedResourceType {
+    if (!tile) return CarriedResourceType.NONE;
+    if (tile.maxMaterial > 0) return CarriedResourceType.MATERIAL;
+    if (tile.maxCompute > 0) return CarriedResourceType.COMPUTE;
+    return this.getTileGatherResourceType(tile);
+  }
+
+  private tileHasGatherResource(tile: TileData, resourceType: CarriedResourceType): boolean {
+    if (tile.isMountain || !tile.canWalk) return false;
+    if (resourceType === CarriedResourceType.MATERIAL) return tile.material > 0;
+    if (resourceType === CarriedResourceType.COMPUTE) return tile.compute > 0;
+    return false;
+  }
+
+  private findNearbyGatherTile(
+    originTile: TileData,
+    resourceType: CarriedResourceType,
+    maxRadiusTiles = VILLAGER_GATHER_RETARGET_RADIUS_TILES
+  ): TileData | null {
+    if (resourceType === CarriedResourceType.NONE) return null;
+
+    const tileCount = getWorldTileCount();
+    const originCenter = getTileCenter(originTile.tx, originTile.tz);
+    let best: TileData | null = null;
+    let bestDistance = Infinity;
+
+    for (let radius = 1; radius <= maxRadiusTiles; radius++) {
+      for (let dz = -radius; dz <= radius; dz++) {
+        for (let dx = -radius; dx <= radius; dx++) {
+          if (Math.max(Math.abs(dx), Math.abs(dz)) !== radius) continue;
+          const tx = originTile.tx + dx;
+          const tz = originTile.tz + dz;
+          if (tx < 0 || tz < 0 || tx >= tileCount || tz >= tileCount) continue;
+
+          const tile = this.tileData.get(getTileKey(tx, tz));
+          if (!tile || !this.tileHasGatherResource(tile, resourceType)) continue;
+
+          const center = getTileCenter(tx, tz);
+          const distance = Math.hypot(center.x - originCenter.x, center.z - originCenter.z);
+          if (distance < bestDistance) {
+            best = tile;
+            bestDistance = distance;
+          }
+        }
+      }
+      if (best) return best;
+    }
+
+    return null;
+  }
+
+  private retargetGatherToNearbyTile(blob: Blob, depletedTile: TileData | null): boolean {
+    const resourceType = this.getTileGatherDepositType(depletedTile);
+    if (!depletedTile || resourceType === CarriedResourceType.NONE) return false;
+
+    const nextTile = this.findNearbyGatherTile(depletedTile, resourceType);
+    if (!nextTile) return false;
+
+    blob.gatherTargetKey = nextTile.key;
+    blob.gatherTargetBuildingId = "";
+    blob.gatherPhase = BlobGatherPhase.MOVING_TO_RESOURCE;
+    blob.gatherTimerMs = 0;
+    const center = getTileCenter(nextTile.tx, nextTile.tz);
+    this.steerBlobTo(blob, center.x, center.z);
+    return true;
   }
 
   private getNearestDropoffBuilding(ownerId: string, x: number, y: number): Building | null {
@@ -1752,7 +1820,9 @@ export class BattleRoom extends Room<{ state: GameState }> {
         (!targetTile || this.getTileGatherResourceType(targetTile) === CarriedResourceType.NONE) &&
         (!targetBuilding || targetBuilding.buildingType !== BuildingType.FARM)
       ) {
-        this.clearBlobGatherTarget(blob);
+        if (!this.retargetGatherToNearbyTile(blob, targetTile)) {
+          this.clearBlobGatherTarget(blob);
+        }
       } else {
         blob.gatherPhase = BlobGatherPhase.MOVING_TO_RESOURCE;
       }
@@ -1820,6 +1890,7 @@ export class BattleRoom extends Room<{ state: GameState }> {
     }
 
     if (!targetTile || this.getTileGatherResourceType(targetTile) === CarriedResourceType.NONE) {
+      if (this.retargetGatherToNearbyTile(blob, targetTile)) return true;
       this.clearBlobGatherTarget(blob);
       return false;
     }
@@ -1870,7 +1941,9 @@ export class BattleRoom extends Room<{ state: GameState }> {
       blob.gatherPhase = BlobGatherPhase.RETURNING;
       if (dropoff) this.steerBlobTo(blob, dropoff.x, dropoff.y, true);
     } else if (this.getTileGatherResourceType(targetTile) === CarriedResourceType.NONE) {
-      this.clearBlobGatherTarget(blob);
+      if (!this.retargetGatherToNearbyTile(blob, targetTile)) {
+        this.clearBlobGatherTarget(blob);
+      }
     }
     return true;
   }
