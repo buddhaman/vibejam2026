@@ -5,11 +5,14 @@ import {
   BuildingType,
   SquadSpread,
   UnitType,
+  canAfford,
   getAllChunkKeys,
+  getBuildingRules,
   getChunkCoordsFromTile,
   getChunkKey,
   getChunkCoordsFromWorld,
   getChunkKeysInRadius,
+  getUnitTrainCost,
   getTileCoordsFromWorld,
   getTileKey,
   getWorldTileCount,
@@ -116,6 +119,7 @@ export class Game {
   > = [];
   private _roundResetCount = 0;
   private _streamPromise: Promise<void> | null = null;
+  private _warningHandler: ((text: string) => void) | null = null;
 
   /** Updated every frame by `render.ts` for zoom-dependent squad affordances. */
   private _orbitCameraDistance = 165;
@@ -991,6 +995,14 @@ export class Game {
     return ownerId === this.room.sessionId;
   }
 
+  public setWarningHandler(handler: ((text: string) => void) | null): void {
+    this._warningHandler = handler;
+  }
+
+  public warn(text: string): void {
+    this._warningHandler?.(text);
+  }
+
   public getFirstIdleAgentBlob(): BlobEntity | null {
     for (const entity of this.entities) {
       if (!(entity instanceof BlobEntity)) continue;
@@ -1136,17 +1148,34 @@ export class Game {
   }
 
   public sendGatherBuildingIntent(blobId: string, buildingId: string): void {
+    const occupant = this.getAgentPhaseForBuilding(buildingId);
+    if (occupant !== null) {
+      this.warn("Farm already has an agent");
+      return;
+    }
     this.room.send(MessageType.GATHER, { blobId, buildingId } satisfies GatherMessage);
     if (this.selectedEntityId === blobId) this.clearSelection();
   }
 
-  public sendBuildIntent(type: BuildMessage["type"], worldX: number, worldZ: number): void {
+  public sendBuildIntent(type: BuildMessage["type"], worldX: number, worldZ: number): boolean {
+    const cost = getBuildingRules(type).cost;
+    if (!canAfford(this.getMyResources(), cost)) {
+      this.warn("Not enough resources");
+      return false;
+    }
     const snapped = snapWorldToTileCenter(worldX, worldZ);
     this.room.send(MessageType.BUILD, { type, worldX: snapped.x, worldZ: snapped.z } satisfies BuildMessage);
+    return true;
   }
 
-  public sendTrainIntent(buildingId: string, unitType: UnitTypeValue): void {
+  public sendTrainIntent(buildingId: string, unitType: UnitTypeValue): boolean {
+    const trainCost = getUnitTrainCost(unitType);
+    if (!canAfford(this.getMyResources(), trainCost)) {
+      this.warn("Not enough resources");
+      return false;
+    }
     this.room.send(MessageType.TRAIN, { buildingId, unitType } satisfies TrainMessage);
+    return true;
   }
 
   public sendRallyIntent(buildingId: string, worldX: number, worldZ: number): void {

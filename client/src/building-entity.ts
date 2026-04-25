@@ -589,6 +589,7 @@ export class BuildingEntity extends Entity {
               id: `train:${unitType}`,
               label: unitRules.label,
               disabled: !canAfford(resources, trainCost),
+              danger: !canAfford(resources, trainCost),
               cost: trainCost,
               timeMs: trainTimeMs,
               queueCount: count,

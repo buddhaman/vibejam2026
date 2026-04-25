@@ -7,7 +7,7 @@
  * Ancient Greek marble aesthetics fused with post-AGI radiance.
  */
 
-import { BuildingType, formatResourceCost, getBuildingRules, type BuildingType as BuildingTypeValue, type ResourceCost } from "../../shared/game-rules.js";
+import { BuildingType, canAfford, formatResourceCost, getBuildingRules, type BuildingType as BuildingTypeValue, type ResourceCost } from "../../shared/game-rules.js";
 import { CarriedResourceType } from "../../shared/protocol.js";
 import type { SelectionInfo } from "./entity.js";
 import type { TileView } from "./terrain.js";
@@ -63,7 +63,7 @@ export type IdleAgentHudInfo = {
 export type AgentStatusLabel = {
   sx: number;
   sy: number;
-  text: string;
+  resourceType: number;
 };
 
 export type HudState = {
@@ -462,24 +462,12 @@ export function drawAgentStatusLabels(
   if (labels.length === 0) return;
   const ctx = canvas.getContext("2d")!;
   for (const label of labels) {
-    const text = label.text.toUpperCase();
-    const padX = 9;
-    const h = 20;
+    const h = 22;
     ctx.save();
-    ctx.font = "700 9px 'Cinzel', serif";
-    const w = Math.max(52, ctx.measureText(text).width + padX * 2);
+    const w = 22;
     const x = label.sx - w * 0.5;
     const y = label.sy - h * 0.5;
-    const accent =
-      label.text === "Idle"
-        ? "#D5A04A"
-        : label.text === "Harvesting" || label.text === "Gathering" || label.text === "Farming"
-          ? "#59B96A"
-          : label.text === "Hauling" || label.text === "Depositing" || label.text === "Carrying"
-            ? "#00D4FF"
-            : label.text === "Fighting"
-              ? "#FF6A6A"
-              : "rgba(242, 237, 215, 0.88)";
+    const accent = resourceColor(label.resourceType);
     ctx.fillStyle = "rgba(8, 16, 34, 0.86)";
     rr(ctx, x, y, w, h, 6);
     ctx.fill();
@@ -487,10 +475,15 @@ export function drawAgentStatusLabels(
     ctx.lineWidth = 1;
     rr(ctx, x, y, w, h, 6);
     ctx.stroke();
-    ctx.textAlign = "center";
-    ctx.textBaseline = "middle";
-    ctx.fillStyle = accent;
-    ctx.fillText(text, label.sx, label.sy + 0.5);
+    const icon = resourceIconImage(label.resourceType);
+    const drawn = drawResourceIcon(ctx, icon, label.sx - 7, label.sy - 7, 14);
+    if (!drawn) {
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.fillStyle = accent;
+      ctx.font = "700 12px system-ui, sans-serif";
+      ctx.fillText(resourceGlyph(label.resourceType), label.sx, label.sy + 0.5);
+    }
     ctx.restore();
   }
 }
@@ -757,7 +750,7 @@ function drawContextBottomBar(
 ) {
   let title = `${count} ${count === 1 ? "Squad" : "Squads"}`;
   let detail = "Tap units to select. Double tap buildable ground to construct.";
-  let actions: Array<{ label: string; sub?: string; disabled?: boolean; active?: boolean; kind: "selection" | "build"; build?: BuildingTypeValue }> = [];
+  let actions: Array<{ label: string; sub?: string; disabled?: boolean; danger?: boolean; active?: boolean; kind: "selection" | "build"; build?: BuildingTypeValue }> = [];
   const compactActions = hud.buildPanelOpen;
 
   if (hud.buildPanelOpen) {
@@ -766,6 +759,8 @@ function drawContextBottomBar(
     actions = BUILD_ITEMS.map((item) => ({
       label: item.label,
       sub: formatResourceCost(item.cost),
+      disabled: !canAfford(resources, item.cost),
+      danger: !canAfford(resources, item.cost),
       kind: "build" as const,
       build: item.type,
     }));
@@ -779,6 +774,7 @@ function drawContextBottomBar(
       label: action.label,
       sub: `${action.queueCount ? `x${action.queueCount} · ` : ""}${action.cost ? formatResourceCost(action.cost) : action.timeMs ? `${Math.ceil(action.timeMs / 1000)}s` : ""}`,
       disabled: action.disabled,
+      danger: action.danger,
       active: action.active,
       kind: "selection" as const,
     }));
@@ -869,20 +865,23 @@ function drawContextBottomBar(
     const item = action.kind === "build" && action.build !== undefined ? BUILD_ITEM_THEME[action.build] : null;
     const active = !!action.active || (action.kind === "build" && hud.activeBuildType === action.build);
     const disabled = !!action.disabled;
+    const danger = !!action.danger;
     ctx.save();
     ctx.fillStyle = disabled
-      ? "rgba(24, 26, 38, 0.92)"
+      ? danger
+        ? "rgba(72, 18, 18, 0.95)"
+        : "rgba(24, 26, 38, 0.92)"
       : active
         ? GOLD_BRIGHT
         : item?.color ?? "rgba(13, 32, 72, 0.95)";
-    ctx.shadowColor = disabled ? "transparent" : item?.glow ?? AZURE_GLOW;
+    ctx.shadowColor = disabled ? (danger ? CRIMSON_GLOW : "transparent") : item?.glow ?? AZURE_GLOW;
     ctx.shadowBlur = disabled ? 0 : 10;
     rr(ctx, rect.x, rect.y, rect.w, rect.h, 4); ctx.fill();
     ctx.shadowBlur = 0;
-    ctx.strokeStyle = active ? GOLD_BRIGHT : disabled ? "rgba(255,255,255,0.14)" : GOLD_DIM;
+    ctx.strokeStyle = active ? GOLD_BRIGHT : disabled ? (danger ? "rgba(255,120,120,0.72)" : "rgba(255,255,255,0.14)") : GOLD_DIM;
     ctx.lineWidth = active ? 2 : 1;
     rr(ctx, rect.x, rect.y, rect.w, rect.h, 4); ctx.stroke();
-    ctx.fillStyle = active ? LAPIS_DEEP : MARBLE_TEXT;
+    ctx.fillStyle = active ? LAPIS_DEEP : danger ? "#FFD0D0" : MARBLE_TEXT;
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
     if (action.kind === "build" && item) {
@@ -894,7 +893,7 @@ function drawContextBottomBar(
       ctx.fillText(clipText(ctx, action.label, rect.w - 8), rect.x + rect.w * 0.5, rect.y + 26);
       ctx.font = F_BODY_XS;
       ctx.letterSpacing = "0px";
-      ctx.fillStyle = active ? "rgba(8,16,34,0.74)" : MARBLE_DIM;
+      ctx.fillStyle = active ? "rgba(8,16,34,0.74)" : danger ? "rgba(255, 184, 184, 0.88)" : MARBLE_DIM;
       if (action.sub) ctx.fillText(clipText(ctx, action.sub, rect.w - 8), rect.x + rect.w * 0.5, rect.y + 40);
     } else {
       ctx.font = "700 9px 'Cinzel', serif";
@@ -902,7 +901,7 @@ function drawContextBottomBar(
       ctx.fillText(clipText(ctx, action.label, rect.w - 8), rect.x + rect.w * 0.5, rect.y + 20);
       ctx.font = F_BODY_XS;
       ctx.letterSpacing = "0px";
-      ctx.fillStyle = active ? "rgba(8,16,34,0.74)" : MARBLE_DIM;
+      ctx.fillStyle = active ? "rgba(8,16,34,0.74)" : danger ? "rgba(255, 184, 184, 0.88)" : MARBLE_DIM;
       if (action.sub) ctx.fillText(clipText(ctx, action.sub, rect.w - 8), rect.x + rect.w * 0.5, rect.y + 39);
     }
     ctx.restore();

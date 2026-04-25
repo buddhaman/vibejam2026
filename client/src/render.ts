@@ -20,7 +20,6 @@ import {
   getHudBottomInset,
   showWarning,
   type KothState,
-  type FarmEntry,
 } from "./hud.js";
 import type { SelectionInfo } from "./entity.js";
 import { getTerrainHeightAt, type TileView } from "./terrain.js";
@@ -36,24 +35,6 @@ const TILE_DEBUG_KEY = "Backquote"; // ` key toggles developer mode too
 const DEV_MODE_KEY = "KeyG";
 const DESKTOP_RENDER_HZ = 60;
 const MOBILE_RENDER_HZ = 30;
-
-function computeFarmEntries(game: Game): FarmEntry[] {
-  const mySessionId = game.room.sessionId;
-  const entries: FarmEntry[] = [];
-  for (const entity of game.entities) {
-    if (!(entity instanceof BuildingEntity)) continue;
-    if (entity.getBuildingType() !== BuildingType.FARM) continue;
-    if (entity.getOwnerId() !== mySessionId) continue;
-    const farmGrowth = entity.getFarmGrowth() ?? 0;
-    const agentPhase = game.getAgentPhaseForBuilding(entity.id);
-    entries.push({
-      farmGrowth,
-      hasAgent: agentPhase !== null,
-      isHarvesting: agentPhase === 2, // BlobGatherPhase.PICKING_UP
-    });
-  }
-  return entries;
-}
 
 export function startRender(game: Game) {
   const netPerf = attachDevNetworkPerf(game.room);
@@ -131,6 +112,7 @@ export function startRender(game: Game) {
 
   const hudCanvas = createHudCanvas();
   const hud = createHudState();
+  game.setWarningHandler((text) => showWarning(hud, text, performance.now() / 1000));
   const chatUi = createChatUi(game, getHudBottomInset);
   const DRAG_THRESHOLD = 8; // slightly larger on touch
   const DOUBLE_TAP_MS = 300;
@@ -287,9 +269,8 @@ export function startRender(game: Game) {
         const anchor = buildAnchorWorld;
         const tile = anchor ? game.getTileAtWorld(anchor.x, anchor.z) : null;
         if (!anchor || !tile?.canBuild) {
-          showWarning(hud, getBuildBlockedMessage(tile), performance.now() / 1000);
-        } else {
-          game.sendBuildIntent(buildType, anchor.x, anchor.z);
+          game.warn(getBuildBlockedMessage(tile));
+        } else if (game.sendBuildIntent(buildType, anchor.x, anchor.z)) {
           hud.buildPanelOpen = false;
           hud.activeBuildType = null;
           hud.buildAnchorTileKey = null;
@@ -330,7 +311,7 @@ export function startRender(game: Game) {
     if (rallyPlacementBuildingId && point) {
       const tile = game.getTileAtWorld(point.x, point.z);
       if (!tile?.canWalk) {
-        showWarning(hud, getMoveBlockedMessage(tile), performance.now() / 1000);
+        game.warn(getMoveBlockedMessage(tile));
         return;
       }
       game.sendRallyIntent(rallyPlacementBuildingId, point.x, point.z);
@@ -398,7 +379,7 @@ export function startRender(game: Game) {
         return;
       }
       if (!tile?.canWalk) {
-        showWarning(hud, getMoveBlockedMessage(tile), performance.now() / 1000);
+        game.warn(getMoveBlockedMessage(tile));
         return;
       }
       game.sendMoveIntent(point.x, point.z);
@@ -451,7 +432,7 @@ export function startRender(game: Game) {
     const snapped = snapWorldToTileCenter(point.x, point.z);
     const tile = game.getTileAtWorld(snapped.x, snapped.z);
     if (!tile?.canBuild) {
-      showWarning(hud, getBuildBlockedMessage(tile), performance.now() / 1000);
+      game.warn(getBuildBlockedMessage(tile));
       return true;
     }
     hud.buildPanelOpen = true;

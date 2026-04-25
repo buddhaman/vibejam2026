@@ -16,7 +16,7 @@ export type ProjectedWorldText = {
 export type ProjectedAgentStatusLabel = {
   sx: number;
   sy: number;
-  text: string;
+  resourceType: number;
 };
 
 export function projectFloatingResourceTexts(
@@ -56,8 +56,8 @@ export function projectAgentStatusLabels(
   for (const entity of game.entities) {
     if (!(entity instanceof BlobEntity)) continue;
     if (!entity.isOwnedByMe()) continue;
-    const text = entity.getAgentStatusLabel();
-    if (!text) continue;
+    const resourceType = entity.getAgentResourceMarker();
+    if (resourceType === null) continue;
     const center = entity.getPredictedWorldCenter();
     PROJECTED_TEXT_POS.set(center.x, getTerrainHeightAt(center.x, center.z, game.getTiles()) + 7.8, center.z);
     PROJECTED_TEXT_POS.project(camera);
@@ -65,7 +65,7 @@ export function projectAgentStatusLabels(
     const sx = (PROJECTED_TEXT_POS.x * 0.5 + 0.5) * canvas.width;
     const sy = (-PROJECTED_TEXT_POS.y * 0.5 + 0.5) * canvas.height;
     if (sx < -120 || sx > canvas.width + 120 || sy < -80 || sy > canvas.height + 80) continue;
-    projected.push({ sx, sy, text });
+    projected.push({ sx, sy, resourceType });
   }
   return projected;
 }

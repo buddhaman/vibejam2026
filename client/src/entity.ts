@@ -7,6 +7,7 @@ export type SelectionAction = {
   label: string;
   active?: boolean;
   disabled?: boolean;
+  danger?: boolean;
   cost?: ResourceCost;
   timeMs?: number;
   queueCount?: number;

@@ -2124,46 +2124,28 @@ export class BlobEntity extends Entity {
     return this.blob?.gatherPhase ?? 0;
   }
 
-  public getAgentStatusLabel(): string | null {
+  public getAgentResourceMarker(): number | null {
     if (!this.blob || this.blob.unitType !== UnitType.VILLAGER) return null;
-    if (this.blob.combatGroupId.length > 0) return "Fighting";
-    if (this.blob.gatherTargetBuildingId.length > 0) {
-      switch (this.blob.gatherPhase) {
-        case BlobGatherPhase.MOVING_TO_RESOURCE:
-          return "To Farm";
-        case BlobGatherPhase.PICKING_UP:
-          return "Harvesting";
-        case BlobGatherPhase.RETURNING:
-          return "Hauling";
-        case BlobGatherPhase.DROPPING_OFF:
-          return "Depositing";
-        default:
-          return "Farming";
-      }
+    if (this.blob.carriedAmount > 0 && this.blob.carriedResourceType !== CarriedResourceType.NONE) {
+      return this.blob.carriedResourceType;
     }
+    if (this.blob.gatherTargetBuildingId.length > 0) return CarriedResourceType.BIOMASS;
     if (this.blob.gatherTargetKey.length > 0) {
-      switch (this.blob.gatherPhase) {
-        case BlobGatherPhase.MOVING_TO_RESOURCE:
-          return "To Resource";
-        case BlobGatherPhase.PICKING_UP:
-          return "Gathering";
-        case BlobGatherPhase.RETURNING:
-          return "Hauling";
-        case BlobGatherPhase.DROPPING_OFF:
-          return "Depositing";
-        default:
-          return "Gathering";
-      }
+      const tile = this.game.getTiles().get(this.blob.gatherTargetKey);
+      if (tile?.maxCompute && tile.maxCompute > 0) return CarriedResourceType.COMPUTE;
+      return CarriedResourceType.MATERIAL;
     }
-    if (this.blob.carriedAmount > 0) return "Carrying";
-    const dx = this.blob.targetX - this.blob.x;
-    const dz = this.blob.targetY - this.blob.y;
-    if (Math.hypot(dx, dz) > 1.15) return "Moving";
-    return "Idle";
+    return null;
   }
 
   public isIdleAgentBlob(): boolean {
-    return this.getAgentStatusLabel() === "Idle";
+    if (!this.blob || this.blob.unitType !== UnitType.VILLAGER) return false;
+    if (this.blob.combatGroupId.length > 0) return false;
+    if (this.blob.gatherTargetKey.length > 0 || this.blob.gatherTargetBuildingId.length > 0) return false;
+    if (this.blob.carriedAmount > 0) return false;
+    const dx = this.blob.targetX - this.blob.x;
+    const dz = this.blob.targetY - this.blob.y;
+    return Math.hypot(dx, dz) <= 1.15;
   }
 
   public isStale(): boolean {
