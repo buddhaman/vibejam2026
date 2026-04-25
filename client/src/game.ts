@@ -43,7 +43,7 @@ import {
   type SystemNoticeMessage,
   type RoundResetMessage,
 } from "../../shared/protocol.js";
-import { BlobEntity } from "./blob-entity.js";
+import { BlobEntity, type UnitContinuitySeed } from "./blob-entity.js";
 import { BuildingEntity } from "./building-entity.js";
 import type { BeamDrawer } from "./beam-drawer.js";
 import type { BrightBeamDrawer } from "./bright-beam-drawer.js";
@@ -51,6 +51,7 @@ import type { RagdollFxSystem } from "./ragdoll-fx.js";
 import type { ArrowFxSystem } from "./arrow-fx.js";
 import type { BuildingDestructionFxSystem } from "./building-destruction-fx.js";
 import { type TileView } from "./terrain.js";
+import { UnitCollisionSystem } from "./unit-collision.js";
 
 export class Game {
   private static readonly FLOATING_RESOURCE_TEXT_LIFE = 1.15;
@@ -66,6 +67,7 @@ export class Game {
   private ragdollFx: RagdollFxSystem | null = null;
   private arrowFx: ArrowFxSystem | null = null;
   private buildingDestructionFx: BuildingDestructionFxSystem | null = null;
+  private readonly unitCollision = new UnitCollisionSystem();
   private _buildingSnapshots = new Map<string, {
     x: number;
     y: number;
@@ -804,6 +806,51 @@ export class Game {
   public getTilesOrdered(): TileView[] { return this._tilesOrdered; }
 
   public getTilesForChunk(key: string): TileView[] { return this._tilesByChunkKey.get(key) ?? []; }
+
+  public beginUnitCollisionFrame(): void {
+    this.unitCollision.beginFrame(this._tiles);
+  }
+
+  public getUnitCollisionSystem(): UnitCollisionSystem {
+    return this.unitCollision;
+  }
+
+  public consumeRebalancedUnitSeeds(params: {
+    receiverId: string;
+    ownerId: string;
+    unitType: UnitTypeValue;
+    x: number;
+    z: number;
+    count: number;
+  }): UnitContinuitySeed[] {
+    let remaining = Math.max(0, params.count);
+    if (remaining === 0) return [];
+    const donors = this.entities
+      .filter((entity): entity is BlobEntity => entity instanceof BlobEntity)
+      .filter((entity) =>
+        entity.id !== params.receiverId &&
+        entity.isStale() &&
+        entity.getOwnerId() === params.ownerId &&
+        entity.getUnitType() === params.unitType
+      )
+      .map((entity) => {
+        const center = entity.getPredictedWorldCenter();
+        return {
+          entity,
+          d2: (center.x - params.x) ** 2 + (center.z - params.z) ** 2,
+        };
+      })
+      .sort((a, b) => a.d2 - b.d2);
+
+    const seeds: UnitContinuitySeed[] = [];
+    for (const donor of donors) {
+      if (remaining <= 0) break;
+      const pulled = donor.entity.extractContinuityUnitSeeds(remaining, params.x, params.z);
+      seeds.push(...pulled);
+      remaining -= pulled.length;
+    }
+    return seeds;
+  }
 
   public getCarriedTreeCountByTile(): Map<string, number> {
     const counts = new Map<string, number>();

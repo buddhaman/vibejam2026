@@ -612,6 +612,7 @@ export function startRender(game: Game) {
     buildingDestructionFx.update(dt, game.getTiles());
     fogOfWar.update(game, now / 1000);
     const perf1 = performance.now();
+    game.beginUnitCollisionFrame();
     for (const entity of game.entities) entity.render(dt);
     const perf2 = performance.now();
     game.flushBeamDraws();

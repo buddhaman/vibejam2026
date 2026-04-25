@@ -103,6 +103,7 @@ const UNIT_BODY_COMBAT_MAX_SPEED = 4.8;
 const UNIT_BODY_COMBAT_CATCHUP_GAIN = 0;
 const UNIT_MAX_TURN_RATE = Math.PI * 5.2;
 const UNIT_COMBAT_TURN_RATE = Math.PI * 7.2;
+const UNIT_COLLISION_RADIUS_SCALE = 0.92;
 const FOOT_IDLE_SPEED = 0.01;
 const FOOT_STRIDE = GAME_RULES.UNIT_RADIUS * 1.05;
 const COMBAT_TARGET_STANDOFF = GAME_RULES.UNIT_RADIUS * 1.9;
@@ -115,8 +116,6 @@ const COMBAT_JITTER_ACCEL = GAME_RULES.UNIT_RADIUS * 7.2;
 const COMBAT_JITTER_DAMPING = 7.6;
 const COMBAT_JITTER_RETURN = 5.6;
 const COMBAT_CENTER_PULL = 2.2;
-const COMBAT_SEPARATION_RADIUS = GAME_RULES.UNIT_RADIUS * 6.1;
-const COMBAT_COLLISION_RADIUS = GAME_RULES.UNIT_RADIUS * 1.7;
 const HIP_WIDTH = GAME_RULES.UNIT_RADIUS * 0.32;
 const BODY_FLOAT = GAME_RULES.UNIT_HEIGHT * 0.6;
 const ARCHER_RELEASE_INTERVAL = 0.72;
@@ -167,6 +166,24 @@ type UnitState = {
   combatJitterVz: number;
   attackCooldown: number;
 };
+
+export type UnitContinuitySeed = Pick<
+  UnitState,
+  | "bodyX"
+  | "bodyZ"
+  | "lastBodyWorldX"
+  | "lastBodyWorldZ"
+  | "leftFootX"
+  | "leftFootZ"
+  | "rightFootX"
+  | "rightFootZ"
+  | "leftPlanted"
+  | "distanceWalked"
+  | "feetReady"
+  | "faceX"
+  | "faceZ"
+  | "attackCooldown"
+>;
 
 type BlobRenderView = {
   actionState: BlobActionStateValue;
@@ -245,6 +262,7 @@ export class BlobEntity extends Entity {
   private formationForwardX = 0;
   private formationForwardY = 1;
   private unitStates: UnitState[] = [];
+  private pendingUnitSeeds: UnitContinuitySeed[] = [];
   private needsUnitReassignment = false;
 
   // Target destination indicator
@@ -485,6 +503,18 @@ export class BlobEntity extends Entity {
     const wasEngaged = (previousSnapshot?.engagedTargetId ?? "").length > 0;
     const isEngaged = blob.engagedTargetId.length > 0;
     this.blob = blob;
+    if (previousSnapshot && blob.unitCount > previousCount) {
+      this.pendingUnitSeeds.push(
+        ...this.game.consumeRebalancedUnitSeeds({
+          receiverId: this.id,
+          ownerId: blob.ownerId,
+          unitType: blob.unitType,
+          x: blob.x,
+          z: blob.y,
+          count: blob.unitCount - previousCount,
+        })
+      );
+    }
     if (previousLayout && previousCount > blob.unitCount) {
       this.spawnDeathFxForLostUnits(previousLayout, previousCount, blob.unitCount, previousUnitType, previousOwnerId);
     }
@@ -772,37 +802,86 @@ export class BlobEntity extends Entity {
   private ensureUnitStateCount(count: number): void {
     const center = this.getPredictedCenter();
     while (this.unitStates.length < count) {
+      const seed = this.pendingUnitSeeds.shift();
+      const index = this.unitStates.length;
+      const unitRadius = this.getUnitCollisionRadius();
+      const spawnAngle = index * GOLDEN_ANGLE;
+      const spawnDistance = Math.max(unitRadius * 2.4, GAME_RULES.UNIT_SPACING * 0.7);
+      const spawn = seed
+        ? { x: seed.bodyX, z: seed.bodyZ }
+        : this.game.getUnitCollisionSystem().findNearestWalkablePoint(
+            center.x + Math.cos(spawnAngle) * spawnDistance,
+            center.y + Math.sin(spawnAngle) * spawnDistance,
+            unitRadius
+          );
       this.unitStates.push({
-        x: center.x,
-        z: center.y,
+        x: spawn.x,
+        z: spawn.z,
         vx: 0,
         vz: 0,
-        bodyX: center.x,
-        bodyZ: center.y,
-        lastBodyWorldX: center.x,
-        lastBodyWorldZ: center.y,
-        leftFootX: center.x,
-        leftFootZ: center.y,
-        rightFootX: center.x,
-        rightFootZ: center.y,
-        leftPlanted: Math.random() >= 0.5,
-        distanceWalked: Math.random() * FOOT_STRIDE,
-        bodyReady: false,
-        feetReady: false,
+        bodyX: seed?.bodyX ?? spawn.x,
+        bodyZ: seed?.bodyZ ?? spawn.z,
+        lastBodyWorldX: seed?.lastBodyWorldX ?? spawn.x,
+        lastBodyWorldZ: seed?.lastBodyWorldZ ?? spawn.z,
+        leftFootX: seed?.leftFootX ?? spawn.x,
+        leftFootZ: seed?.leftFootZ ?? spawn.z,
+        rightFootX: seed?.rightFootX ?? spawn.x,
+        rightFootZ: seed?.rightFootZ ?? spawn.z,
+        leftPlanted: seed?.leftPlanted ?? Math.random() >= 0.5,
+        distanceWalked: seed?.distanceWalked ?? Math.random() * FOOT_STRIDE,
+        bodyReady: true,
+        feetReady: seed?.feetReady ?? true,
         combatMode: "formation",
         combatTargetIndex: -1,
-        faceX: 0,
-        faceZ: 1,
+        faceX: seed?.faceX ?? 0,
+        faceZ: seed?.faceZ ?? 1,
         combatJitterX: 0,
         combatJitterZ: 0,
         combatJitterVx: 0,
         combatJitterVz: 0,
-        attackCooldown: Math.random() * ARCHER_RELEASE_INTERVAL,
+        attackCooldown: seed?.attackCooldown ?? Math.random() * ARCHER_RELEASE_INTERVAL,
       });
     }
     if (this.unitStates.length > count) {
       this.unitStates.length = count;
     }
+  }
+
+  public extractContinuityUnitSeeds(count: number, targetX: number, targetZ: number): UnitContinuitySeed[] {
+    const ranked = this.unitStates
+      .map((state, index) => ({
+        index,
+        d2: (state.bodyX - targetX) ** 2 + (state.bodyZ - targetZ) ** 2,
+      }))
+      .sort((a, b) => a.d2 - b.d2);
+    const chosen = ranked.slice(0, Math.max(0, count)).sort((a, b) => b.index - a.index);
+    const seeds: UnitContinuitySeed[] = [];
+    for (const item of chosen) {
+      const [state] = this.unitStates.splice(item.index, 1);
+      if (!state) continue;
+      seeds.push({
+        bodyX: state.bodyX,
+        bodyZ: state.bodyZ,
+        lastBodyWorldX: state.lastBodyWorldX,
+        lastBodyWorldZ: state.lastBodyWorldZ,
+        leftFootX: state.leftFootX,
+        leftFootZ: state.leftFootZ,
+        rightFootX: state.rightFootX,
+        rightFootZ: state.rightFootZ,
+        leftPlanted: state.leftPlanted,
+        distanceWalked: state.distanceWalked,
+        feetReady: state.feetReady,
+        faceX: state.faceX,
+        faceZ: state.faceZ,
+        attackCooldown: state.attackCooldown,
+      });
+    }
+    return seeds;
+  }
+
+  private getUnitCollisionRadius(): number {
+    const unitType = this.blob?.unitType ?? UnitType.WARBAND;
+    return Math.max(0.25, GAME_RULES.UNIT_RADIUS * getUnitRules(unitType).visualScale * UNIT_COLLISION_RADIUS_SCALE);
   }
 
   private getSlotPosition(index: number, count: number, major: number, minor: number) {
@@ -933,49 +1012,6 @@ export class BlobEntity extends Entity {
     return { x: state.faceX, z: state.faceZ };
   }
 
-  private resolveCombatCollisions(
-    desiredWorldX: number,
-    desiredWorldZ: number,
-    occupiedPositions: { x: number; z: number }[],
-    fallbackDirX: number,
-    fallbackDirZ: number
-  ): { x: number; z: number } {
-    let resolvedX = desiredWorldX;
-    let resolvedZ = desiredWorldZ;
-    const minDistance = COMBAT_COLLISION_RADIUS * 2;
-
-    for (let iter = 0; iter < 2; iter++) {
-      let moved = false;
-      for (const other of occupiedPositions) {
-        const dx = resolvedX - other.x;
-        const dz = resolvedZ - other.z;
-        const dist = Math.hypot(dx, dz);
-        if (dist >= minDistance) continue;
-
-        let pushX = dx;
-        let pushZ = dz;
-        let pushLen = dist;
-        if (pushLen <= 1e-4) {
-          pushX = fallbackDirX;
-          pushZ = fallbackDirZ;
-          pushLen = Math.hypot(pushX, pushZ);
-        }
-        if (pushLen <= 1e-4) {
-          pushX = 1;
-          pushZ = 0;
-          pushLen = 1;
-        }
-        const correction = minDistance - dist;
-        resolvedX += (pushX / pushLen) * correction;
-        resolvedZ += (pushZ / pushLen) * correction;
-        moved = true;
-      }
-      if (!moved) break;
-    }
-
-    return { x: resolvedX, z: resolvedZ };
-  }
-
   private getCombatPlan(
     unitIndex: number,
     unitCount: number,
@@ -983,9 +1019,7 @@ export class BlobEntity extends Entity {
     enemyPositions: { x: number; z: number }[],
     enemyLoads: number[],
     dt: number,
-    zone: { centerX: number; centerZ: number; radius: number },
-    plannedPositions: { x: number; z: number }[],
-    occupiedPositions: { x: number; z: number }[]
+    zone: { centerX: number; centerZ: number; radius: number }
   ): {
     mode: UnitCombatMode;
     desiredWorldX: number;
@@ -1087,16 +1121,6 @@ export class BlobEntity extends Entity {
     const centerDz = zone.centerZ - desiredWorldZ;
     desiredWorldX += centerDx * COMBAT_CENTER_PULL * dt;
     desiredWorldZ += centerDz * COMBAT_CENTER_PULL * dt;
-
-    const resolved = this.resolveCombatCollisions(
-      desiredWorldX,
-      desiredWorldZ,
-      occupiedPositions,
-      -dirX,
-      -dirZ
-    );
-    desiredWorldX = resolved.x;
-    desiredWorldZ = resolved.z;
 
     const finalDx = desiredWorldX - zone.centerX;
     const finalDz = desiredWorldZ - zone.centerZ;
@@ -1520,31 +1544,9 @@ export class BlobEntity extends Entity {
           ? [rangedAttackTarget.getWorldCenter()]
           : [];
     const enemyLoads = enemyUnitCount > 0 ? new Array(enemyUnitCount).fill(0) : [];
-    const plannedCombatPositions: { x: number; z: number }[] = [];
     const combatZone = combatContext
       ? this.getCombatZone(combatContext.center.x, combatContext.center.z, combatContext.totalUnitCount)
       : null;
-    const occupiedCombatPositions: { x: number; z: number }[] = [];
-    if (combatContext) {
-      const globalCombatRadius = combatZone
-        ? combatZone.radius + COMBAT_SEPARATION_RADIUS * 1.25
-        : Infinity;
-      for (const entity of this.game.entities) {
-        if (!(entity instanceof BlobEntity) || entity.id === this.id) continue;
-        if (!entity.isInCombat()) continue;
-        const otherCenter = entity.getPredictedWorldCenter();
-        if (
-          combatZone &&
-          Math.hypot(otherCenter.x - combatZone.centerX, otherCenter.z - combatZone.centerZ) > globalCombatRadius
-        ) {
-          continue;
-        }
-        const otherCount = entity.getUnitCount();
-        for (let index = 0; index < otherCount; index++) {
-          occupiedCombatPositions.push(entity.getRenderedUnitWorldPosition(index));
-        }
-      }
-    }
     this.selectionBeamDrawer.beginFrame();
     this.selectionBrightBeamDrawer.beginFrame();
     const useSelectionBeamDrawers = this.isSelected();
@@ -1589,9 +1591,7 @@ export class BlobEntity extends Entity {
               enemyPositions,
               enemyLoads,
               stepDt,
-              combatZone,
-              plannedCombatPositions,
-              occupiedCombatPositions
+              combatZone
             )
           : null;
       if (combatPlan) {
@@ -1600,9 +1600,6 @@ export class BlobEntity extends Entity {
         targetWorldX = combatPlan.targetWorldX;
         targetWorldZ = combatPlan.targetWorldZ;
         state.combatMode = combatPlan.mode;
-        const planned = { x: desiredWorldX, z: desiredWorldZ };
-        plannedCombatPositions.push(planned);
-        occupiedCombatPositions.push(planned);
       } else if (buildingAttackPlan) {
         desiredWorldX = buildingAttackPlan.desiredWorldX;
         desiredWorldZ = buildingAttackPlan.desiredWorldZ;
@@ -1641,6 +1638,21 @@ export class BlobEntity extends Entity {
           state.bodyZ += bodyDz * scale;
         }
       }
+
+      const collisionRadius = this.getUnitCollisionRadius();
+      const collisionFallbackX = desiredWorldX - state.bodyX || forwardX;
+      const collisionFallbackZ = desiredWorldZ - state.bodyZ || forwardZ;
+      const resolvedBody = this.game.getUnitCollisionSystem().resolveAndRegister({
+        x: state.bodyX,
+        z: state.bodyZ,
+        previousX: state.lastBodyWorldX,
+        previousZ: state.lastBodyWorldZ,
+        fallbackX: collisionFallbackX,
+        fallbackZ: collisionFallbackZ,
+        radius: collisionRadius,
+      });
+      state.bodyX = resolvedBody.x;
+      state.bodyZ = resolvedBody.z;
 
       const worldX = state.bodyX;
       const worldZ = state.bodyZ;
