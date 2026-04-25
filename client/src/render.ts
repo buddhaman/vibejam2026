@@ -18,6 +18,7 @@ import {
   getHudBottomInset,
   showWarning,
   type KothState,
+  type FarmEntry,
 } from "./hud.js";
 import type { SelectionInfo } from "./entity.js";
 import { getTerrainHeightAt, type TileView } from "./terrain.js";
@@ -33,6 +34,24 @@ const TILE_DEBUG_KEY = "Backquote"; // ` key toggles developer mode too
 const DEV_MODE_KEY = "KeyG";
 const DESKTOP_RENDER_HZ = 60;
 const MOBILE_RENDER_HZ = 30;
+
+function computeFarmEntries(game: Game): FarmEntry[] {
+  const mySessionId = game.room.sessionId;
+  const entries: FarmEntry[] = [];
+  for (const entity of game.entities) {
+    if (!(entity instanceof BuildingEntity)) continue;
+    if (entity.getBuildingType() !== BuildingType.FARM) continue;
+    if (entity.getOwnerId() !== mySessionId) continue;
+    const farmGrowth = entity.getFarmGrowth() ?? 0;
+    const agentPhase = game.getAgentPhaseForBuilding(entity.id);
+    entries.push({
+      farmGrowth,
+      hasAgent: agentPhase !== null,
+      isHarvesting: agentPhase === 2, // BlobGatherPhase.PICKING_UP
+    });
+  }
+  return entries;
+}
 
 export function startRender(game: Game) {
   const netPerf = attachDevNetworkPerf(game.room);
@@ -703,7 +722,7 @@ export function startRender(game: Game) {
       }
     }
 
-    drawHUD(hudCanvas, hud, myColor, mySquadCount, myResources, selectedInfo, selectedTile, now / 1000, kothState);
+    drawHUD(hudCanvas, hud, myColor, mySquadCount, myResources, selectedInfo, selectedTile, now / 1000, kothState, computeFarmEntries(game));
     drawFloatingResourceTexts(hudCanvas, projectFloatingResourceTexts(game, camera, hudCanvas, now / 1000));
     if (victoryState) drawVictoryOverlay(hudCanvas, victoryState, now / 1000, victoryState.startT);
 

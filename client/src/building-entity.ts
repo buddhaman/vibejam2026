@@ -213,6 +213,15 @@ export class BuildingEntity extends Entity {
     return this.building?.buildingType ?? null;
   }
 
+  public getFarmGrowth(): number | null {
+    if (this.building?.buildingType !== BuildingType.FARM) return null;
+    return this.building.farmGrowth;
+  }
+
+  public getOwnerId(): string {
+    return this.building?.ownerId ?? "";
+  }
+
   public override getSelectionOutlineObjects(): THREE.Object3D[] {
     return this.variant ? [this.variant.root] : [this.mesh];
   }
@@ -552,9 +561,20 @@ export class BuildingEntity extends Entity {
     const queueCount = this.building.productionQueue.length;
     const currentUnitRules = currentUnitType ? getUnitRules(currentUnitType) : null;
     const baseDetail = rules.detail;
+    let detail: string;
+    if (mine && this.building.buildingType === BuildingType.FARM) {
+      const growthPct = Math.round(this.building.farmGrowth * 100);
+      const agentPhase = this.game.getAgentPhaseForBuilding(this.id);
+      const agentStatus = agentPhase !== null
+        ? (agentPhase === 2 ? "· Harvesting" : "· Agent assigned")
+        : "· No agent";
+      detail = `${growthPct}% grown ${agentStatus}`;
+    } else {
+      detail = mine ? baseDetail : `Enemy · ${baseDetail.toLowerCase()}`;
+    }
     return {
       title: rules.label,
-      detail: mine ? baseDetail : `Enemy · ${baseDetail.toLowerCase()}`,
+      detail,
       health: this.building.health,
       maxHealth: rules.health,
       color: this.game.getPlayerColor(this.building.ownerId),

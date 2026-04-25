@@ -549,29 +549,41 @@ export class BattleRoom extends Room<{ state: GameState }> {
     return blob.radius + this.getAttackTargetRadius(target) + GAME_RULES.UNIT_RADIUS * 0.6;
   }
 
-  private getBlobAutoAggroAcquireRange(blob: Blob, target: Blob): number {
-    const baseRange = this.getBlobAttackRange(blob, { type: AttackTargetType.BLOB, entity: target });
+  private getBlobAutoAggroAcquireRange(blob: Blob, target: AttackableTarget): number {
+    const baseRange = this.getBlobAttackRange(blob, target);
     const rules = getUnitRules(blob.unitType);
     return baseRange + (rules.attackStyle === "ranged" ? ACTIVE_RANGED_AGGRO_BUFFER : ACTIVE_MELEE_AGGRO_BUFFER);
   }
 
-  private findBlobAutoAggroTarget(blob: Blob): Blob | null {
+  private findBlobAutoAggroTarget(blob: Blob): AttackableTarget | null {
     if (blob.aggroMode !== BlobAggroMode.ACTIVE) return null;
     if (this.blobHasCombatGroup(blob) || this.blobHasRetreatIntent(blob)) return null;
-    if (blob.gatherTargetKey.length > 0) return null;
+    if (blob.gatherTargetKey.length > 0 || blob.gatherTargetBuildingId.length > 0) return null;
     if (blob.attackTargetType !== AttackTargetType.NONE || blob.attackTargetId.length > 0) return null;
 
-    let bestTarget: Blob | null = null;
+    let bestTarget: AttackableTarget | null = null;
     let bestScore = Infinity;
     for (const other of this.state.blobs.values()) {
       if (other.id === blob.id || other.ownerId === blob.ownerId) continue;
+      const target = { type: AttackTargetType.BLOB, entity: other } as const;
       const distance = Math.hypot(blob.x - other.x, blob.y - other.y);
-      const acquireRange = this.getBlobAutoAggroAcquireRange(blob, other);
+      const acquireRange = this.getBlobAutoAggroAcquireRange(blob, target);
       if (distance > acquireRange) continue;
       const score = distance - Math.max(1, other.unitCount) * 0.015;
       if (score < bestScore) {
         bestScore = score;
-        bestTarget = other;
+        bestTarget = target;
+      }
+    }
+    for (const building of this.state.buildings.values()) {
+      if (building.ownerId === blob.ownerId || building.health <= 0) continue;
+      const target = { type: AttackTargetType.BUILDING, entity: building } as const;
+      const distance = Math.hypot(blob.x - building.x, blob.y - building.y);
+      const acquireRange = this.getBlobAutoAggroAcquireRange(blob, target);
+      if (distance > acquireRange) continue;
+      if (distance < bestScore) {
+        bestScore = distance;
+        bestTarget = target;
       }
     }
     return bestTarget;
@@ -580,8 +592,8 @@ export class BattleRoom extends Room<{ state: GameState }> {
   private tryAcquireAutoAggroTarget(blob: Blob): void {
     const target = this.findBlobAutoAggroTarget(blob);
     if (!target) return;
-    blob.attackTargetType = AttackTargetType.BLOB;
-    blob.attackTargetId = target.id;
+    blob.attackTargetType = target.type;
+    blob.attackTargetId = target.entity.id;
     this.combatRetreatTargets.delete(blob.id);
   }
 

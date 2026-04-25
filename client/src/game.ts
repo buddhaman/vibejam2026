@@ -986,6 +986,15 @@ export class Game {
     return ownerId === this.room.sessionId;
   }
 
+  public getAgentPhaseForBuilding(buildingId: string): number | null {
+    for (const e of this.entities) {
+      if (!(e instanceof BlobEntity)) continue;
+      if (!e.isOwnedByMe()) continue;
+      if (e.getGatherTargetBuildingId() === buildingId) return e.getGatherPhase();
+    }
+    return null;
+  }
+
   public setFogOfWarVisibilityQuery(query: ((x: number, z: number) => boolean) | null): void {
     this._fogOfWarVisibilityQuery = query;
   }

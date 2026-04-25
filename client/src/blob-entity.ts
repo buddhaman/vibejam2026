@@ -46,6 +46,7 @@ import {
   createDraggedTreeInstance,
   type CarriedResourceInstance,
 } from "./carried-resource-renderer.js";
+import { FarmingToolRenderer, type FarmingToolInstance } from "./farming-tool-renderer.js";
 import { ensureComputeSlots, ensureTreeSlots } from "./tile-visuals.js";
 import {
   createInstancedSelectionOutline,
@@ -233,6 +234,7 @@ export class BlobEntity extends Entity {
   /** Flat disc in the left hand of each warband soldier. */
   private unitShield!: THREE.InstancedMesh;
   private carriedResources!: CarriedResourceRenderer;
+  private farmingTools!: FarmingToolRenderer;
   private ovalFill!: THREE.Mesh<THREE.CircleGeometry, THREE.MeshBasicMaterial>;
   private ovalRing!: THREE.Mesh<THREE.RingGeometry, THREE.MeshBasicMaterial>;
   private attackRangeRing!: THREE.Mesh<THREE.RingGeometry, THREE.MeshBasicMaterial>;
@@ -291,6 +293,7 @@ export class BlobEntity extends Entity {
     this.game.scene.add(this.targetGroup);
     this.game.scene.add(this.targetConnector);
     this.game.scene.add(this.carriedResources.root);
+    this.game.scene.add(this.farmingTools.root);
   }
 
   public override destroy(): void {
@@ -299,6 +302,7 @@ export class BlobEntity extends Entity {
     this.game.scene.remove(this.targetGroup);
     this.game.scene.remove(this.targetConnector);
     this.game.scene.remove(this.carriedResources.root);
+    this.game.scene.remove(this.farmingTools.root);
     super.destroy();
   }
 
@@ -373,6 +377,7 @@ export class BlobEntity extends Entity {
     this.unitsCentaur = createSynthaurFallbackMesh(INSTANCE_CAP);
     this.unitsCentaur.renderOrder = 2;
     this.carriedResources = new CarriedResourceRenderer(INSTANCE_CAP);
+    this.farmingTools = new FarmingToolRenderer(INSTANCE_CAP);
     this.selectionOutlineRoot = new THREE.Group();
     this.selectionOutlineRoot.visible = false;
     this.rebuildSelectionOutlineMeshes();
@@ -538,15 +543,7 @@ export class BlobEntity extends Entity {
       this.spawnDeathFxForLostUnits(previousLayout, previousCount, blob.unitCount, previousUnitType, previousOwnerId);
     }
     if (!wasEngaged && !isEngaged && Math.hypot(blob.targetX - previousTargetX, blob.targetY - previousTargetY) > 0.25) {
-      const previousAxis = previousBlob
-        ? this.getCanonicalFormationAxis(previousBlob.targetX - previousBlob.x, previousBlob.targetY - previousBlob.y)
-        : null;
-      const nextAxis = this.getCanonicalFormationAxis(blob.targetX - blob.x, blob.targetY - blob.y);
       this.setFormationForward(blob.targetX - blob.x, blob.targetY - blob.y);
-      this.needsUnitReassignment =
-        !!previousAxis &&
-        !!nextAxis &&
-        (previousAxis.x * nextAxis.x + previousAxis.y * nextAxis.y) < 0.985;
     }
     if (this.visualX === null || this.visualY === null) {
       this.visualX = blob.x;
@@ -1567,6 +1564,12 @@ export class BlobEntity extends Entity {
           ? Math.min(n, Math.ceil(this.blob.carriedAmount / VILLAGER_CARRY_DISPLAY_CHUNK))
           : 0;
     const carriedResourceInstances: CarriedResourceInstance[] = [];
+    const farmingToolInstances: FarmingToolInstance[] = [];
+    const isFarmingActive =
+      this.blob.unitType === UnitType.VILLAGER &&
+      this.blob.gatherTargetBuildingId.length > 0 &&
+      this.blob.gatherPhase !== BlobGatherPhase.RETURNING &&
+      this.blob.gatherPhase !== BlobGatherPhase.DROPPING_OFF;
     for (let i = 0; i < n; i++) {
       const state = this.unitStates[i];
       let desiredWorldX = state.x;
@@ -1899,6 +1902,22 @@ export class BlobEntity extends Entity {
           inst.targetZ = dropoffTarget?.z;
         }
       }
+
+      // Farming tool (sword or bow) shown while assigned to a farm and not carrying home
+      if (isFarmingActive && state.bodyReady) {
+        farmingToolInstances.push({
+          kind: i % 2 === 0 ? "sword" : "bow",
+          worldX,
+          worldY: unitTerrainY,
+          worldZ,
+          sideX,
+          sideZ,
+          forwardX: stepForwardX,
+          forwardZ: stepForwardZ,
+          animT: this.combatAnimT + i * 0.72,
+          scale: unitRules.visualScale,
+        });
+      }
     }
     for (const m of this.unitsAgent) m.instanceMatrix.needsUpdate = true;
     for (const m of this.unitsArcher) m.instanceMatrix.needsUpdate = true;
@@ -1910,6 +1929,7 @@ export class BlobEntity extends Entity {
     this.selectionBrightBeamDrawer.finishFrame();
     this.syncSelectionOutlineMeshes(UNIT_SELECTION_OUTLINE_COLOR);
     this.carriedResources.sync(carriedResourceInstances);
+    this.farmingTools.sync(farmingToolInstances);
 
     this.updatePathLine(teamTint);
     this.updateTargetIndicator(Math.min(0.05, dt), terrainY);
@@ -2079,6 +2099,14 @@ export class BlobEntity extends Entity {
     return this.blob?.health ?? 0;
   }
 
+  public getGatherTargetBuildingId(): string {
+    return this.blob?.gatherTargetBuildingId ?? "";
+  }
+
+  public getGatherPhase(): number {
+    return this.blob?.gatherPhase ?? 0;
+  }
+
   public isStale(): boolean {
     return !this.game.room.state.blobs.get(this.id);
   }
@@ -2103,21 +2131,40 @@ export class BlobEntity extends Entity {
     const isGathering =
       this.blob.unitType === UnitType.VILLAGER &&
       (this.blob.gatherTargetKey.length > 0 || this.blob.gatherTargetBuildingId.length > 0);
+    const isFarmingBuilding = this.blob.unitType === UnitType.VILLAGER && this.blob.gatherTargetBuildingId.length > 0;
     const carryCap = this.blob.unitType === UnitType.VILLAGER ? Math.max(1, this.blob.unitCount) * VILLAGER_CARRY_DISPLAY_CHUNK : 0;
-    const statusSuffix =
-      this.blob.gatherPhase === BlobGatherPhase.PICKING_UP
+    let farmGrowthPct = -1;
+    if (isFarmingBuilding) {
+      const farmEntity = this.game.findEntity(this.blob.gatherTargetBuildingId);
+      if (farmEntity instanceof BuildingEntity) {
+        farmGrowthPct = Math.round((farmEntity.getFarmGrowth() ?? 0) * 100);
+      }
+    }
+    const statusSuffix = isFarmingBuilding
+      ? this.blob.gatherPhase === BlobGatherPhase.MOVING_TO_RESOURCE
+        ? " · En route to farm"
+        : this.blob.gatherPhase === BlobGatherPhase.PICKING_UP
+          ? " · Harvesting"
+          : this.blob.gatherPhase === BlobGatherPhase.RETURNING
+            ? ` · Hauling ${this.blob.carriedAmount}/${carryCap} bio`
+            : this.blob.gatherPhase === BlobGatherPhase.DROPPING_OFF
+              ? " · Depositing harvest"
+              : farmGrowthPct >= 0
+                ? ` · Farming · ${farmGrowthPct}% grown`
+                : " · Farming"
+      : this.blob.gatherPhase === BlobGatherPhase.PICKING_UP
         ? " · Picking up"
         : this.blob.gatherPhase === BlobGatherPhase.DROPPING_OFF
           ? " · Dropping off"
           : carryingMaterial
-            ? ` · Carry ${this.blob.carriedAmount}/${carryCap} material`
+            ? ` · Carry ${this.blob.carriedAmount}/${carryCap} mat`
             : carryingCompute
-              ? ` · Carry ${this.blob.carriedAmount}/${carryCap} compute`
+              ? ` · Carry ${this.blob.carriedAmount}/${carryCap} gpu`
               : carryingBiomass
-                ? ` · Carry ${this.blob.carriedAmount}/${carryCap} biomass`
-              : isGathering
-                ? " · Harvesting"
-                : "";
+                ? ` · Carry ${this.blob.carriedAmount}/${carryCap} bio`
+                : isGathering
+                  ? " · Harvesting"
+                  : "";
     const stanceActions = this.isMine()
       ? [
           { id: "aggro:active", label: "Active", active: isActive },
