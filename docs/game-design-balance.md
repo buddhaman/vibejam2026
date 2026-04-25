@@ -6,7 +6,7 @@ This document is the living balance reference for `shared/game-rules.ts`. The ga
 
 ## Economy Baseline
 
-Agents move at `12` world units per second, carry `12` resources, spend `1s` picking up, and spend `1s` dropping off. Ordered forest and GPU gathering uses the carry loop, so distance matters more than the raw legacy idle gather constants.
+Agents move at `12` world units per second, carry `12` resources per body, spend `1s` picking up, and spend `1s` dropping off. Ordered forest and GPU gathering uses the carry loop, so distance matters more than the raw legacy idle gather constants. The default agent blob cap is `3`, so a full small work crew carries `36`.
 
 Starting resources are `500 biomass`, `300 material`, and `200 compute`, with `3` starting agents and no free combat squads.
 
@@ -34,24 +34,26 @@ Biomass should be the spam throttle. Farms are reliable but not explosive, so pl
 
 ## Current Unit Targets
 
-Costs below are full-squad effective costs. The code charges one unit at a time using `ceil(fullCost / unitCount)`, so these values are chosen to divide cleanly where possible.
+Training still produces one body at a time. Nearby bodies merge into larger blobs up to `targetSize`, which is the practical squad size the player sees and commands.
 
-| Unit | Squad size | Effective cost | Release full-squad time | Role |
-| --- | ---: | ---: | ---: | --- |
-| Agent | 1 | `45B` | `10.1s` | Economy worker. Cheap enough to recover quickly. |
-| Hoplite | 12 | `120B / 36M / 72C` | `22.7s` | Durable melee line. Efficient in contact, but no longer the cheapest all-purpose answer. |
-| Archer | 10 | `80B / 20M / 50C` | `16.2s` | Fast ranged pressure. Lower durability, better tempo, needs protection. |
-| Synthaur | 6 | `126B / 30M / 96C` | `17.8s` | Fast shock unit. Expensive compute sink for raids, surrounds, and disengage plays. |
+The code charges one trained body at a time using `ceil(referenceCost / referenceCount)`. The reference count is tuned to make the full target blob cheap enough for fast-paced mass battles without making a single early body free.
+
+| Unit | Max blob | Per trained body | Full blob cost | Full blob train time | Role |
+| --- | ---: | ---: | ---: | ---: | --- |
+| Agent | 3 | `30B` | `90B` | `10.1s` | Economy crew. Small enough to split, large enough to reduce click clutter. |
+| Hoplite | 32 | `7B / 2M / 4C` | `224B / 64M / 128C` | `25.7s` | Big durable melee line. Cheap per body, but the full blob needs all three resources. |
+| Archer | 24 | `7B / 2M / 4C` | `168B / 48M / 96C` | `22.3s` | Large ranged pressure blob. Lower durability, strong tempo, needs protection. |
+| Synthaur | 14 | `14B / 3M / 10C` | `196B / 42M / 140C` | `24.3s` | Fast shock blob. Premium compute sink for raids, surrounds, and disengage plays. |
 
 ### Unit Combat Notes
 
-Hoplites were the dominant meta because their old effective cost was only about `84B / 36C` per full squad and required no material. They now pay across all three resources and have slightly lower DPS per body, while keeping enough health to be the best front line.
+Hoplites were the dominant meta because their old trained-body cost was too low and required no material. They now pay across all three resources and have slightly lower DPS per body, while larger `32`-body blobs deliver the desired mass-battle look.
 
 Archers are intentionally faster to field than hoplites. Their range was trimmed from `34` to `32` so ranged blobs still kite, but do not dominate every approach.
 
-Synthaurs train faster than before and hit slightly harder, but their compute cost is high. They should feel like a premium tempo unit, not the default army.
+Synthaurs train faster than before and hit slightly harder, but their compute cost is high. They should feel like a premium tempo blob, not the default army.
 
-Agents train faster and cost less biomass so players can recover after raids and support future agent-built construction.
+Agents merge into `3`-body work crews so economy management has fewer tiny blobs while preserving one-body-at-a-time training.
 
 ## Building And Defense Targets
 
@@ -71,9 +73,9 @@ This means a tower threatens small raids and punishes dives, but it should not e
 
 | Target | Approx health | Tower TTK |
 | --- | ---: | ---: |
-| Hoplite squad | `132` | `18.9s` |
-| Archer squad | `80` | `11.4s` |
-| Synthaur squad | `108` | `15.4s` |
+| Hoplite blob | `352` | `50.3s` |
+| Archer blob | `192` | `27.4s` |
+| Synthaur blob | `252` | `36.0s` |
 
 ## Debug Pacing
 

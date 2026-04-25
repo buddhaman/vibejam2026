@@ -413,7 +413,6 @@ export function drawHUD(
   selectedTile: TileView | null,
   t: number,
   koth: KothState | null,
-  farmEntries: FarmEntry[] = [],
 ) {
   const ctx = canvas.getContext("2d")!;
   const W = canvas.width;
@@ -437,7 +436,6 @@ export function drawHUD(
   drawMoveMarkers(ctx, hud, t);
   drawWarningToast(ctx, W, H, hud, t);
   drawContextBottomBar(ctx, W, H, myColor, mySquadCount, resources, hud._resourceBounce, selected, selectedTile, hud, t);
-  if (farmEntries.length > 0) drawFarmOverviewPanel(ctx, farmEntries, t);
   if (koth) drawKothPanel(ctx, W, H, koth, t);
 }
 
@@ -993,112 +991,78 @@ function drawMiniResource(
   ctx.restore();
 }
 
-// ─── Farm overview panel ──────────────────────────────────────────────────────
+// ─── Farm world labels ────────────────────────────────────────────────────────
 
-const FARM_PANEL_X = 10;
-const FARM_PANEL_TOP = 104; // below resource stack (y=10+86+8)
-const FARM_PILL_W = 118;
-const FARM_PILL_H = 38;
-const FARM_PILL_GAP = 4;
+export type FarmWorldLabel = {
+  sx: number;
+  sy: number;
+  farmGrowth: number;
+  hasAgent: boolean;
+  isHarvesting: boolean;
+};
 
-function drawFarmOverviewPanel(
-  ctx: CanvasRenderingContext2D,
-  farmEntries: FarmEntry[],
-  t: number
+export function drawFarmWorldLabels(
+  canvas: HTMLCanvasElement,
+  labels: FarmWorldLabel[]
 ): void {
-  ctx.save();
-  ctx.font = "700 7px 'Cinzel', serif";
-  ctx.fillStyle = GOLD_TEXT;
-  ctx.textBaseline = "middle";
-  ctx.letterSpacing = "2px";
-  ctx.fillText("FARMS", FARM_PANEL_X + 6, FARM_PANEL_TOP + 8);
-  ctx.restore();
-
-  for (let i = 0; i < farmEntries.length; i++) {
-    const entry = farmEntries[i]!;
-    const py = FARM_PANEL_TOP + 18 + i * (FARM_PILL_H + FARM_PILL_GAP);
-    drawFarmPill(ctx, FARM_PANEL_X, py, entry, i + 1, t);
+  if (labels.length === 0) return;
+  const ctx = canvas.getContext("2d")!;
+  for (const lbl of labels) {
+    drawFarmWorldLabel(ctx, lbl);
   }
 }
 
-function drawFarmPill(
-  ctx: CanvasRenderingContext2D,
-  x: number,
-  y: number,
-  entry: FarmEntry,
-  farmNum: number,
-  t: number
-): void {
-  const w = FARM_PILL_W;
-  const h = FARM_PILL_H;
+function drawFarmWorldLabel(ctx: CanvasRenderingContext2D, lbl: FarmWorldLabel): void {
+  const W = 78;
+  const H = 24;
+  const x = lbl.sx - W / 2;
+  const y = lbl.sy - H / 2;
 
   ctx.save();
 
-  // Background
-  ctx.fillStyle = "rgba(8, 16, 34, 0.86)";
-  rr(ctx, x, y, w, h, 4);
+  // Background pill
+  ctx.fillStyle = "rgba(8, 16, 34, 0.82)";
+  rr(ctx, x, y, W, H, 6);
   ctx.fill();
 
-  // Border — green glow when active, dim gold otherwise
-  ctx.strokeStyle = entry.hasAgent
-    ? `rgba(89, 185, 106, ${0.5 + 0.3 * Math.sin(t * 3.0 + farmNum)})`
-    : "rgba(201, 145, 30, 0.18)";
+  // Border — green if active, dim gold otherwise
+  ctx.strokeStyle = lbl.hasAgent
+    ? "rgba(89, 185, 106, 0.72)"
+    : "rgba(201, 145, 30, 0.22)";
   ctx.lineWidth = 1;
-  rr(ctx, x, y, w, h, 4);
+  rr(ctx, x, y, W, H, 6);
   ctx.stroke();
 
   // Growth ring
-  const ringX = x + 24;
-  const ringY = y + h / 2;
-  const ringR = 11;
-
+  const ringX = x + 14;
+  const ringY = y + H / 2;
+  const ringR = 8;
   ctx.beginPath();
   ctx.arc(ringX, ringY, ringR, 0, Math.PI * 2);
   ctx.strokeStyle = "rgba(255,255,255,0.08)";
-  ctx.lineWidth = 2.5;
+  ctx.lineWidth = 2;
   ctx.stroke();
 
-  if (entry.farmGrowth > 0.005) {
-    const arcEnd = -Math.PI / 2 + entry.farmGrowth * Math.PI * 2;
+  if (lbl.farmGrowth > 0.01) {
     ctx.beginPath();
-    ctx.arc(ringX, ringY, ringR, -Math.PI / 2, arcEnd);
-    ctx.strokeStyle = entry.farmGrowth >= 0.999 ? "#8BDB65" : "#59B96A";
-    ctx.lineWidth = 2.5;
+    ctx.arc(ringX, ringY, ringR, -Math.PI / 2, -Math.PI / 2 + lbl.farmGrowth * Math.PI * 2);
+    ctx.strokeStyle = lbl.farmGrowth >= 0.999 ? "#8BDB65" : "#59B96A";
+    ctx.lineWidth = 2;
     ctx.stroke();
   }
 
-  ctx.font = "600 7px 'Cinzel', serif";
-  ctx.fillStyle = MARBLE_DIM;
+  ctx.font = "600 6px 'Cinzel', serif";
+  ctx.fillStyle = "rgba(242,237,215,0.55)";
   ctx.textAlign = "center";
   ctx.textBaseline = "middle";
-  ctx.fillText(`${Math.round(entry.farmGrowth * 100)}`, ringX, ringY);
-
-  // Farm label
-  ctx.textAlign = "left";
-  ctx.font = "600 9px 'Cinzel', serif";
-  ctx.fillStyle = MARBLE_TEXT;
-  ctx.fillText(`Farm ${farmNum}`, x + 43, y + 12);
+  ctx.fillText(`${Math.round(lbl.farmGrowth * 100)}%`, ringX, ringY);
 
   // Status text
-  ctx.font = F_BODY_SM;
-  ctx.fillStyle = entry.hasAgent ? "#59B96A" : MARBLE_DIM;
-  const status = !entry.hasAgent
-    ? "Idle"
-    : entry.isHarvesting
-      ? "Harvesting"
-      : "Farming";
-  ctx.fillText(status, x + 43, y + 26);
-
-  // Agent dot
-  const dotX = x + w - 12;
-  const dotY = y + h / 2;
-  const pulse = entry.hasAgent ? 0.55 + 0.45 * Math.sin(t * 3.0 + farmNum * 1.3) : 1;
-  ctx.beginPath();
-  ctx.arc(dotX, dotY, 4.5, 0, Math.PI * 2);
-  ctx.fillStyle = entry.hasAgent
-    ? `rgba(89, 185, 106, ${pulse})`
-    : "rgba(255,255,255,0.12)";
-  ctx.fill();
+  ctx.font = "600 8px 'Cinzel', serif";
+  ctx.textAlign = "left";
+  ctx.fillStyle = lbl.hasAgent ? "#59B96A" : "rgba(242,237,215,0.45)";
+  const status = !lbl.hasAgent ? "Idle" : lbl.isHarvesting ? "Harvesting" : "Farming";
+  ctx.fillText(status, x + 28, ringY);
 
   ctx.restore();
 }
