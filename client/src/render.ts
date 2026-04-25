@@ -29,6 +29,7 @@ import { drawDevOverlay } from "./dev-overlay.js";
 import { CAMERA_CONFIG, createInitialFrameStats, createRenderWorld } from "./render-world.js";
 import { projectAgentStatusLabels, projectFloatingResourceTexts } from "./world-text.js";
 import { createChatUi } from "./chat-ui.js";
+import { OnboardingController } from "./onboarding.js";
 
 const WALKABILITY_DEBUG_KEY = "KeyV";
 const TILE_DEBUG_KEY = "Backquote"; // ` key toggles developer mode too
@@ -112,6 +113,7 @@ export function startRender(game: Game) {
 
   const hudCanvas = createHudCanvas();
   const hud = createHudState();
+  const onboarding = new OnboardingController();
   game.setWarningHandler((text) => showWarning(hud, text, performance.now() / 1000));
   const chatUi = createChatUi(game, getHudBottomInset);
   const DRAG_THRESHOLD = 8; // slightly larger on touch
@@ -547,6 +549,12 @@ export function startRender(game: Game) {
       // All fingers lifted — fire tap only if this was a clean single-finger tap
       if (!hadTwoFingers && singleDrag && !singleDrag.moved) {
         const now = performance.now();
+        if (onboarding.handlePointerUp(ev.clientX, ev.clientY)) {
+          lastTap = null;
+          singleDrag = null;
+          hadTwoFingers = false;
+          return;
+        }
         if (hitTestContextBar(ev.clientX, ev.clientY)) {
           if (ev.button !== 2) handleClick(ev.clientX, ev.clientY);
           lastTap = null;
@@ -732,6 +740,7 @@ export function startRender(game: Game) {
     drawAgentStatusLabels(hudCanvas, projectAgentStatusLabels(game, camera, hudCanvas));
     drawFloatingResourceTexts(hudCanvas, projectFloatingResourceTexts(game, camera, hudCanvas, now / 1000));
     if (victoryState) drawVictoryOverlay(hudCanvas, victoryState, now / 1000, victoryState.startT);
+    onboarding.draw(hudCanvas, game, camera, now / 1000, { buildPanelOpen: hud.buildPanelOpen });
 
     if (devModeVisible) {
       const ctx = hudCanvas.getContext("2d")!;

@@ -76,14 +76,14 @@ function buildHoeMeshes(cap: number): THREE.InstancedMesh[] {
     new THREE.MeshStandardMaterial({ color: 0x7a5c2e, roughness: 0.88, metalness: 0.04 })
   );
   const bladeMat = applyStylizedShading(
-    new THREE.MeshStandardMaterial({ color: 0x6e7880, roughness: 0.42, metalness: 0.72 })
+    new THREE.MeshStandardMaterial({ color: 0xa8c4cc, roughness: 0.28, metalness: 0.82 })
   );
   // Handle: pivot at y=0 (hands), extends y=-0.9 to y=+0.9
-  const handleGeom = new THREE.CylinderGeometry(0.028, 0.040, 1.80, 6);
+  const handleGeom = new THREE.CylinderGeometry(0.055, 0.072, 1.80, 6);
   // Blade: flat wide rectangle at bottom of handle (y≈-0.9), perpendicular to handle
-  const bladeGeom = new THREE.BoxGeometry(0.44, 0.060, 0.095).translate(0, -0.91, 0.0);
+  const bladeGeom = new THREE.BoxGeometry(0.62, 0.090, 0.14).translate(0, -0.91, 0.0);
   // Ferrule: small metal band connecting blade to handle
-  const ferruleGeom = new THREE.CylinderGeometry(0.046, 0.046, 0.072, 6).translate(0, -0.85, 0);
+  const ferruleGeom = new THREE.CylinderGeometry(0.082, 0.082, 0.10, 6).translate(0, -0.85, 0);
   return [
     makeMesh(handleGeom, handleMat, cap),
     makeMesh(ferruleGeom, bladeMat, cap),

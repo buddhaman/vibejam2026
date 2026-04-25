@@ -3,10 +3,12 @@ import type { Room } from "@colyseus/sdk";
 import type { Entity } from "./entity.js";
 import {
   BuildingType,
+  GAME_RULES,
   SquadSpread,
   UnitType,
   canAfford,
   getAllChunkKeys,
+  getTileCenter,
   getBuildingRules,
   getChunkCoordsFromTile,
   getChunkKey,
@@ -435,7 +437,7 @@ export class Game {
     return entity instanceof BlobEntity ? entity : null;
   }
 
-  private findBuildingEntity(id: string): BuildingEntity | null {
+  public findBuildingEntity(id: string): BuildingEntity | null {
     const entity = this.findEntity(id);
     return entity instanceof BuildingEntity ? entity : null;
   }
@@ -988,6 +990,105 @@ export class Game {
       if (candidate.ownerId !== this.room.sessionId || candidate.buildingType !== BuildingType.TOWN_CENTER) return;
       best = { x: candidate.x ?? 0, z: candidate.y ?? 0 };
     });
+    return best;
+  }
+
+  public getMyTownCenterEntity(): BuildingEntity | null {
+    return this.getMyBuildingsOfType(BuildingType.TOWN_CENTER)[0] ?? null;
+  }
+
+  public getMyBuildingsOfType(buildingType: BuildingTypeValue): BuildingEntity[] {
+    return this.entities.filter((entity): entity is BuildingEntity =>
+      entity instanceof BuildingEntity &&
+      entity.isOwnedByMe() &&
+      entity.mesh.visible &&
+      entity.getBuildingType() === buildingType
+    );
+  }
+
+  public getMyUnitCount(unitType: UnitTypeValue): number {
+    let count = 0;
+    for (const entity of this.entities) {
+      if (!(entity instanceof BlobEntity)) continue;
+      if (!entity.isOwnedByMe() || entity.getUnitType() !== unitType) continue;
+      count += entity.getUnitCount();
+    }
+    return count;
+  }
+
+  public hasQueuedUnit(unitType: UnitTypeValue): boolean {
+    let queued = false;
+    this.room.state.buildings.forEach((raw) => {
+      const building = raw as { ownerId?: string; productionQueue?: ArrayLike<UnitTypeValue> };
+      if (building.ownerId !== this.room.sessionId) return;
+      const queue = Array.from(building.productionQueue ?? []);
+      if (queue.some((candidate) => candidate === unitType)) queued = true;
+    });
+    return queued;
+  }
+
+  public hasMyGathererForBuilding(buildingId: string): boolean {
+    for (const entity of this.entities) {
+      if (!(entity instanceof BlobEntity)) continue;
+      if (!entity.isOwnedByMe()) continue;
+      if (entity.getGatherTargetBuildingId() === buildingId) return true;
+    }
+    return false;
+  }
+
+  public hasMyGathererForResource(resourceType: CarriedResourceType): boolean {
+    for (const entity of this.entities) {
+      if (!(entity instanceof BlobEntity)) continue;
+      if (!entity.isOwnedByMe() || entity.getUnitType() !== UnitType.VILLAGER) continue;
+      if (entity.getCarriedResourceType() === resourceType) return true;
+      const tile = this._tiles.get(entity.getGatherTargetKey());
+      if (resourceType === CarriedResourceType.COMPUTE && tile && tile.maxCompute > 0) return true;
+      if (resourceType === CarriedResourceType.MATERIAL && tile && tile.maxMaterial > 0) return true;
+    }
+    return false;
+  }
+
+  public getNearestResourceTile(
+    resourceType: CarriedResourceType,
+    from: { x: number; z: number } = this.getMyTownCenterPosition() ?? { x: 0, z: 0 }
+  ): TileView | null {
+    let best: TileView | null = null;
+    let bestDistance = Infinity;
+    for (const tile of this._tiles.values()) {
+      const hasResource =
+        resourceType === CarriedResourceType.COMPUTE
+          ? tile.compute > 0 || tile.maxCompute > 0
+          : resourceType === CarriedResourceType.MATERIAL
+            ? tile.material > 0 || tile.maxMaterial > 0
+            : false;
+      if (!hasResource) continue;
+      const center = getTileCenter(tile.tx, tile.tz);
+      const distance = Math.hypot(center.x - from.x, center.z - from.z);
+      if (distance < bestDistance) {
+        best = tile;
+        bestDistance = distance;
+      }
+    }
+    return best;
+  }
+
+  public getRecommendedBuildTileNear(
+    from: { x: number; z: number } = this.getMyTownCenterPosition() ?? { x: 0, z: 0 }
+  ): TileView | null {
+    let best: TileView | null = null;
+    let bestScore = Infinity;
+    for (const tile of this._tiles.values()) {
+      if (!tile.canBuild) continue;
+      const center = getTileCenter(tile.tx, tile.tz);
+      const distance = Math.hypot(center.x - from.x, center.z - from.z);
+      if (distance < GAME_RULES.TILE_SIZE * 1.6 || distance > GAME_RULES.TILE_SIZE * 7.5) continue;
+      const eastBias = Math.max(0, from.x - center.x) * 0.08;
+      const score = Math.abs(distance - GAME_RULES.TILE_SIZE * 3.2) + eastBias;
+      if (score < bestScore) {
+        best = tile;
+        bestScore = score;
+      }
+    }
     return best;
   }
 

@@ -412,6 +412,12 @@ export function hitTestContextBuildAction(x: number, y: number, buildOpen: boole
   return null;
 }
 
+export function getContextBuildActionScreenRect(buildType: BuildingTypeValue): Rect | null {
+  const rects = contextActionRects(window.innerWidth, window.innerHeight, BUILD_ITEMS.length, true);
+  const index = BUILD_ITEMS.findIndex((item) => item.type === buildType);
+  return index >= 0 ? rects[index] ?? null : null;
+}
+
 export function getHudBottomInset(): number {
   return bottomBarRect(window.innerWidth, window.innerHeight).h;
 }

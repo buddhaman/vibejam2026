@@ -1568,8 +1568,7 @@ export class BlobEntity extends Entity {
     const isFarmingActive =
       this.blob.unitType === UnitType.VILLAGER &&
       this.blob.gatherTargetBuildingId.length > 0 &&
-      this.blob.gatherPhase !== BlobGatherPhase.RETURNING &&
-      this.blob.gatherPhase !== BlobGatherPhase.DROPPING_OFF;
+      this.blob.gatherPhase === BlobGatherPhase.PICKING_UP;
     let farmWanderCenterX = 0;
     let farmWanderCenterZ = 0;
     if (isFarmingActive) {
@@ -1622,8 +1621,8 @@ export class BlobEntity extends Entity {
         state.combatJitterVz = 0;
         if (isFarmingActive && farmWanderCenterX !== 0) {
           // Each unit wanders around the farm on a slow Lissajous path, offset by unit index
-          const wanderT = this.combatAnimT * 0.38 + i * ((Math.PI * 2) / Math.max(1, n));
-          const wanderR = GAME_RULES.TILE_SIZE * 0.30;
+          const wanderT = this.combatAnimT * 0.75 + i * ((Math.PI * 2) / Math.max(1, n));
+          const wanderR = GAME_RULES.TILE_SIZE * 0.42;
           desiredWorldX = farmWanderCenterX + Math.cos(wanderT * 1.11) * wanderR;
           desiredWorldZ = farmWanderCenterZ + Math.sin(wanderT * 0.89) * wanderR;
         }
@@ -2118,6 +2117,14 @@ export class BlobEntity extends Entity {
 
   public getGatherTargetBuildingId(): string {
     return this.blob?.gatherTargetBuildingId ?? "";
+  }
+
+  public getGatherTargetKey(): string {
+    return this.blob?.gatherTargetKey ?? "";
+  }
+
+  public getCarriedResourceType(): number {
+    return this.blob?.carriedResourceType ?? CarriedResourceType.NONE;
   }
 
   public getGatherPhase(): number {

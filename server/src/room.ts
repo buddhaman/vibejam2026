@@ -2114,35 +2114,25 @@ export class BattleRoom extends Room<{ state: GameState }> {
     if (removed.size > 0) this.clearDeadBlobTargetRefs(removed);
   }
 
-  private findBuildingSpawnPoint(building: Building): { x: number; y: number } {
+  private findBuildingSpawnPoint(building: Building, preferredTarget?: { x: number; y: number } | null): { x: number; y: number } {
     const rules = getBuildingRules(building.buildingType);
-    const candidates: Array<{ x: number; y: number }> = [];
     const baseRadius = GAME_RULES.TILE_SIZE * 1.08;
-    const preferred = rules.trainSpawnOffsetX >= 0 ? 0 : Math.PI;
-    for (let ring = 0; ring < 3; ring++) {
-      const radius = baseRadius + ring * GAME_RULES.TILE_SIZE * 0.55;
-      const steps = 8 + ring * 4;
-      for (let i = 0; i < steps; i++) {
-        const angle = preferred + (i * Math.PI * 2) / steps;
-        candidates.push({
-          x: clamp(building.x + Math.cos(angle) * radius, CONFIG.WORLD_MIN, CONFIG.WORLD_MAX),
-          y: clamp(building.y + Math.sin(angle) * radius, CONFIG.WORLD_MIN, CONFIG.WORLD_MAX),
-        });
-      }
+    let preferred = rules.trainSpawnOffsetX >= 0 ? 0 : Math.PI;
+    if (preferredTarget) {
+      const dx = preferredTarget.x - building.x;
+      const dy = preferredTarget.y - building.y;
+      if (Math.hypot(dx, dy) > 1e-4) preferred = Math.atan2(dy, dx);
     }
-
-    let best: { x: number; y: number; score: number } | null = null;
-    for (const candidate of candidates) {
-      const point = this.findNearestOpenSpawnPoint(candidate.x, candidate.y, 1);
-      if (!point) continue;
-      const score = Math.hypot(point.x - candidate.x, point.y - candidate.y) + Math.hypot(point.x - building.x, point.y - building.y) * 0.08;
-      if (!best || score < best.score) best = { ...point, score };
-    }
+    const exact = {
+      x: clamp(building.x + Math.cos(preferred) * baseRadius, CONFIG.WORLD_MIN, CONFIG.WORLD_MAX),
+      y: clamp(building.y + Math.sin(preferred) * baseRadius, CONFIG.WORLD_MIN, CONFIG.WORLD_MAX),
+    };
     return (
-      best ??
+      this.findNearestOpenSpawnPoint(exact.x, exact.y, 1) ??
+      this.findNearestWalkablePoint(exact.x, exact.y, 1) ??
       this.findNearestOpenSpawnPoint(building.x, building.y, 6) ??
       this.findNearestWalkablePoint(building.x, building.y, 6) ??
-      { x: building.x, y: building.y }
+      exact
     );
   }
 
@@ -2158,7 +2148,7 @@ export class BattleRoom extends Room<{ state: GameState }> {
   }
 
   private initializeBuildingSpawnTarget(building: Building): void {
-    const spawn = this.findBuildingSpawnPoint(building);
+    const spawn = this.findBuildingSpawnPoint(building, null);
     const target = this.getDefaultBuildingSpawnTarget(building, spawn);
     building.rallyX = target.x;
     building.rallyY = target.y;
@@ -2363,7 +2353,11 @@ export class BattleRoom extends Room<{ state: GameState }> {
 
   private spawnProducedUnit(building: Building, unitType: UnitType, unitCountOverride?: number) {
     const unitRules = getUnitRules(unitType);
-    const spawn = this.findBuildingSpawnPoint(building);
+    const preferredTarget =
+      building.rallySet > 0
+        ? { x: building.rallyX, y: building.rallyY }
+        : { x: building.rallyX, y: building.rallyY };
+    const spawn = this.findBuildingSpawnPoint(building, preferredTarget);
     const rally = this.getBuildingRallyPoint(building, spawn);
     const producedCount = unitCountOverride ?? unitRules.unitCount;
 
