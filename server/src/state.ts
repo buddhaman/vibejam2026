@@ -64,6 +64,9 @@ export class Building extends Schema {
   @type("number") productionProgressMs: number = 0;
   @type("number") farmGrowth: number = 0;
   @type("string") attackTargetBlobId: string = "";
+  @type("uint8") rallySet: number = 0;
+  @type("number") rallyX: number = 0;
+  @type("number") rallyY: number = 0;
 }
 
 /** Authoritative world — gameplay truth only. Tiles are streamed separately. */

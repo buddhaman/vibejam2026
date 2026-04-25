@@ -98,6 +98,9 @@ export class BuildingEntity extends Entity {
     productionProgressMs: number;
     farmGrowth: number;
     attackTargetBlobId: string;
+    rallySet: number;
+    rallyX: number;
+    rallyY: number;
   } | null = null;
 
   public constructor(game: Game, id: string) {
@@ -142,11 +145,17 @@ export class BuildingEntity extends Entity {
     productionProgressMs: number;
     farmGrowth: number;
     attackTargetBlobId: string;
+    rallySet?: number;
+    rallyX?: number;
+    rallyY?: number;
   }): void {
     const firstSync = this.building === null;
     this.building = {
       ...building,
       productionQueue: Array.from(building.productionQueue ?? []),
+      rallySet: building.rallySet ?? 0,
+      rallyX: building.rallyX ?? 0,
+      rallyY: building.rallyY ?? 0,
     };
 
     // Defer the clone to the next event-loop turn so it doesn’t stall the Colyseus schema callback.
@@ -469,7 +478,8 @@ export class BuildingEntity extends Entity {
       maxHealth: rules.health,
       color: this.game.getPlayerColor(this.building.ownerId),
       actions: mine
-        ? rules.producibleUnits.map((unitType) => {
+        ? [
+            ...rules.producibleUnits.map((unitType) => {
             const unitRules = getUnitRules(unitType);
             const trainCost = getUnitTrainCost(unitType);
             const trainTimeMs = getEffectiveUnitTrainTimeMs(unitType);
@@ -482,7 +492,15 @@ export class BuildingEntity extends Entity {
               timeMs: trainTimeMs,
               queueCount: count,
             };
-          })
+          }),
+          ...(rules.producibleUnits.length > 0
+            ? [{
+                id: "set_rally",
+                label: "Rally",
+                active: this.building.rallySet > 0,
+              }]
+            : []),
+        ]
         : [],
       production:
         mine && currentUnitRules

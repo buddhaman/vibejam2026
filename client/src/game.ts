@@ -42,6 +42,7 @@ import {
   type SetNameMessage,
   type SystemNoticeMessage,
   type RoundResetMessage,
+  type SetRallyMessage,
 } from "../../shared/protocol.js";
 import { BlobEntity, type UnitContinuitySeed } from "./blob-entity.js";
 import { BuildingEntity } from "./building-entity.js";
@@ -498,6 +499,9 @@ export class Game {
         productionProgressMs: number;
         farmGrowth: number;
         attackTargetBlobId: string;
+        rallySet?: number;
+        rallyX?: number;
+        rallyY?: number;
       });
       this._buildingSnapshots.set(id as string, {
         x: building.x,
@@ -1103,6 +1107,10 @@ export class Game {
 
   public sendTrainIntent(buildingId: string, unitType: UnitTypeValue): void {
     this.room.send(MessageType.TRAIN, { buildingId, unitType } satisfies TrainMessage);
+  }
+
+  public sendRallyIntent(buildingId: string, worldX: number, worldZ: number): void {
+    this.room.send(MessageType.SET_RALLY, { buildingId, worldX, worldZ } satisfies SetRallyMessage);
   }
 
   public sendSquadSpreadIntent(blobId: string, spread: SquadSpreadValue): void {

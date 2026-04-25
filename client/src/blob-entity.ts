@@ -1650,6 +1650,7 @@ export class BlobEntity extends Entity {
         fallbackX: collisionFallbackX,
         fallbackZ: collisionFallbackZ,
         radius: collisionRadius,
+        resolveUnits: state.combatMode !== "formation",
       });
       state.bodyX = resolvedBody.x;
       state.bodyZ = resolvedBody.z;

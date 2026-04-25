@@ -49,6 +49,7 @@ import {
   type IntentMessage,
   type BuildMessage,
   type PathMessage,
+  type SetRallyMessage,
   type SquadSpreadMessage,
   type TrainMessage,
   type TileData,
@@ -402,6 +403,24 @@ export class BattleRoom extends Room<{ state: GameState }> {
 
       spendPlayerResources(player, trainCost);
       building.productionQueue.push(msg.unitType);
+    });
+
+    this.onMessage(MessageType.SET_RALLY, (client, raw) => {
+      const msg = raw as SetRallyMessage;
+      if (
+        typeof msg?.buildingId !== "string" ||
+        typeof msg.worldX !== "number" ||
+        typeof msg.worldZ !== "number"
+      ) {
+        return;
+      }
+      const building = this.state.buildings.get(msg.buildingId);
+      if (!building || building.ownerId !== client.sessionId) return;
+      const rally = this.findNearestWalkablePoint(msg.worldX, msg.worldZ, 4);
+      if (!rally) return;
+      building.rallySet = 1;
+      building.rallyX = rally.x;
+      building.rallyY = rally.y;
     });
   }
 
@@ -1877,6 +1896,7 @@ export class BattleRoom extends Room<{ state: GameState }> {
   private canMergeBlobInto(receiver: Blob, donor: Blob): boolean {
     if (receiver.id === donor.id) return false;
     if (receiver.ownerId !== donor.ownerId || receiver.unitType !== donor.unitType) return false;
+    if (this.blobPaths.has(receiver.id) || this.blobPaths.has(donor.id)) return false;
     const balanceRules = getUnitBalanceRules(receiver.unitType);
     if (receiver.unitCount >= balanceRules.targetSize) return false;
     if (Math.hypot(receiver.x - donor.x, receiver.y - donor.y) > balanceRules.mergeDistance) return false;
@@ -1971,24 +1991,45 @@ export class BattleRoom extends Room<{ state: GameState }> {
     if (removed.size > 0) this.clearDeadBlobTargetRefs(removed);
   }
 
-  private findNearbyFriendlyBlobForTrainedUnits(ownerId: string, unitType: UnitType, x: number, y: number): Blob | null {
-    const balanceRules = getUnitBalanceRules(unitType);
-    let best: Blob | null = null;
-    let bestDistance = Infinity;
-
-    for (const blob of this.state.blobs.values()) {
-      if (blob.ownerId !== ownerId || blob.unitType !== unitType) continue;
-      if (blob.unitCount >= balanceRules.targetSize) continue;
-      if (this.isBlobHeavilyEngaged(blob)) continue;
-      const distance = Math.hypot(blob.x - x, blob.y - y);
-      if (distance > balanceRules.mergeDistance) continue;
-      if (distance < bestDistance) {
-        best = blob;
-        bestDistance = distance;
+  private findBuildingSpawnPoint(building: Building): { x: number; y: number } {
+    const rules = getBuildingRules(building.buildingType);
+    const candidates: Array<{ x: number; y: number }> = [];
+    const baseRadius = GAME_RULES.TILE_SIZE * 1.08;
+    const preferred = rules.trainSpawnOffsetX >= 0 ? 0 : Math.PI;
+    for (let ring = 0; ring < 3; ring++) {
+      const radius = baseRadius + ring * GAME_RULES.TILE_SIZE * 0.55;
+      const steps = 8 + ring * 4;
+      for (let i = 0; i < steps; i++) {
+        const angle = preferred + (i * Math.PI * 2) / steps;
+        candidates.push({
+          x: clamp(building.x + Math.cos(angle) * radius, CONFIG.WORLD_MIN, CONFIG.WORLD_MAX),
+          y: clamp(building.y + Math.sin(angle) * radius, CONFIG.WORLD_MIN, CONFIG.WORLD_MAX),
+        });
       }
     }
 
-    return best;
+    let best: { x: number; y: number; score: number } | null = null;
+    for (const candidate of candidates) {
+      const point = this.findNearestWalkablePoint(candidate.x, candidate.y, 1);
+      if (!point) continue;
+      const score = Math.hypot(point.x - candidate.x, point.y - candidate.y) + Math.hypot(point.x - building.x, point.y - building.y) * 0.08;
+      if (!best || score < best.score) best = { ...point, score };
+    }
+    return best ?? { x: building.x, y: building.y };
+  }
+
+  private getBuildingRallyPoint(building: Building, spawn: { x: number; y: number }): { x: number; y: number } {
+    if (building.rallySet) {
+      return this.findNearestWalkablePoint(building.rallyX, building.rallyY, 4) ?? spawn;
+    }
+    const dx = spawn.x - building.x;
+    const dy = spawn.y - building.y;
+    const len = Math.hypot(dx, dy) || 1;
+    const target = {
+      x: building.x + (dx / len) * GAME_RULES.TILE_SIZE * 2.2,
+      y: building.y + (dy / len) * GAME_RULES.TILE_SIZE * 2.2,
+    };
+    return this.findNearestWalkablePoint(target.x, target.y, 4) ?? spawn;
   }
 
   private resolveBlobCombat(dt: number): void {
@@ -2179,26 +2220,18 @@ export class BattleRoom extends Room<{ state: GameState }> {
   }
 
   private spawnProducedUnit(building: Building, unitType: UnitType, unitCountOverride?: number) {
-    const buildingRules = getBuildingRules(building.buildingType);
     const unitRules = getUnitRules(unitType);
-    const spawnX = clamp(building.x + buildingRules.trainSpawnOffsetX, CONFIG.WORLD_MIN, CONFIG.WORLD_MAX);
-    const spawnY = clamp(building.y, CONFIG.WORLD_MIN, CONFIG.WORLD_MAX);
+    const spawn = this.findBuildingSpawnPoint(building);
+    const rally = this.getBuildingRallyPoint(building, spawn);
     const producedCount = unitCountOverride ?? unitRules.unitCount;
-    const nearby = this.findNearbyFriendlyBlobForTrainedUnits(building.ownerId, unitType, spawnX, spawnY);
-    if (nearby) {
-      nearby.unitCount += producedCount;
-      nearby.health += getBlobMaxHealth(unitType, producedCount);
-      this.refreshBlobDerived(nearby);
-      return;
-    }
 
     const blob = new Blob();
     blob.id = makeId("blob");
     blob.ownerId = building.ownerId;
-    blob.x = spawnX;
-    blob.y = spawnY;
-    blob.targetX = blob.x;
-    blob.targetY = blob.y;
+    blob.x = spawn.x;
+    blob.y = spawn.y;
+    blob.targetX = rally.x;
+    blob.targetY = rally.y;
     blob.vx = 0;
     blob.vy = 0;
     blob.unitCount = producedCount;
@@ -2207,22 +2240,26 @@ export class BattleRoom extends Room<{ state: GameState }> {
     blob.health = getBlobMaxHealth(unitType, producedCount);
     blob.unitType = unitType;
     this.state.blobs.set(blob.id, blob);
+    if (Math.hypot(rally.x - spawn.x, rally.y - spawn.y) > CONFIG.BLOB_STOP_EPSILON) {
+      this.setBlobDestination(blob, rally.x, rally.y, this.getBlobOwnerClient(blob), { snapToNearestWalkable: true });
+    }
   }
 
   private spawnStartingBlob(building: Building, unitType: UnitType, unitCount: number, slotIndex: number): void {
     if (unitCount <= 0) return;
     const angle = slotIndex * (Math.PI * 0.5) - Math.PI * 0.75;
     const radius = GAME_RULES.TILE_SIZE * 1.65;
-    const spawnX = clamp(building.x + Math.cos(angle) * radius, CONFIG.WORLD_MIN, CONFIG.WORLD_MAX);
-    const spawnY = clamp(building.y + Math.sin(angle) * radius, CONFIG.WORLD_MIN, CONFIG.WORLD_MAX);
+    const rawX = clamp(building.x + Math.cos(angle) * radius, CONFIG.WORLD_MIN, CONFIG.WORLD_MAX);
+    const rawY = clamp(building.y + Math.sin(angle) * radius, CONFIG.WORLD_MIN, CONFIG.WORLD_MAX);
+    const spawn = this.findNearestWalkablePoint(rawX, rawY, 4) ?? { x: rawX, y: rawY };
 
     const blob = new Blob();
     blob.id = makeId("blob");
     blob.ownerId = building.ownerId;
-    blob.x = spawnX;
-    blob.y = spawnY;
-    blob.targetX = spawnX;
-    blob.targetY = spawnY;
+    blob.x = spawn.x;
+    blob.y = spawn.y;
+    blob.targetX = spawn.x;
+    blob.targetY = spawn.y;
     blob.vx = 0;
     blob.vy = 0;
     blob.unitCount = unitCount;

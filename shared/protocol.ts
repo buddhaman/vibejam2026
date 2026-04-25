@@ -8,6 +8,7 @@ export const MessageType = {
   GATHER:        "gather",
   BUILD:         "build",
   TRAIN:         "train",
+  SET_RALLY:     "set_rally",
   SQUAD_SPREAD:  "squad_spread",
   BLOB_AGGRO:    "blob_aggro",
   SET_NAME:      "set_name",
@@ -95,6 +96,12 @@ export type BuildMessage = {
 export type TrainMessage = {
   buildingId: string;
   unitType: UnitType;
+};
+
+export type SetRallyMessage = {
+  buildingId: string;
+  worldX: number;
+  worldZ: number;
 };
 
 export type SquadSpreadMessage = {

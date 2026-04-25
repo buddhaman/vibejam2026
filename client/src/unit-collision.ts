@@ -17,13 +17,15 @@ export type UnitCollisionQuery = Circle & {
   previousZ: number;
   fallbackX: number;
   fallbackZ: number;
+  resolveUnits?: boolean;
 };
 
 const CELL_SIZE = GAME_RULES.UNIT_RADIUS * 4.2;
 const TILE_PADDING = 0.015;
 const UNIT_PADDING = 0.018;
 const TILE_ITERATIONS = 3;
-const UNIT_ITERATIONS = 2;
+const UNIT_ITERATIONS = 1;
+const UNIT_CORRECTION = 0.55;
 
 function cellKey(cx: number, cz: number): string {
   return `${cx},${cz}`;
@@ -50,7 +52,9 @@ export class UnitCollisionSystem {
     const radius = Math.max(0.05, query.radius);
 
     ({ x, z } = this.resolveTiles(x, z, radius));
-    ({ x, z } = this.resolveUnits(x, z, radius, query));
+    if (query.resolveUnits !== false) {
+      ({ x, z } = this.resolveUnits(x, z, radius, query));
+    }
     ({ x, z } = this.resolveTiles(x, z, radius));
 
     const circle = { x, z, radius };
@@ -195,7 +199,7 @@ export class UnitCollisionSystem {
                 dist = 1;
               }
             }
-            const correction = minDist - dist;
+            const correction = (minDist - dist) * UNIT_CORRECTION;
             x += (dx / dist) * correction;
             z += (dz / dist) * correction;
             moved = true;

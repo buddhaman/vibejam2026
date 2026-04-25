@@ -116,6 +116,7 @@ export function startRender(game: Game) {
   const DOUBLE_TAP_PX = 16;
   let lastTap: { x: number; y: number; t: number } | null = null;
   let buildAnchorWorld: { x: number; z: number } | null = null;
+  let rallyPlacementBuildingId: string | null = null;
 
   // ── Victory state ────────────────────────────────────────────────────────────
   let victoryState: { name: string; color: number; isMe: boolean; startT: number } | null = null;
@@ -242,6 +243,7 @@ export function startRender(game: Game) {
       hud.activeBuildType = null;
       hud.buildAnchorTileKey = null;
       buildAnchorWorld = null;
+      rallyPlacementBuildingId = null;
       ghostMesh.visible = false;
       game.clearSelection();
       return;
@@ -275,6 +277,15 @@ export function startRender(game: Game) {
 
     const selectionAction = hitTestContextSelectionAction(clientX, clientY, selectedInfo);
     if (selectionAction !== null) {
+      if (selectionAction === "set_rally") {
+        const selected = game.getSelectedEntity();
+        rallyPlacementBuildingId = selected instanceof BuildingEntity && selected.isOwnedByMe()
+          ? selected.id
+          : null;
+        hud.buildPanelOpen = false;
+        hud.activeBuildType = null;
+        return;
+      }
       game.runSelectionAction(selectionAction);
       return;
     }
@@ -284,6 +295,17 @@ export function startRender(game: Game) {
     ndcV.set((clientX / window.innerWidth) * 2 - 1, -(clientY / window.innerHeight) * 2 + 1);
     raycaster.setFromCamera(ndcV, camera);
     const point = groundHit(clientX, clientY);
+    if (rallyPlacementBuildingId && point) {
+      const tile = game.getTileAtWorld(point.x, point.z);
+      if (!tile?.canWalk) {
+        showWarning(hud, getMoveBlockedMessage(tile), performance.now() / 1000);
+        return;
+      }
+      game.sendRallyIntent(rallyPlacementBuildingId, point.x, point.z);
+      addMoveMarker(hud, clientX, clientY, performance.now() / 1000);
+      rallyPlacementBuildingId = null;
+      return;
+    }
     const ownedPointPicked = point ? game.pickOwnedEntity(point.x, point.z) : null;
     const pointPicked = point ? game.pickEntityAtWorldPoint(point.x, point.z) : null;
     const selectedBlob = game.getSelectedMyBlobEntity();
