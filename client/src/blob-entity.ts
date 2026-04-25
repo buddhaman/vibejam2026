@@ -764,16 +764,14 @@ export class BlobEntity extends Entity {
     this.formationForwardY = axis.y;
   }
 
-  private reassignUnitStates(count: number, layout: { major: number; minor: number; heading: number }): void {
+  private reassignUnitStates(
+    count: number,
+    layout: { x: number; y: number; major: number; minor: number; heading: number; stretchX: number; stretchZ: number }
+  ): void {
     if (count <= 1) return;
 
-    const rightX = Math.cos(layout.heading);
-    const rightZ = -Math.sin(layout.heading);
-    const forwardX = Math.sin(layout.heading);
-    const forwardZ = Math.cos(layout.heading);
-
     const slots = Array.from({ length: count }, (_, index) => {
-      const slot = this.getSlotPosition(index, count, layout.major, layout.minor);
+      const slot = this.getSlotWorldOffset(index, count, layout);
       return { index, front: slot.z, side: slot.x };
     }).sort((a, b) => {
       if (Math.abs(b.front - a.front) > 1e-4) return b.front - a.front;
@@ -785,8 +783,8 @@ export class BlobEntity extends Entity {
       const pz = state.bodyReady ? state.bodyZ - layout.y : state.z - layout.y;
       return {
         state,
-        front: px * forwardX + pz * forwardZ,
-        side: px * rightX + pz * rightZ,
+        front: pz,
+        side: px,
       };
     }).sort((a, b) => {
       if (Math.abs(b.front - a.front) > 1e-4) return b.front - a.front;
@@ -885,29 +883,44 @@ export class BlobEntity extends Entity {
     return Math.max(0.25, GAME_RULES.UNIT_RADIUS * getUnitRules(unitType).visualScale * UNIT_COLLISION_RADIUS_SCALE);
   }
 
-  private getSlotPosition(index: number, count: number, major: number, minor: number) {
+  private getSlotPosition(index: number, count: number) {
     const t = (index + 0.5) / Math.max(1, count);
     const radius = Math.sqrt(t);
     const angle = index * GOLDEN_ANGLE;
     return {
-      x: Math.cos(angle) * radius * minor * FORMATION_SLOT_SCALE,
-      z: Math.sin(angle) * radius * major * FORMATION_SLOT_SCALE,
+      x: Math.cos(angle) * radius * FORMATION_SLOT_SCALE,
+      z: Math.sin(angle) * radius * FORMATION_SLOT_SCALE,
     };
   }
 
-  private stepUnits(_dt: number, layout: { x: number; y: number; major: number; minor: number; heading: number }): void {
+  private getSlotWorldOffset(
+    index: number,
+    count: number,
+    layout: { major: number; minor: number; stretchX: number; stretchZ: number }
+  ): { x: number; z: number } {
+    const base = this.getSlotPosition(index, count);
+    const dirLen = Math.hypot(layout.stretchX, layout.stretchZ);
+    const dirX = dirLen > 1e-4 ? layout.stretchX / dirLen : 0;
+    const dirZ = dirLen > 1e-4 ? layout.stretchZ / dirLen : 1;
+    const sideX = -dirZ;
+    const sideZ = dirX;
+    const along = base.x * dirX + base.z * dirZ;
+    const side = base.x * sideX + base.z * sideZ;
+    return {
+      x: dirX * along * layout.major + sideX * side * layout.minor,
+      z: dirZ * along * layout.major + sideZ * side * layout.minor,
+    };
+  }
+
+  private stepUnits(_dt: number, layout: { x: number; y: number; major: number; minor: number; heading: number; stretchX: number; stretchZ: number }): void {
     const count = Math.min(this.blob?.unitCount ?? 0, INSTANCE_CAP);
     this.ensureUnitStateCount(count);
-    const rightX = Math.cos(layout.heading);
-    const rightZ = -Math.sin(layout.heading);
-    const forwardX = Math.sin(layout.heading);
-    const forwardZ = Math.cos(layout.heading);
 
     for (let i = 0; i < count; i++) {
       const state = this.unitStates[i];
-      const slot = this.getSlotPosition(i, count, layout.major, layout.minor);
-      const slotWorldX = layout.x + rightX * slot.x + forwardX * slot.z;
-      const slotWorldZ = layout.y + rightZ * slot.x + forwardZ * slot.z;
+      const slot = this.getSlotWorldOffset(i, count, layout);
+      const slotWorldX = layout.x + slot.x;
+      const slotWorldZ = layout.y + slot.z;
       state.x = slotWorldX;
       state.z = slotWorldZ;
       state.vx = 0;
@@ -1264,7 +1277,7 @@ export class BlobEntity extends Entity {
 
   private getLayout() {
     if (!this.blob) {
-      return { x: 0, y: 0, major: 1, minor: 1, heading: this.heading };
+      return { x: 0, y: 0, major: 1, minor: 1, heading: this.heading, stretchX: 0, stretchZ: 1 };
     }
 
     const center = this.getPredictedCenter();
@@ -1282,6 +1295,8 @@ export class BlobEntity extends Entity {
         major: axes.major,
         minor: axes.minor,
         heading: this.heading,
+        stretchX: this.formationForwardX,
+        stretchZ: this.formationForwardY,
       };
     }
 
@@ -1301,7 +1316,15 @@ export class BlobEntity extends Entity {
     this.heading = Math.atan2(this.formationForwardX, this.formationForwardY);
 
     const { major, minor } = getSquadAxes(this.blob.unitCount, moveDistance, speed, this.blob.spread);
-    return { x: center.x, y: center.y, major, minor, heading: this.heading };
+    return {
+      x: center.x,
+      y: center.y,
+      major,
+      minor,
+      heading: this.heading,
+      stretchX: this.formationForwardX,
+      stretchZ: this.formationForwardY,
+    };
   }
 
   public getRadius(): number {
@@ -1316,14 +1339,8 @@ export class BlobEntity extends Entity {
   public getApproxUnitWorldPosition(rank: number): { x: number; z: number } {
     const layout = this.getLayout();
     const count = Math.max(1, Math.min(this.blob?.unitCount ?? 1, INSTANCE_CAP));
-    const slot = this.getSlotPosition(Math.max(0, Math.min(rank, count - 1)), count, layout.major, layout.minor);
-    const rightX = Math.cos(layout.heading);
-    const rightZ = -Math.sin(layout.heading);
-    const forwardX = Math.sin(layout.heading);
-    const forwardZ = Math.cos(layout.heading);
-    const px = rightX * slot.x + forwardX * slot.z;
-    const pz = rightZ * slot.x + forwardZ * slot.z;
-    return { x: layout.x + px, z: layout.y + pz };
+    const slot = this.getSlotWorldOffset(Math.max(0, Math.min(rank, count - 1)), count, layout);
+    return { x: layout.x + slot.x, z: layout.y + slot.z };
   }
 
   public render(dt: number): void {
@@ -1641,6 +1658,19 @@ export class BlobEntity extends Entity {
       }
 
       const collisionRadius = this.getUnitCollisionRadius();
+      const currentTile = this.game.getTileAtWorld(state.bodyX, state.bodyZ);
+      if (!currentTile?.canWalk) {
+        const unstuck = this.game.getUnitCollisionSystem().findNearestWalkablePoint(
+          desiredWorldX,
+          desiredWorldZ,
+          collisionRadius
+        );
+        state.bodyX = unstuck.x;
+        state.bodyZ = unstuck.z;
+        state.lastBodyWorldX = unstuck.x;
+        state.lastBodyWorldZ = unstuck.z;
+        state.feetReady = false;
+      }
       const collisionFallbackX = desiredWorldX - state.bodyX || forwardX;
       const collisionFallbackZ = desiredWorldZ - state.bodyZ || forwardZ;
       const resolvedBody = this.game.getUnitCollisionSystem().resolveAndRegister({
@@ -2040,8 +2070,8 @@ export class BlobEntity extends Entity {
     const visualSpec = getUnitVisualSpec(this.blob.unitType);
     minor *= visualSpec.containsEllipseMult;
     major *= visualSpec.containsEllipseMult;
-    const cos = Math.cos(-this.heading);
-    const sin = Math.sin(-this.heading);
+    const cos = Math.cos(-layout.heading);
+    const sin = Math.sin(-layout.heading);
     const lx = (x - layout.x) * cos - (z - layout.y) * sin;
     const lz = (x - layout.x) * sin + (z - layout.y) * cos;
     return (lx * lx) / (minor * minor) + (lz * lz) / (major * major) <= 1.05;

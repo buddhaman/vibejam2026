@@ -5,7 +5,8 @@ import type { Game } from "./game.js";
 const FOW_TEXTURE_SIZE = 512;
 const FOW_PLANE_MARGIN = 220;
 const FOW_PLANE_Y = 18;
-const FOW_FOG_COLOR = new THREE.Color(0xaebdca);
+const FOW_FOG_COLOR = new THREE.Color(0xb7c4cf);
+const FOW_FOG_COLOR_DEEP = new THREE.Color(0x8ea3b5);
 
 function clamp01(value: number) {
   return Math.max(0, Math.min(1, value));
@@ -53,7 +54,7 @@ export class FogOfWarOverlay {
     this.canvas = document.createElement("canvas");
     this.canvas.width = FOW_TEXTURE_SIZE;
     this.canvas.height = FOW_TEXTURE_SIZE;
-    const ctx = this.canvas.getContext("2d");
+    const ctx = this.canvas.getContext("2d", { willReadFrequently: true });
     if (!ctx) throw new Error("Fog of war canvas context unavailable");
     this.ctx = ctx;
     this.texture = new THREE.CanvasTexture(this.canvas);
@@ -75,6 +76,7 @@ export class FogOfWarOverlay {
         worldMin: { value: GAME_RULES.WORLD_MIN },
         worldMax: { value: GAME_RULES.WORLD_MAX },
         fogColor: { value: FOW_FOG_COLOR },
+        fogColorDeep: { value: FOW_FOG_COLOR_DEEP },
       },
       vertexShader: `
         varying vec3 vWorldPos;
@@ -90,6 +92,7 @@ export class FogOfWarOverlay {
         uniform float worldMin;
         uniform float worldMax;
         uniform vec3 fogColor;
+        uniform vec3 fogColorDeep;
         varying vec3 vWorldPos;
 
         float hash(vec2 p) {
@@ -122,16 +125,21 @@ export class FogOfWarOverlay {
           vec2 uv = (vWorldPos.xz - vec2(worldMin)) / (worldMax - worldMin);
           float inBounds = step(0.0, uv.x) * step(0.0, uv.y) * step(uv.x, 1.0) * step(uv.y, 1.0);
           float vis = inBounds > 0.5 ? texture2D(fogTex, clamp(uv, 0.0, 1.0)).r : 0.0;
-          float visSoft = smoothstep(0.08, 0.88, vis);
+          float visSoft = smoothstep(0.04, 0.93, vis);
           float hidden = 1.0 - visSoft;
-          float cloudNoise = fbm(vWorldPos.xz * 0.014 + vec2(time * 0.02, -time * 0.015));
-          float cloud = smoothstep(0.34, 0.78, cloudNoise);
+          float cloudNoiseA = fbm(vWorldPos.xz * 0.010 + vec2(time * 0.012, -time * 0.008));
+          float cloudNoiseB = fbm(vWorldPos.xz * 0.023 + vec2(-time * 0.018, time * 0.015));
+          float cloudNoise = mix(cloudNoiseA, cloudNoiseB, 0.42);
+          float cloudBody = smoothstep(0.31, 0.8, cloudNoise);
+          float cloudWisps = smoothstep(0.45, 0.74, cloudNoiseA * 0.7 + cloudNoiseB * 0.3);
           float worldEdge = smoothstep(0.0, 0.08, min(min(uv.x, uv.y), min(1.0 - uv.x, 1.0 - uv.y)));
           float edgeHidden = mix(1.0, hidden, inBounds);
           float fog = mix(edgeHidden, hidden, worldEdge);
-          float alpha = hidden * fog * (0.24 + cloud * 0.22);
+          float cloudAlpha = 0.16 + cloudBody * 0.18 + cloudWisps * 0.12;
+          float alpha = hidden * fog * cloudAlpha;
+          vec3 cloudColor = mix(fogColor, fogColorDeep, clamp(cloudBody * 0.75 + cloudWisps * 0.35, 0.0, 1.0));
           if (alpha <= 0.01) discard;
-          gl_FragColor = vec4(fogColor, alpha);
+          gl_FragColor = vec4(cloudColor, alpha);
         }
       `,
     });
