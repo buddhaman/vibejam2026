@@ -55,6 +55,17 @@ export type FarmEntry = {
   isHarvesting: boolean;
 };
 
+export type IdleAgentHudInfo = {
+  count: number;
+  available: boolean;
+};
+
+export type AgentStatusLabel = {
+  sx: number;
+  sy: number;
+  text: string;
+};
+
 export type HudState = {
   buildPanelOpen: boolean;
   activeBuildType: BuildingTypeValue | null;
@@ -375,6 +386,10 @@ export function hitTestContextCancel(x: number, y: number): boolean {
   return inRect(x, y, contextCancelRect(window.innerWidth, window.innerHeight));
 }
 
+export function hitTestIdleAgentButton(x: number, y: number): boolean {
+  return inRect(x, y, vibeJamZoneRect(window.innerWidth, window.innerHeight));
+}
+
 export function hitTestContextBar(x: number, y: number): boolean {
   return inRect(x, y, bottomBarRect(window.innerWidth, window.innerHeight));
 }
@@ -408,6 +423,7 @@ export function drawHUD(
   hud: HudState,
   myColor: number,
   mySquadCount: number,
+  idleAgents: IdleAgentHudInfo,
   resources: ResourceCost,
   selected: SelectionInfo | null,
   selectedTile: TileView | null,
@@ -435,8 +451,48 @@ export function drawHUD(
 
   drawMoveMarkers(ctx, hud, t);
   drawWarningToast(ctx, W, H, hud, t);
-  drawContextBottomBar(ctx, W, H, myColor, mySquadCount, resources, hud._resourceBounce, selected, selectedTile, hud, t);
+  drawContextBottomBar(ctx, W, H, myColor, mySquadCount, idleAgents, resources, hud._resourceBounce, selected, selectedTile, hud, t);
   if (koth) drawKothPanel(ctx, W, H, koth, t);
+}
+
+export function drawAgentStatusLabels(
+  canvas: HTMLCanvasElement,
+  labels: AgentStatusLabel[],
+): void {
+  if (labels.length === 0) return;
+  const ctx = canvas.getContext("2d")!;
+  for (const label of labels) {
+    const text = label.text.toUpperCase();
+    const padX = 9;
+    const h = 20;
+    ctx.save();
+    ctx.font = "700 9px 'Cinzel', serif";
+    const w = Math.max(52, ctx.measureText(text).width + padX * 2);
+    const x = label.sx - w * 0.5;
+    const y = label.sy - h * 0.5;
+    const accent =
+      label.text === "Idle"
+        ? "#D5A04A"
+        : label.text === "Harvesting" || label.text === "Gathering" || label.text === "Farming"
+          ? "#59B96A"
+          : label.text === "Hauling" || label.text === "Depositing" || label.text === "Carrying"
+            ? "#00D4FF"
+            : label.text === "Fighting"
+              ? "#FF6A6A"
+              : "rgba(242, 237, 215, 0.88)";
+    ctx.fillStyle = "rgba(8, 16, 34, 0.86)";
+    rr(ctx, x, y, w, h, 6);
+    ctx.fill();
+    ctx.strokeStyle = accent;
+    ctx.lineWidth = 1;
+    rr(ctx, x, y, w, h, 6);
+    ctx.stroke();
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.fillStyle = accent;
+    ctx.fillText(text, label.sx, label.sy + 0.5);
+    ctx.restore();
+  }
 }
 
 export function drawFloatingResourceTexts(
@@ -691,6 +747,7 @@ function drawContextBottomBar(
   H: number,
   color: number,
   count: number,
+  idleAgents: IdleAgentHudInfo,
   resources: ResourceCost,
   bounce: HudState["_resourceBounce"],
   selected: SelectionInfo | null,
@@ -869,7 +926,7 @@ function drawContextBottomBar(
   ctx.fillText(cancelActive ? "CLEAR" : "IDLE", cancel.x + cancel.w * 0.5, cancel.y + cancel.h - 10);
   ctx.restore();
 
-  drawVibeJamZoneInfo(ctx, W, bar, color, count);
+  drawVibeJamZoneInfo(ctx, W, bar, color, idleAgents);
 
   ctx.save();
   ctx.font = F_BODY_XS;
@@ -891,45 +948,50 @@ function drawVibeJamZoneInfo(
   W: number,
   bar: Rect,
   color: number,
-  squadCount: number,
+  idleAgents: IdleAgentHudInfo,
 ): void {
-  // Draws compact player info in the column above the required vibejam widget.
-  // The widget covers roughly the bottom 32px of this zone; we use the top portion.
-  const zoneX = W - VIBEJAM_W + 4;
-  const zoneW = VIBEJAM_W - 8;
-  const usableH = bar.h - 34; // leave bottom 34px for the widget
-  const midY = bar.y + usableH * 0.5;
-  const cx = zoneX + zoneW * 0.5;
+  const zone = vibeJamZoneRect(W, bar.y + bar.h);
+  const midY = zone.y + zone.h * 0.5;
+  const cx = zone.x + zone.w * 0.5;
 
   ctx.save();
-  // Subtle separator line on the left edge of the zone
   ctx.strokeStyle = GOLD_DIM;
   ctx.lineWidth = 1;
   ctx.beginPath();
-  ctx.moveTo(zoneX - 4, bar.y + 10);
-  ctx.lineTo(zoneX - 4, bar.y + usableH - 4);
+  ctx.moveTo(zone.x - 4, bar.y + 10);
+  ctx.lineTo(zone.x - 4, zone.y + zone.h - 4);
   ctx.stroke();
-
-  // Player color diamond + inner circle
-  const dY = midY - 10;
-  drawDiamond(ctx, cx, dY, 8, GOLD_BRIGHT);
-  ctx.beginPath();
-  ctx.arc(cx, dY, 5.5, 0, Math.PI * 2);
-  ctx.fillStyle = `#${color.toString(16).padStart(6, "0")}`;
+  rr(ctx, zone.x + 6, zone.y + 2, zone.w - 12, zone.h - 6, 6);
+  ctx.fillStyle = idleAgents.available ? "rgba(12, 22, 46, 0.96)" : "rgba(20, 24, 34, 0.72)";
   ctx.fill();
-
-  // Squad count
+  ctx.strokeStyle = idleAgents.available ? CYAN_GLOW : GOLD_DIM;
+  rr(ctx, zone.x + 6, zone.y + 2, zone.w - 12, zone.h - 6, 6);
+  ctx.stroke();
+  drawDiamond(ctx, cx, midY - 11, 8, idleAgents.available ? DIVINE_CYAN : GOLD_BRIGHT);
+  ctx.beginPath();
+  ctx.arc(cx, midY - 11, 5.5, 0, Math.PI * 2);
+  ctx.fillStyle = idleAgents.available ? DIVINE_CYAN : `#${color.toString(16).padStart(6, "0")}`;
+  ctx.fill();
   ctx.fillStyle = MARBLE_TEXT;
   ctx.font = F_NUM_SM;
   ctx.textAlign = "center";
   ctx.textBaseline = "middle";
-  ctx.fillText(String(squadCount), cx, midY + 5);
-
+  ctx.fillText(String(idleAgents.count), cx, midY + 4);
   ctx.fillStyle = MARBLE_MUTED;
   ctx.font = "600 7px 'Cinzel', serif";
   ctx.letterSpacing = "0.8px";
-  ctx.fillText(squadCount === 1 ? "SQUAD" : "SQUADS", cx, midY + 17);
+  ctx.fillText("IDLE", cx, midY + 16);
   ctx.restore();
+}
+
+function vibeJamZoneRect(W: number, H: number): Rect {
+  const bar = bottomBarRect(W, H);
+  return {
+    x: W - VIBEJAM_W + 4,
+    y: bar.y + 2,
+    w: VIBEJAM_W - 8,
+    h: Math.max(20, bar.h - 36),
+  };
 }
 
 function drawTopResourceStack(

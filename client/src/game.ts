@@ -599,6 +599,11 @@ export class Game {
     return b?.isMine() ? b : null;
   }
 
+  public selectEntity(entityId: string | null): void {
+    this.selectedEntityId = entityId;
+    this.selectedTileKey = null;
+  }
+
   public toggleSelection(entityId: string): void {
     this.selectedEntityId = this.selectedEntityId === entityId ? null : entityId;
     this.selectedTileKey = null;
@@ -986,6 +991,28 @@ export class Game {
     return ownerId === this.room.sessionId;
   }
 
+  public getFirstIdleAgentBlob(): BlobEntity | null {
+    for (const entity of this.entities) {
+      if (!(entity instanceof BlobEntity)) continue;
+      if (!entity.isOwnedByMe()) continue;
+      if (!entity.mesh.visible) continue;
+      if (!entity.isIdleAgentBlob()) continue;
+      return entity;
+    }
+    return null;
+  }
+
+  public getMyIdleAgentCount(): number {
+    let count = 0;
+    for (const entity of this.entities) {
+      if (!(entity instanceof BlobEntity)) continue;
+      if (!entity.isOwnedByMe()) continue;
+      if (!entity.isIdleAgentBlob()) continue;
+      count += 1;
+    }
+    return count;
+  }
+
   public getAgentPhaseForBuilding(buildingId: string): number | null {
     for (const e of this.entities) {
       if (!(e instanceof BlobEntity)) continue;
@@ -1091,22 +1118,26 @@ export class Game {
     const blob = this.getSelectedMyBlobEntity();
     if (!blob) return;
     this.room.send(MessageType.INTENT, { blobId: blob.id, targetX, targetY } satisfies IntentMessage);
+    this.clearSelection();
   }
 
-  public sendAttackIntent(blobId: string, targetType: number, targetId: string): void {
+  public sendAttackIntent(blobId: string, targetType: AttackTargetType, targetId: string): void {
     this.room.send(MessageType.ATTACK, {
       blobId,
       targetType,
       targetId,
     } satisfies AttackMessage);
+    if (this.selectedEntityId === blobId) this.clearSelection();
   }
 
   public sendGatherIntent(blobId: string, tileKey: string): void {
     this.room.send(MessageType.GATHER, { blobId, tileKey } satisfies GatherMessage);
+    if (this.selectedEntityId === blobId) this.clearSelection();
   }
 
   public sendGatherBuildingIntent(blobId: string, buildingId: string): void {
     this.room.send(MessageType.GATHER, { blobId, buildingId } satisfies GatherMessage);
+    if (this.selectedEntityId === blobId) this.clearSelection();
   }
 
   public sendBuildIntent(type: BuildMessage["type"], worldX: number, worldZ: number): void {
@@ -1124,10 +1155,12 @@ export class Game {
 
   public sendSquadSpreadIntent(blobId: string, spread: SquadSpreadValue): void {
     this.room.send(MessageType.SQUAD_SPREAD, { blobId, spread } satisfies SquadSpreadMessage);
+    if (this.selectedEntityId === blobId) this.clearSelection();
   }
 
-  public sendBlobAggroIntent(blobId: string, aggroMode: number): void {
+  public sendBlobAggroIntent(blobId: string, aggroMode: BlobAggroMode): void {
     this.room.send(MessageType.BLOB_AGGRO, { blobId, aggroMode } satisfies BlobAggroMessage);
+    if (this.selectedEntityId === blobId) this.clearSelection();
   }
 
   public sendChat(text: string): void {

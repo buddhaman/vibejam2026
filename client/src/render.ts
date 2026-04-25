@@ -6,6 +6,7 @@ import { BlobEntity } from "./blob-entity.js";
 import { BuildingEntity } from "./building-entity.js";
 import {
   addMoveMarker,
+  drawAgentStatusLabels,
   createHudCanvas,
   createHudState,
   drawHUD,
@@ -14,6 +15,7 @@ import {
   hitTestContextBar,
   hitTestContextBuildAction,
   hitTestContextCancel,
+  hitTestIdleAgentButton,
   hitTestContextSelectionAction,
   getHudBottomInset,
   showWarning,
@@ -26,7 +28,7 @@ import { attachDevNetworkPerf } from "./network-perf.js";
 import { drawTileDebugPanel } from "./tile-debug.js";
 import { drawDevOverlay } from "./dev-overlay.js";
 import { CAMERA_CONFIG, createInitialFrameStats, createRenderWorld } from "./render-world.js";
-import { projectFloatingResourceTexts } from "./world-text.js";
+import { projectAgentStatusLabels, projectFloatingResourceTexts } from "./world-text.js";
 import { createChatUi } from "./chat-ui.js";
 
 const WALKABILITY_DEBUG_KEY = "KeyV";
@@ -256,6 +258,17 @@ export function startRender(game: Game) {
     }
 
     const selectedInfo = game.getSelectedEntity()?.getSelectionInfo() ?? null;
+
+    if (hitTestIdleAgentButton(clientX, clientY)) {
+      const idleBlob = game.getFirstIdleAgentBlob();
+      if (idleBlob) {
+        const center = idleBlob.getPredictedWorldCenter();
+        cameraRig.lookTarget.set(center.x, 0, center.z);
+        cameraRig.placeCamera();
+        game.selectEntity(idleBlob.id);
+      }
+      return;
+    }
 
     if (hitTestContextCancel(clientX, clientY)) {
       hud.buildPanelOpen = false;
@@ -700,6 +713,7 @@ export function startRender(game: Game) {
 
     const myColor = game.getPlayerColor(game.room.sessionId);
     const mySquadCount = game.getMySquadCount();
+    const myIdleAgentCount = game.getMyIdleAgentCount();
     const myResources = game.getMyResources();
     const selectedInfo: SelectionInfo | null = selectionInfo;
     const selectedTile: TileView | null = game.getSelectedTile();
@@ -722,7 +736,19 @@ export function startRender(game: Game) {
       }
     }
 
-    drawHUD(hudCanvas, hud, myColor, mySquadCount, myResources, selectedInfo, selectedTile, now / 1000, kothState, computeFarmEntries(game));
+    drawHUD(
+      hudCanvas,
+      hud,
+      myColor,
+      mySquadCount,
+      { count: myIdleAgentCount, available: myIdleAgentCount > 0 },
+      myResources,
+      selectedInfo,
+      selectedTile,
+      now / 1000,
+      kothState,
+    );
+    drawAgentStatusLabels(hudCanvas, projectAgentStatusLabels(game, camera, hudCanvas));
     drawFloatingResourceTexts(hudCanvas, projectFloatingResourceTexts(game, camera, hudCanvas, now / 1000));
     if (victoryState) drawVictoryOverlay(hudCanvas, victoryState, now / 1000, victoryState.startT);
 

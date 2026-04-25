@@ -1570,6 +1570,16 @@ export class BlobEntity extends Entity {
       this.blob.gatherTargetBuildingId.length > 0 &&
       this.blob.gatherPhase !== BlobGatherPhase.RETURNING &&
       this.blob.gatherPhase !== BlobGatherPhase.DROPPING_OFF;
+    let farmWanderCenterX = 0;
+    let farmWanderCenterZ = 0;
+    if (isFarmingActive) {
+      const farmEnt = this.game.findEntity(this.blob.gatherTargetBuildingId);
+      if (farmEnt instanceof BuildingEntity) {
+        const fc = farmEnt.getWorldCenter();
+        farmWanderCenterX = fc.x;
+        farmWanderCenterZ = fc.z;
+      }
+    }
     for (let i = 0; i < n; i++) {
       const state = this.unitStates[i];
       let desiredWorldX = state.x;
@@ -1610,6 +1620,13 @@ export class BlobEntity extends Entity {
         state.combatJitterZ = 0;
         state.combatJitterVx = 0;
         state.combatJitterVz = 0;
+        if (isFarmingActive && farmWanderCenterX !== 0) {
+          // Each unit wanders around the farm on a slow Lissajous path, offset by unit index
+          const wanderT = this.combatAnimT * 0.38 + i * ((Math.PI * 2) / Math.max(1, n));
+          const wanderR = GAME_RULES.TILE_SIZE * 0.30;
+          desiredWorldX = farmWanderCenterX + Math.cos(wanderT * 1.11) * wanderR;
+          desiredWorldZ = farmWanderCenterZ + Math.sin(wanderT * 0.89) * wanderR;
+        }
       }
       if (!state.bodyReady) {
         state.bodyX = desiredWorldX;
@@ -1903,10 +1920,10 @@ export class BlobEntity extends Entity {
         }
       }
 
-      // Farming tool (sword or bow) shown while assigned to a farm and not carrying home
+      // Farming tool shown while assigned to a farm and not carrying home
       if (isFarmingActive && state.bodyReady) {
         farmingToolInstances.push({
-          kind: i % 2 === 0 ? "sword" : "bow",
+          kind: "hoe",
           worldX,
           worldY: unitTerrainY,
           worldZ,
@@ -2105,6 +2122,48 @@ export class BlobEntity extends Entity {
 
   public getGatherPhase(): number {
     return this.blob?.gatherPhase ?? 0;
+  }
+
+  public getAgentStatusLabel(): string | null {
+    if (!this.blob || this.blob.unitType !== UnitType.VILLAGER) return null;
+    if (this.blob.combatGroupId.length > 0) return "Fighting";
+    if (this.blob.gatherTargetBuildingId.length > 0) {
+      switch (this.blob.gatherPhase) {
+        case BlobGatherPhase.MOVING_TO_RESOURCE:
+          return "To Farm";
+        case BlobGatherPhase.PICKING_UP:
+          return "Harvesting";
+        case BlobGatherPhase.RETURNING:
+          return "Hauling";
+        case BlobGatherPhase.DROPPING_OFF:
+          return "Depositing";
+        default:
+          return "Farming";
+      }
+    }
+    if (this.blob.gatherTargetKey.length > 0) {
+      switch (this.blob.gatherPhase) {
+        case BlobGatherPhase.MOVING_TO_RESOURCE:
+          return "To Resource";
+        case BlobGatherPhase.PICKING_UP:
+          return "Gathering";
+        case BlobGatherPhase.RETURNING:
+          return "Hauling";
+        case BlobGatherPhase.DROPPING_OFF:
+          return "Depositing";
+        default:
+          return "Gathering";
+      }
+    }
+    if (this.blob.carriedAmount > 0) return "Carrying";
+    const dx = this.blob.targetX - this.blob.x;
+    const dz = this.blob.targetY - this.blob.y;
+    if (Math.hypot(dx, dz) > 1.15) return "Moving";
+    return "Idle";
+  }
+
+  public isIdleAgentBlob(): boolean {
+    return this.getAgentStatusLabel() === "Idle";
   }
 
   public isStale(): boolean {

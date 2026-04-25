@@ -4,7 +4,7 @@ import { applyStylizedShading } from "./stylized-shading.js";
 const DUMMY = new THREE.Object3D();
 const _YXZ = "YXZ" as THREE.EulerOrder;
 
-export type FarmingToolKind = "sword" | "bow";
+export type FarmingToolKind = "sword" | "bow" | "hoe";
 
 export type FarmingToolInstance = {
   kind: FarmingToolKind;
@@ -71,6 +71,26 @@ function buildBowMeshes(cap: number): THREE.InstancedMesh[] {
   ];
 }
 
+function buildHoeMeshes(cap: number): THREE.InstancedMesh[] {
+  const handleMat = applyStylizedShading(
+    new THREE.MeshStandardMaterial({ color: 0x7a5c2e, roughness: 0.88, metalness: 0.04 })
+  );
+  const bladeMat = applyStylizedShading(
+    new THREE.MeshStandardMaterial({ color: 0x6e7880, roughness: 0.42, metalness: 0.72 })
+  );
+  // Handle: pivot at y=0 (hands), extends y=-0.9 to y=+0.9
+  const handleGeom = new THREE.CylinderGeometry(0.028, 0.040, 1.80, 6);
+  // Blade: flat wide rectangle at bottom of handle (y≈-0.9), perpendicular to handle
+  const bladeGeom = new THREE.BoxGeometry(0.44, 0.060, 0.095).translate(0, -0.91, 0.0);
+  // Ferrule: small metal band connecting blade to handle
+  const ferruleGeom = new THREE.CylinderGeometry(0.046, 0.046, 0.072, 6).translate(0, -0.85, 0);
+  return [
+    makeMesh(handleGeom, handleMat, cap),
+    makeMesh(ferruleGeom, bladeMat, cap),
+    makeMesh(bladeGeom, bladeMat, cap),
+  ];
+}
+
 type Bank = { meshes: THREE.InstancedMesh[]; capacity: number };
 
 function ensureCapacity(
@@ -115,7 +135,7 @@ function syncBank(
         inst.worldY + 0.36 * inst.scale,
         inst.worldZ + inst.sideZ * 0.50 * inst.scale
       );
-    } else {
+    } else if (kind === "bow") {
       // Bow: held upright on the other side, gentle sway.
       // The bow arc (after rotateZ) is vertical in local space; DUMMY yaw aligns it to face forward.
       const sway = Math.sin(inst.animT * 2.1) * 0.18;
@@ -125,6 +145,18 @@ function syncBank(
         inst.worldX - inst.sideX * 0.50 * inst.scale,
         inst.worldY + 0.18 * inst.scale,
         inst.worldZ - inst.sideZ * 0.50 * inst.scale
+      );
+    } else {
+      // Hoe: handle leans back, blade chops forward into the soil.
+      // Pivot at hands (y=0 local). Negative X rotation → top leans back, blade swings forward/down.
+      // Fast chop: blade strikes ground then lifts for the return swing.
+      const chopAngle = Math.sin(inst.animT * 9.0) * 0.42 - 0.72;
+      DUMMY.rotation.order = _YXZ;
+      DUMMY.rotation.set(chopAngle, yaw, 0, _YXZ);
+      DUMMY.position.set(
+        inst.worldX + inst.forwardX * 0.34 * inst.scale,
+        inst.worldY + 0.78 * inst.scale,
+        inst.worldZ + inst.forwardZ * 0.34 * inst.scale
       );
     }
 
@@ -150,20 +182,26 @@ export class FarmingToolRenderer {
   public readonly root = new THREE.Group();
   private readonly swordBank: Bank;
   private readonly bowBank: Bank;
+  private readonly hoeBank: Bank;
 
   constructor(capacity: number) {
     this.swordBank = { meshes: buildSwordMeshes(capacity), capacity };
     this.bowBank   = { meshes: buildBowMeshes(capacity), capacity };
+    this.hoeBank   = { meshes: buildHoeMeshes(capacity), capacity };
     for (const m of this.swordBank.meshes) this.root.add(m);
     for (const m of this.bowBank.meshes)   this.root.add(m);
+    for (const m of this.hoeBank.meshes)   this.root.add(m);
   }
 
   sync(instances: FarmingToolInstance[]): void {
     const swords = instances.filter((i) => i.kind === "sword");
     const bows   = instances.filter((i) => i.kind === "bow");
+    const hoes   = instances.filter((i) => i.kind === "hoe");
     ensureCapacity(this.swordBank, swords.length, buildSwordMeshes, this.root);
     ensureCapacity(this.bowBank,   bows.length,   buildBowMeshes,   this.root);
+    ensureCapacity(this.hoeBank,   hoes.length,   buildHoeMeshes,   this.root);
     syncBank(this.swordBank.meshes, swords, "sword");
     syncBank(this.bowBank.meshes,   bows,   "bow");
+    syncBank(this.hoeBank.meshes,   hoes,   "hoe");
   }
 }
