@@ -32,12 +32,18 @@ type OnboardingStep = {
   complete: (game: Game) => boolean;
 };
 
-const STORAGE_KEY = "agi-of-mythology:onboarding:v1";
 const STARTING_AGENT_COUNT = 3;
 const CARD_W = 336;
 const CARD_PAD = 14;
 const SAFE_EDGE = 44;
 const TEMP_V = new THREE.Vector3();
+const TEMP_CAMERA_SPACE = new THREE.Vector3();
+
+const LAPIS_DEEP = "rgba(8, 16, 34, 0.96)";
+const MARBLE_TEXT = "#F2EDD7";
+const GOLD_BRIGHT = "#C9911E";
+const GOLD_TEXT = "#F0C060";
+const DIVINE_CYAN = "#00D4FF";
 
 const STEPS: OnboardingStep[] = [
   {
@@ -50,7 +56,7 @@ const STEPS: OnboardingStep[] = [
         const center = farm.getWorldCenter();
         return { ...center, label: "FARM", tone: "farm", radius: 18 };
       }
-      const tile = game.getRecommendedBuildTileNear();
+      const tile = game.getRecommendedBuildTileNear(BuildingType.FARM);
       if (!tile) return null;
       const center = getTileCenter(tile.tx, tile.tz);
       return { x: center.x, z: center.z, label: "BUILD", tone: "build", radius: 16 };
@@ -95,7 +101,7 @@ const STEPS: OnboardingStep[] = [
         const center = barracks.getWorldCenter();
         return { ...center, label: "BARR", tone: "build", radius: 20 };
       }
-      const tile = game.getRecommendedBuildTileNear();
+      const tile = game.getRecommendedBuildTileNear(BuildingType.BARRACKS);
       if (!tile) return null;
       const center = getTileCenter(tile.tx, tile.tz);
       return { x: center.x, z: center.z, label: "BUILD", tone: "build", radius: 16 };
@@ -137,7 +143,7 @@ const STEPS: OnboardingStep[] = [
 ];
 
 export class OnboardingController {
-  private completed = readCompleted();
+  private completed = false;
   private started = false;
   private stepIndex = 0;
   private buttons: Array<Rect & { id: ButtonId }> = [];
@@ -231,11 +237,6 @@ export class OnboardingController {
 
   private complete(): void {
     this.completed = true;
-    try {
-      window.localStorage?.setItem(STORAGE_KEY, "complete");
-    } catch {
-      // Storage can be unavailable in private contexts. Completing for this session is enough.
-    }
   }
 
   private drawWelcome(ctx: CanvasRenderingContext2D, W: number, H: number, nowSec: number): void {
@@ -244,11 +245,11 @@ export class OnboardingController {
     const x = 14;
     const y = Math.max(76, H - h - 132);
     drawBubble(ctx, x, y, w, h, nowSec);
-    ctx.fillStyle = "oklch(23% 0.07 228)";
-    ctx.font = "800 18px system-ui, sans-serif";
+    ctx.fillStyle = GOLD_TEXT;
+    ctx.font = "700 18px 'Cinzel', Georgia, serif";
     ctx.fillText("First mission", x + CARD_PAD, y + 30);
-    ctx.font = "600 13px system-ui, sans-serif";
-    ctx.fillStyle = "oklch(34% 0.055 228)";
+    ctx.font = "12px system-ui, sans-serif";
+    ctx.fillStyle = MARBLE_TEXT;
     wrapText(ctx, "Build, gather, train, then take the central server.", x + CARD_PAD, y + 58, w - CARD_PAD * 2, 18);
     this.drawButton(ctx, "start", "Show me", x + CARD_PAD, y + h - 50, 112, 36, true);
     this.drawButton(ctx, "skip", "Skip", x + CARD_PAD + 122, y + h - 50, 82, 36, false);
@@ -271,14 +272,14 @@ export class OnboardingController {
 
     drawBubble(ctx, x, y, w, h, nowSec - this.stepEnteredAt);
     ctx.fillStyle = toneColor(target?.tone ?? "build");
-    ctx.font = "900 11px system-ui, sans-serif";
+    ctx.font = "700 11px 'Cinzel', Georgia, serif";
     ctx.fillText(`${this.stepIndex + 1}/${STEPS.length}`, x + CARD_PAD, y + 20);
 
-    ctx.fillStyle = "oklch(22% 0.07 228)";
-    ctx.font = "800 17px system-ui, sans-serif";
+    ctx.fillStyle = GOLD_TEXT;
+    ctx.font = "700 16px 'Cinzel', Georgia, serif";
     ctx.fillText(step.title, x + CARD_PAD, y + 44);
-    ctx.font = "600 13px system-ui, sans-serif";
-    ctx.fillStyle = "oklch(34% 0.055 228)";
+    ctx.font = "12px system-ui, sans-serif";
+    ctx.fillStyle = MARBLE_TEXT;
     const body = target ? step.body : "Loading nearby targets...";
     wrapText(ctx, body, x + CARD_PAD, y + 68, w - CARD_PAD * 2, 18);
 
@@ -302,14 +303,14 @@ export class OnboardingController {
     this.buttons.push({ id, x, y, w, h });
     ctx.save();
     ctx.beginPath();
-    ctx.roundRect(x, y, w, h, h * 0.5);
-    ctx.fillStyle = primary ? "oklch(71% 0.18 145)" : "oklch(94% 0.025 220)";
+    ctx.roundRect(x, y, w, h, 4);
+    ctx.fillStyle = primary ? "rgba(201, 145, 30, 0.92)" : "rgba(242, 237, 215, 0.08)";
     ctx.fill();
     ctx.lineWidth = 2;
-    ctx.strokeStyle = primary ? "oklch(47% 0.16 145)" : "oklch(78% 0.045 220)";
+    ctx.strokeStyle = primary ? GOLD_TEXT : "rgba(242, 237, 215, 0.28)";
     ctx.stroke();
-    ctx.fillStyle = primary ? "oklch(20% 0.055 145)" : "oklch(34% 0.055 228)";
-    ctx.font = "800 13px system-ui, sans-serif";
+    ctx.fillStyle = primary ? LAPIS_DEEP : MARBLE_TEXT;
+    ctx.font = "700 12px 'Cinzel', Georgia, serif";
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
     ctx.fillText(label, x + w * 0.5, y + h * 0.5);
@@ -328,13 +329,13 @@ export class OnboardingController {
     const color = toneColor(target.tone);
     if (projected.onScreen) {
       ctx.save();
-      ctx.globalAlpha = 0.72;
+      ctx.globalAlpha = 0.76;
       ctx.strokeStyle = color;
       ctx.lineWidth = 4;
       ctx.beginPath();
       ctx.arc(projected.x, projected.y, (target.radius ?? 18) + pulse * 10, 0, Math.PI * 2);
       ctx.stroke();
-      ctx.globalAlpha = 0.18;
+      ctx.globalAlpha = 0.2;
       ctx.fillStyle = color;
       ctx.beginPath();
       ctx.arc(projected.x, projected.y, (target.radius ?? 18) + pulse * 6, 0, Math.PI * 2);
@@ -349,7 +350,7 @@ export class OnboardingController {
     ctx.translate(projected.x, projected.y);
     ctx.rotate(angle);
     ctx.fillStyle = color;
-    ctx.strokeStyle = "oklch(98% 0.018 105)";
+    ctx.strokeStyle = MARBLE_TEXT;
     ctx.lineWidth = 3;
     ctx.beginPath();
     ctx.moveTo(size * 0.66, 0);
@@ -360,12 +361,12 @@ export class OnboardingController {
     ctx.fill();
     ctx.stroke();
     ctx.rotate(-angle);
-    ctx.fillStyle = "oklch(22% 0.07 228)";
+    ctx.fillStyle = LAPIS_DEEP;
     ctx.beginPath();
     ctx.arc(0, 0, 19, 0, Math.PI * 2);
     ctx.fill();
-    ctx.fillStyle = "oklch(98% 0.018 105)";
-    ctx.font = target.label.length > 2 ? "800 9px system-ui, sans-serif" : "900 12px system-ui, sans-serif";
+    ctx.fillStyle = MARBLE_TEXT;
+    ctx.font = target.label.length > 2 ? "700 9px 'Cinzel', Georgia, serif" : "700 12px 'Cinzel', Georgia, serif";
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
     ctx.fillText(target.label, 0, 0.5);
@@ -381,12 +382,14 @@ export class OnboardingController {
     ctx.beginPath();
     ctx.arc(target.x, target.y, target.radius + pulse * 8, 0, Math.PI * 2);
     ctx.stroke();
-    ctx.fillStyle = "oklch(98% 0.018 105 / 0.92)";
+    ctx.fillStyle = LAPIS_DEEP;
     ctx.beginPath();
-    ctx.roundRect(target.x - 24, target.y - target.radius - 32, 48, 22, 11);
+    ctx.roundRect(target.x - 24, target.y - target.radius - 32, 48, 22, 4);
     ctx.fill();
-    ctx.fillStyle = "oklch(22% 0.07 228)";
-    ctx.font = "900 9px system-ui, sans-serif";
+    ctx.strokeStyle = "rgba(242, 237, 215, 0.38)";
+    ctx.stroke();
+    ctx.fillStyle = MARBLE_TEXT;
+    ctx.font = "700 9px 'Cinzel', Georgia, serif";
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
     ctx.fillText(target.label, target.x, target.y - target.radius - 21);
@@ -409,10 +412,26 @@ function projectTarget(
   canvas: HTMLCanvasElement
 ): ProjectedTarget {
   const y = getTerrainHeightAt(target.x, target.z, game.getTiles()) + 4;
-  TEMP_V.set(target.x, y, target.z).project(camera);
-  const rawX = (TEMP_V.x * 0.5 + 0.5) * canvas.width;
-  const rawY = (-TEMP_V.y * 0.5 + 0.5) * canvas.height;
+  TEMP_V.set(target.x, y, target.z);
+  TEMP_CAMERA_SPACE.copy(TEMP_V).applyMatrix4(camera.matrixWorldInverse);
+  const behindCamera = TEMP_CAMERA_SPACE.z > 0;
+  TEMP_V.project(camera);
+
+  let ndcX = Number.isFinite(TEMP_V.x) ? TEMP_V.x : 0;
+  let ndcY = Number.isFinite(TEMP_V.y) ? TEMP_V.y : 0;
+  if (behindCamera) {
+    ndcX = -ndcX;
+    ndcY = -ndcY;
+    if (Math.abs(ndcX) < 0.01 && Math.abs(ndcY) < 0.01) {
+      ndcX = TEMP_CAMERA_SPACE.x >= 0 ? 1 : -1;
+      ndcY = TEMP_CAMERA_SPACE.y >= 0 ? -0.2 : 0.2;
+    }
+  }
+
+  const rawX = (ndcX * 0.5 + 0.5) * canvas.width;
+  const rawY = (-ndcY * 0.5 + 0.5) * canvas.height;
   const onScreen =
+    !behindCamera &&
     TEMP_V.z >= -1 &&
     TEMP_V.z <= 1 &&
     rawX >= SAFE_EDGE &&
@@ -444,13 +463,17 @@ function edgeScale(dx: number, dy: number, W: number, H: number): number {
 function drawBubble(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, t: number): void {
   ctx.save();
   ctx.globalAlpha = Math.min(1, 0.25 + t * 5);
-  ctx.fillStyle = "oklch(97% 0.035 104 / 0.94)";
-  ctx.strokeStyle = "oklch(72% 0.13 120 / 0.88)";
+  ctx.fillStyle = LAPIS_DEEP;
+  ctx.strokeStyle = GOLD_BRIGHT;
   ctx.lineWidth = 2;
   ctx.beginPath();
-  ctx.roundRect(x, y, w, h, 22);
+  ctx.roundRect(x, y, w, h, 6);
   ctx.fill();
   ctx.stroke();
+  ctx.fillStyle = "rgba(242, 237, 215, 0.05)";
+  ctx.beginPath();
+  ctx.roundRect(x + 5, y + 5, w - 10, h - 10, 4);
+  ctx.fill();
   ctx.restore();
 }
 
@@ -480,17 +503,17 @@ function wrapText(
 function toneColor(tone: OnboardingTarget["tone"]): string {
   switch (tone) {
     case "farm":
-      return "oklch(72% 0.17 132)";
+      return "#8BDB65";
     case "agent":
-      return "oklch(73% 0.15 75)";
+      return GOLD_TEXT;
     case "gpu":
-      return "oklch(73% 0.14 238)";
+      return DIVINE_CYAN;
     case "server":
-      return "oklch(71% 0.18 24)";
+      return "#FF4040";
     case "unit":
-      return "oklch(70% 0.16 52)";
+      return GOLD_TEXT;
     default:
-      return "oklch(70% 0.16 145)";
+      return DIVINE_CYAN;
   }
 }
 
@@ -498,10 +521,3 @@ function inRect(px: number, py: number, r: Rect): boolean {
   return px >= r.x && px <= r.x + r.w && py >= r.y && py <= r.y + r.h;
 }
 
-function readCompleted(): boolean {
-  try {
-    return window.localStorage?.getItem(STORAGE_KEY) === "complete";
-  } catch {
-    return false;
-  }
-}

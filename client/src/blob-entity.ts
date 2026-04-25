@@ -1565,18 +1565,26 @@ export class BlobEntity extends Entity {
           : 0;
     const carriedResourceInstances: CarriedResourceInstance[] = [];
     const farmingToolInstances: FarmingToolInstance[] = [];
-    const isFarmingActive =
-      this.blob.unitType === UnitType.VILLAGER &&
-      this.blob.gatherTargetBuildingId.length > 0 &&
-      this.blob.gatherPhase === BlobGatherPhase.PICKING_UP;
     let farmWanderCenterX = 0;
     let farmWanderCenterZ = 0;
-    if (isFarmingActive) {
+    let isFarmingActive = false;
+    const farmLatchReach = GAME_RULES.TILE_SIZE * 0.32;
+    const farmLatchReachSq = farmLatchReach * farmLatchReach;
+    if (
+      this.blob.unitType === UnitType.VILLAGER &&
+      this.blob.gatherTargetBuildingId.length > 0 &&
+      this.blob.gatherPhase !== BlobGatherPhase.RETURNING &&
+      this.blob.gatherPhase !== BlobGatherPhase.DROPPING_OFF
+    ) {
       const farmEnt = this.game.findEntity(this.blob.gatherTargetBuildingId);
       if (farmEnt instanceof BuildingEntity) {
         const fc = farmEnt.getWorldCenter();
         farmWanderCenterX = fc.x;
         farmWanderCenterZ = fc.z;
+        const blobCenter = this.getPredictedWorldCenter();
+        const farmDx = blobCenter.x - fc.x;
+        const farmDz = blobCenter.z - fc.z;
+        isFarmingActive = farmDx * farmDx + farmDz * farmDz <= farmLatchReachSq;
       }
     }
     for (let i = 0; i < n; i++) {

@@ -1073,17 +1073,40 @@ export class Game {
   }
 
   public getRecommendedBuildTileNear(
+    buildingType: BuildingTypeValue,
     from: { x: number; z: number } = this.getMyTownCenterPosition() ?? { x: 0, z: 0 }
   ): TileView | null {
     let best: TileView | null = null;
     let bestScore = Infinity;
+    const existingBuildings = this.entities.filter((entity): entity is BuildingEntity =>
+      entity instanceof BuildingEntity &&
+      entity.isOwnedByMe() &&
+      entity.mesh.visible
+    );
     for (const tile of this._tiles.values()) {
       if (!tile.canBuild) continue;
       const center = getTileCenter(tile.tx, tile.tz);
+      if (existingBuildings.some((building) => building.containsWorldPoint(center.x, center.z))) continue;
+
       const distance = Math.hypot(center.x - from.x, center.z - from.z);
-      if (distance < GAME_RULES.TILE_SIZE * 1.6 || distance > GAME_RULES.TILE_SIZE * 7.5) continue;
+      const minDistance =
+        buildingType === BuildingType.FARM ? GAME_RULES.TILE_SIZE * 0.85 : GAME_RULES.TILE_SIZE * 2.2;
+      const maxDistance =
+        buildingType === BuildingType.FARM ? GAME_RULES.TILE_SIZE * 2.4 : GAME_RULES.TILE_SIZE * 7.5;
+      if (distance < minDistance || distance > maxDistance) continue;
+
+      const preferredDistance =
+        buildingType === BuildingType.FARM ? GAME_RULES.TILE_SIZE * 1.15 : GAME_RULES.TILE_SIZE * 4.2;
+      const buildingPenalty = existingBuildings.reduce((penalty, building) => {
+        const buildingDistance = Math.hypot(center.x - building.getWorldCenter().x, center.z - building.getWorldCenter().z);
+        const avoidRadius =
+          building.getBuildingType() === BuildingType.FARM || buildingType !== BuildingType.FARM
+            ? GAME_RULES.TILE_SIZE * 2.2
+            : GAME_RULES.TILE_SIZE * 1.15;
+        return penalty + Math.max(0, avoidRadius - buildingDistance) * 5;
+      }, 0);
       const eastBias = Math.max(0, from.x - center.x) * 0.08;
-      const score = Math.abs(distance - GAME_RULES.TILE_SIZE * 3.2) + eastBias;
+      const score = Math.abs(distance - preferredDistance) + eastBias + buildingPenalty;
       if (score < bestScore) {
         best = tile;
         bestScore = score;
