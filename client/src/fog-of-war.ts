@@ -5,8 +5,8 @@ import type { Game } from "./game.js";
 const FOW_TEXTURE_SIZE = 512;
 const FOW_PLANE_MARGIN = 220;
 const FOW_PLANE_Y = 18;
-const FOW_FOG_COLOR = new THREE.Color(0xb7c4cf);
-const FOW_FOG_COLOR_DEEP = new THREE.Color(0x8ea3b5);
+const FOW_FOG_COLOR = new THREE.Color(0xb1bfcb);
+const FOW_FOG_COLOR_DEEP = new THREE.Color(0x8399ae);
 
 function clamp01(value: number) {
   return Math.max(0, Math.min(1, value));
@@ -125,19 +125,20 @@ export class FogOfWarOverlay {
           vec2 uv = (vWorldPos.xz - vec2(worldMin)) / (worldMax - worldMin);
           float inBounds = step(0.0, uv.x) * step(0.0, uv.y) * step(uv.x, 1.0) * step(uv.y, 1.0);
           float vis = inBounds > 0.5 ? texture2D(fogTex, clamp(uv, 0.0, 1.0)).r : 0.0;
-          float visSoft = smoothstep(0.04, 0.93, vis);
+          float visSoft = smoothstep(0.08, 0.88, vis);
           float hidden = 1.0 - visSoft;
-          float cloudNoiseA = fbm(vWorldPos.xz * 0.010 + vec2(time * 0.012, -time * 0.008));
-          float cloudNoiseB = fbm(vWorldPos.xz * 0.023 + vec2(-time * 0.018, time * 0.015));
-          float cloudNoise = mix(cloudNoiseA, cloudNoiseB, 0.42);
-          float cloudBody = smoothstep(0.31, 0.8, cloudNoise);
-          float cloudWisps = smoothstep(0.45, 0.74, cloudNoiseA * 0.7 + cloudNoiseB * 0.3);
+          float cloudNoiseA = fbm(vWorldPos.xz * 0.013 + vec2(time * 0.019, -time * 0.014));
+          float cloudNoiseB = fbm(vWorldPos.xz * 0.027 + vec2(-time * 0.024, time * 0.018));
+          float cloudNoise = mix(cloudNoiseA, cloudNoiseB, 0.36);
+          float cloudBody = smoothstep(0.34, 0.78, cloudNoise);
+          float cloudWisps = smoothstep(0.52, 0.78, cloudNoiseA * 0.82 + cloudNoiseB * 0.18);
+          float cloudShadow = smoothstep(0.42, 0.86, cloudNoiseB);
           float worldEdge = smoothstep(0.0, 0.08, min(min(uv.x, uv.y), min(1.0 - uv.x, 1.0 - uv.y)));
           float edgeHidden = mix(1.0, hidden, inBounds);
           float fog = mix(edgeHidden, hidden, worldEdge);
-          float cloudAlpha = 0.16 + cloudBody * 0.18 + cloudWisps * 0.12;
+          float cloudAlpha = 0.28 + cloudBody * 0.24 + cloudWisps * 0.16;
           float alpha = hidden * fog * cloudAlpha;
-          vec3 cloudColor = mix(fogColor, fogColorDeep, clamp(cloudBody * 0.75 + cloudWisps * 0.35, 0.0, 1.0));
+          vec3 cloudColor = mix(fogColor, fogColorDeep, clamp(cloudBody * 0.78 + cloudShadow * 0.42, 0.0, 1.0));
           if (alpha <= 0.01) discard;
           gl_FragColor = vec4(cloudColor, alpha);
         }

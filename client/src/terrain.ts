@@ -1,5 +1,5 @@
 import * as THREE from "three";
-import { GAME_RULES, getTileCenter, getTileCoordsFromWorld, getTileKey } from "../../shared/game-rules.js";
+import { GAME_RULES, TileType, getTileCenter, getTileCoordsFromWorld, getTileKey } from "../../shared/game-rules.js";
 import { applyStylizedShading } from "./stylized-shading.js";
 
 export type TileView = {
@@ -47,6 +47,10 @@ function hash(n: number) {
 
 function smoothstep(t: number) {
   return t * t * (3 - 2 * t);
+}
+
+function clamp01(value: number) {
+  return Math.max(0, Math.min(1, value));
 }
 
 function valueNoise2D(x: number, z: number, seed: number) {
@@ -124,6 +128,84 @@ function pushQuad(
   pushTri(positions, colors, a, c, d, ca, cc, cd);
 }
 
+function getTileSurfacePoint(
+  tile: TileView,
+  center: { x: number; z: number },
+  half: number,
+  fx: number,
+  fz: number
+): THREE.Vector3 {
+  const x = center.x - half + fx * GAME_RULES.TILE_SIZE;
+  const z = center.z - half + fz * GAME_RULES.TILE_SIZE;
+  const t00 = { x: center.x - half, z: center.z - half, y: tile.h00 };
+  const t10 = { x: center.x + half, z: center.z - half, y: tile.h10 };
+  const t11 = { x: center.x + half, z: center.z + half, y: tile.h11 };
+  const t01 = { x: center.x - half, z: center.z + half, y: tile.h01 };
+  const y = fz >= fx ? interpolateTriangleHeight(x, z, t00, t01, t11) : interpolateTriangleHeight(x, z, t00, t11, t10);
+  return new THREE.Vector3(x, y, z);
+}
+
+function getForestGroundColor(tile: TileView, fx: number, fz: number, height: number): THREE.Color {
+  const base = getGroundVertexColor(tile.tx + fx, tile.tz + fz, height);
+  if (tile.tileType !== TileType.FOREST || tile.maxMaterial <= 0) return base;
+
+  const nx = fx * 2 - 1;
+  const nz = fz * 2 - 1;
+  const canopyPool = smoothstep(clamp01((1.12 - Math.hypot(nx * 0.92, nz * 1.08)) / 0.82));
+  const dapple = valueNoise2D(tile.tx * 1.7 + fx * 4.6, tile.tz * 1.7 + fz * 4.6, 2687);
+  const richness = clamp01(tile.maxMaterial / GAME_RULES.FOREST_WOOD_MAX);
+  const canopyShade = (0.18 + richness * 0.22) * canopyPool * (0.82 + dapple * 0.28);
+  const wholeTileShade = 0.22 + richness * 0.1;
+  const shade = clamp01(wholeTileShade + canopyShade);
+
+  // Keep the Snakebird-like saturated grass, but make forest floors read clearly darker.
+  const forestTint = new THREE.Color().setHSL(0.31 + dapple * 0.025, 0.82, 0.24 + dapple * 0.035);
+  return base.lerp(forestTint, shade).multiplyScalar(1 - shade * 0.34);
+}
+
+function pushTerrainTop(
+  positions: number[],
+  colors: number[],
+  tile: TileView,
+  center: { x: number; z: number },
+  half: number
+) {
+  const divisions = tile.tileType === TileType.FOREST && tile.maxMaterial > 0 ? 4 : 1;
+  const points: THREE.Vector3[][] = [];
+  const vertexColors: THREE.Color[][] = [];
+
+  for (let z = 0; z <= divisions; z++) {
+    const fz = z / divisions;
+    const pointRow: THREE.Vector3[] = [];
+    const colorRow: THREE.Color[] = [];
+    for (let x = 0; x <= divisions; x++) {
+      const fx = x / divisions;
+      const point = getTileSurfacePoint(tile, center, half, fx, fz);
+      pointRow.push(point);
+      colorRow.push(getForestGroundColor(tile, fx, fz, point.y));
+    }
+    points.push(pointRow);
+    vertexColors.push(colorRow);
+  }
+
+  for (let z = 0; z < divisions; z++) {
+    for (let x = 0; x < divisions; x++) {
+      pushQuad(
+        positions,
+        colors,
+        points[z]![x]!,
+        points[z + 1]![x]!,
+        points[z + 1]![x + 1]!,
+        points[z]![x + 1]!,
+        vertexColors[z]![x]!,
+        vertexColors[z + 1]![x]!,
+        vertexColors[z + 1]![x + 1]!,
+        vertexColors[z]![x + 1]!
+      );
+    }
+  }
+}
+
 function interpolateTriangleHeight(
   px: number,
   pz: number,
@@ -170,10 +252,6 @@ export function createTerrainMesh(tiles: Iterable<TileView>): THREE.Mesh {
 
   for (const tile of tiles) {
     const center = getTileCenter(tile.tx, tile.tz);
-    const c00 = getGroundVertexColor(tile.tx, tile.tz, tile.h00);
-    const c10 = getGroundVertexColor(tile.tx + 1, tile.tz, tile.h10);
-    const c11 = getGroundVertexColor(tile.tx + 1, tile.tz + 1, tile.h11);
-    const c01 = getGroundVertexColor(tile.tx, tile.tz + 1, tile.h01);
     const dirt = tile.isMountain
       ? new THREE.Color().setHSL(0.09, 0.22, 0.28 + Math.min(0.14, tile.height * 0.007))
       : new THREE.Color().setHSL(0.07, 0.68, 0.30);
@@ -189,7 +267,7 @@ export function createTerrainMesh(tiles: Iterable<TileView>): THREE.Mesh {
     const b11 = new THREE.Vector3(center.x + half, 0, center.z + half);
     const b01 = new THREE.Vector3(center.x - half, 0, center.z + half);
 
-    pushQuad(positions, colors, t00, t01, t11, t10, c00, c01, c11, c10);
+    pushTerrainTop(positions, colors, tile, center, half);
     pushQuad(positions, colors, b00, t00, t10, b10, dirtDark, dirt, dirt, dirtDark);
     pushQuad(positions, colors, b10, t10, t11, b11, dirtDark, dirt, dirt, dirtDark);
     pushQuad(positions, colors, b11, t11, t01, b01, dirtDark, dirt, dirt, dirtDark);

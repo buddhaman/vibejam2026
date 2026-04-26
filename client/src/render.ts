@@ -30,6 +30,7 @@ import { CAMERA_CONFIG, createInitialFrameStats, createRenderWorld } from "./ren
 import { projectAgentStatusLabels, projectFloatingResourceTexts } from "./world-text.js";
 import { createChatUi } from "./chat-ui.js";
 import { OnboardingController } from "./onboarding.js";
+import { PortalSystem } from "./portal-system.js";
 
 const WALKABILITY_DEBUG_KEY = "KeyV";
 const TILE_DEBUG_KEY = "Backquote"; // ` key toggles developer mode too
@@ -46,6 +47,7 @@ export function startRender(game: Game) {
   let tileDebugInspected: TileView | null = null;
   let devModeVisible = false;
   let frameStats = createInitialFrameStats();
+  const portalSystem = new PortalSystem(scene);
 
   function onCameraKeyDown(e: KeyboardEvent) {
     if (e.code === TILE_DEBUG_KEY || (e.shiftKey && e.code === DEV_MODE_KEY)) {
@@ -657,6 +659,7 @@ export function startRender(game: Game) {
     const perf1 = performance.now();
     game.beginUnitCollisionFrame();
     for (const entity of game.entities) entity.render(dt);
+    portalSystem.update(dt, game);
     const perf2 = performance.now();
     game.flushBeamDraws();
     const perf3 = performance.now();
