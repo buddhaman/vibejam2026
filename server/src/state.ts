@@ -67,6 +67,8 @@ export class Building extends Schema {
   @type("uint8") rallySet: number = 0;
   @type("number") rallyX: number = 0;
   @type("number") rallyY: number = 0;
+  @type("uint16") constructionBlocksRequired: number = 0;
+  @type("uint16") constructionBlocksDelivered: number = 0;
 }
 
 /** Authoritative world — gameplay truth only. Tiles are streamed separately. */

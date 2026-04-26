@@ -29,6 +29,12 @@ import {
   createSelectionFillMaterial,
   createSelectionRingMaterial,
 } from "./selection-ring.js";
+import {
+  createConstructionBlockMesh,
+  getConstructionBlockStackPose,
+  writeConstructionBlockMatrix,
+  type ConstructionBlockPose,
+} from "./construction-blocks.js";
 
 const ORB_RADIUS = 0.525;
 const ORB_Y_ABOVE_ROOF = 1.55;
@@ -74,6 +80,9 @@ const SPAWN_POINT_OFFSET_Y = 0.25;
 const SPAWN_POINT_MIN_DISTANCE = 0.6;
 const SPAWN_POINT_DASH_WORLD = 1.4;
 const SPAWN_POINT_GAP_WORLD = 1.1;
+const CONSTRUCTION_BLOCK_CAPACITY = 96;
+const SCAFFOLD_WOOD_MAT = new THREE.MeshStandardMaterial({ color: 0xb27a44, roughness: 0.92, metalness: 0.02 });
+const SCAFFOLD_ROPE_MAT = new THREE.MeshStandardMaterial({ color: 0xf1c36d, roughness: 0.86, metalness: 0.01 });
 const BUILDING_CENTER = new THREE.Vector3();
 const SPAWN_POINT_WORLD = new THREE.Vector3();
 const SPAWN_LINE_START = new THREE.Vector3();
@@ -99,6 +108,8 @@ export class BuildingEntity extends Entity {
   private selectionRing!: THREE.Mesh<THREE.RingGeometry, THREE.MeshBasicMaterial>;
   private selectionFill!: THREE.Mesh<THREE.CircleGeometry, THREE.MeshBasicMaterial>;
   private spawnPointMarker!: THREE.Mesh<THREE.SphereGeometry, THREE.MeshBasicMaterial>;
+  private scaffoldRoot!: THREE.Group;
+  private constructionBlocks!: THREE.InstancedMesh;
   private localAge = 0;
 
   private building: {
@@ -114,6 +125,8 @@ export class BuildingEntity extends Entity {
     rallySet: number;
     rallyX: number;
     rallyY: number;
+    constructionBlocksRequired: number;
+    constructionBlocksDelivered: number;
   } | null = null;
 
   public constructor(game: Game, id: string) {
@@ -148,10 +161,59 @@ export class BuildingEntity extends Entity {
     );
     this.spawnPointMarker.visible = false;
     this.spawnPointMarker.renderOrder = 1004;
+    this.scaffoldRoot = this.createScaffoldRoot();
+    this.scaffoldRoot.visible = false;
+    this.constructionBlocks = createConstructionBlockMesh(CONSTRUCTION_BLOCK_CAPACITY);
     root.add(this.ownerOrb);
     root.add(this.selectionFill);
     root.add(this.selectionRing);
     root.add(this.spawnPointMarker);
+    root.add(this.scaffoldRoot);
+    root.add(this.constructionBlocks);
+    return root;
+  }
+
+  private createScaffoldRoot(): THREE.Group {
+    const root = new THREE.Group();
+    const postGeo = new THREE.BoxGeometry(0.34, 1, 0.34);
+    const railGeo = new THREE.BoxGeometry(1, 0.24, 0.24);
+    const deckGeo = new THREE.BoxGeometry(1, 0.22, 1);
+    const woodMat = SCAFFOLD_WOOD_MAT.clone();
+    const ropeMat = SCAFFOLD_ROPE_MAT.clone();
+    const postHeight = 4.2;
+    const half = GAME_RULES.TILE_SIZE * 0.42;
+
+    for (const sx of [-1, 1]) {
+      for (const sz of [-1, 1]) {
+        const post = new THREE.Mesh(postGeo, woodMat);
+        post.position.set(sx * half, postHeight * 0.5, sz * half);
+        post.scale.y = postHeight;
+        post.castShadow = true;
+        root.add(post);
+      }
+    }
+
+    for (const z of [-half, half]) {
+      const rail = new THREE.Mesh(railGeo, ropeMat);
+      rail.position.set(0, postHeight * 0.74, z);
+      rail.scale.x = half * 2.2;
+      rail.castShadow = true;
+      root.add(rail);
+    }
+    for (const x of [-half, half]) {
+      const rail = new THREE.Mesh(railGeo, ropeMat);
+      rail.position.set(x, postHeight * 0.74, 0);
+      rail.rotation.y = Math.PI * 0.5;
+      rail.scale.x = half * 2.2;
+      rail.castShadow = true;
+      root.add(rail);
+    }
+
+    const deck = new THREE.Mesh(deckGeo, woodMat);
+    deck.position.y = 0.12;
+    deck.scale.set(GAME_RULES.TILE_SIZE * 0.72, 1, GAME_RULES.TILE_SIZE * 0.72);
+    deck.receiveShadow = true;
+    root.add(deck);
     return root;
   }
 
@@ -168,6 +230,8 @@ export class BuildingEntity extends Entity {
     rallySet?: number;
     rallyX?: number;
     rallyY?: number;
+    constructionBlocksRequired?: number;
+    constructionBlocksDelivered?: number;
   }): void {
     const firstSync = this.building === null;
     const previousOwnerId = this.building?.ownerId ?? null;
@@ -177,6 +241,8 @@ export class BuildingEntity extends Entity {
       rallySet: building.rallySet ?? 0,
       rallyX: building.rallyX ?? 0,
       rallyY: building.rallyY ?? 0,
+      constructionBlocksRequired: building.constructionBlocksRequired ?? 0,
+      constructionBlocksDelivered: building.constructionBlocksDelivered ?? 0,
     };
     const ownerChanged = previousOwnerId !== null && previousOwnerId !== this.building.ownerId;
     if (this.tintedOwnerId !== this.building.ownerId) {
@@ -184,7 +250,7 @@ export class BuildingEntity extends Entity {
     }
 
     // Defer the clone to the next event-loop turn so it doesn’t stall the Colyseus schema callback.
-    if (firstSync) {
+    if (firstSync && !this.isUnderConstruction()) {
       const type = building.buildingType;
       setTimeout(() => {
         if (this.isStale()) return; // building already destroyed before clone finished
@@ -223,6 +289,7 @@ export class BuildingEntity extends Entity {
   }
 
   public override getSelectionOutlineObjects(): THREE.Object3D[] {
+    if (this.isUnderConstruction()) return [this.scaffoldRoot];
     return this.variant ? [this.variant.root] : [this.mesh];
   }
 
@@ -233,14 +300,6 @@ export class BuildingEntity extends Entity {
       this.game.isWorldVisibleToMe(this.building.x, this.building.y);
     this.mesh.visible = visibleToMe;
     if (!visibleToMe) return;
-    if (
-      !this.variant ||
-      this.variantType !== this.building.buildingType ||
-      this.variantAssetVersion !== getBuildingModelAssetVersion()
-    ) {
-      this.replaceVariant(this.building.buildingType);
-    }
-    if (!this.variant) return;
     this.localAge += _dt;
 
     const terrainY = getTerrainHeightAt(
@@ -279,12 +338,87 @@ export class BuildingEntity extends Entity {
     }
 
     this.mesh.position.set(this.building.x, terrainY, this.building.y);
+    if (this.isUnderConstruction()) {
+      if (this.variant) this.variant.root.visible = false;
+      this.ownerOrb.visible = false;
+      this.spawnPointMarker.visible = false;
+      this.renderConstructionScaffold(rules);
+      return;
+    }
+
+    this.scaffoldRoot.visible = false;
+    this.constructionBlocks.count = 0;
+    this.ownerOrb.visible = true;
+    if (
+      !this.variant ||
+      this.variantType !== this.building.buildingType ||
+      this.variantAssetVersion !== getBuildingModelAssetVersion()
+    ) {
+      this.replaceVariant(this.building.buildingType);
+    }
+    if (!this.variant) return;
+    this.variant.root.visible = true;
     if (this.building.buildingType === BuildingType.FARM) {
       this.updateFarmGrowth();
     } else if (this.building.buildingType === BuildingType.TOWER) {
       this.renderTowerLightning(terrainY);
     }
     this.renderSpawnPointGuide(terrainY, selected, selectionColor);
+  }
+
+  public isUnderConstruction(): boolean {
+    if (!this.building) return false;
+    return (
+      this.building.constructionBlocksRequired > 0 &&
+      this.building.constructionBlocksDelivered < this.building.constructionBlocksRequired
+    );
+  }
+
+  public getConstructionProgress(): number {
+    if (!this.building || this.building.constructionBlocksRequired <= 0) return 1;
+    return THREE.MathUtils.clamp(
+      this.building.constructionBlocksDelivered / this.building.constructionBlocksRequired,
+      0,
+      1
+    );
+  }
+
+  private renderConstructionScaffold(rules: ReturnType<typeof getBuildingRules>): void {
+    if (!this.building) return;
+    this.scaffoldRoot.visible = true;
+    const required = Math.max(1, this.building.constructionBlocksRequired);
+    const delivered = Math.min(this.building.constructionBlocksDelivered, CONSTRUCTION_BLOCK_CAPACITY);
+    const footprintScaleX = Math.max(0.72, rules.selectionWidth / GAME_RULES.TILE_SIZE);
+    const footprintScaleZ = Math.max(0.72, rules.selectionDepth / GAME_RULES.TILE_SIZE);
+    this.scaffoldRoot.scale.set(footprintScaleX, 1, footprintScaleZ);
+
+    for (let i = 0; i < delivered; i++) {
+      writeConstructionBlockMatrix(
+        this.constructionBlocks,
+        i,
+        getConstructionBlockStackPose(i, required),
+        DUMMY
+      );
+    }
+    this.constructionBlocks.count = delivered;
+    this.constructionBlocks.instanceMatrix.needsUpdate = true;
+  }
+
+  public getConstructionBlocksDelivered(): number {
+    return this.building?.constructionBlocksDelivered ?? 0;
+  }
+
+  public getConstructionBlockWorldPose(stackIndex: number): (ConstructionBlockPose & { rotationY: number }) | null {
+    if (!this.building) return null;
+    const required = Math.max(1, this.building.constructionBlocksRequired);
+    const local = getConstructionBlockStackPose(stackIndex, required);
+    const terrainY = getTerrainHeightAt(this.building.x, this.building.y, this.game.getTiles());
+    return {
+      x: this.building.x + local.x,
+      y: terrainY + local.y,
+      z: this.building.y + local.z,
+      rotationY: local.rotationY,
+    };
   }
 
   private replaceVariant(type: BuildingTypeValue): void {
@@ -561,8 +695,11 @@ export class BuildingEntity extends Entity {
     const queueCount = this.building.productionQueue.length;
     const currentUnitRules = currentUnitType ? getUnitRules(currentUnitType) : null;
     const baseDetail = rules.detail;
+    const underConstruction = this.isUnderConstruction();
     let detail: string;
-    if (mine && this.building.buildingType === BuildingType.FARM) {
+    if (underConstruction) {
+      detail = `${this.building.constructionBlocksDelivered}/${this.building.constructionBlocksRequired} blocks placed`;
+    } else if (mine && this.building.buildingType === BuildingType.FARM) {
       const growthPct = Math.round(this.building.farmGrowth * 100);
       const agentPhase = this.game.getAgentPhaseForBuilding(this.id);
       const agentStatus = agentPhase !== null
@@ -578,7 +715,7 @@ export class BuildingEntity extends Entity {
       health: this.building.health,
       maxHealth: rules.health,
       color: this.game.getPlayerColor(this.building.ownerId),
-      actions: mine
+      actions: mine && !underConstruction
         ? [
             ...rules.producibleUnits.map((unitType) => {
             const unitRules = getUnitRules(unitType);
@@ -605,7 +742,7 @@ export class BuildingEntity extends Entity {
         ]
         : [],
       production:
-        mine && currentUnitRules
+        mine && !underConstruction && currentUnitRules
           ? {
               label: currentUnitRules.label,
               queueCount,

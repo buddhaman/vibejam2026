@@ -13,6 +13,13 @@ export type ProjectedWorldText = {
   age: number;
 };
 
+export type ProjectedWorldWarning = {
+  sx: number;
+  sy: number;
+  text: string;
+  age: number;
+};
+
 export type ProjectedAgentStatusLabel = {
   sx: number;
   sy: number;
@@ -43,6 +50,25 @@ export function projectFloatingResourceTexts(
       resourceType: text.resourceType,
       age: text.age,
     });
+  }
+  return projected;
+}
+
+export function projectWorldWarnings(
+  game: Game,
+  camera: THREE.Camera,
+  canvas: HTMLCanvasElement,
+  nowSec: number
+): ProjectedWorldWarning[] {
+  const projected: ProjectedWorldWarning[] = [];
+  for (const warning of game.getWorldWarnings(nowSec)) {
+    PROJECTED_TEXT_POS.set(warning.x, getTerrainHeightAt(warning.x, warning.z, game.getTiles()) + 7.2, warning.z);
+    PROJECTED_TEXT_POS.project(camera);
+    if (PROJECTED_TEXT_POS.z < -1 || PROJECTED_TEXT_POS.z > 1) continue;
+    const sx = (PROJECTED_TEXT_POS.x * 0.5 + 0.5) * canvas.width;
+    const sy = (-PROJECTED_TEXT_POS.y * 0.5 + 0.5) * canvas.height;
+    if (sx < -180 || sx > canvas.width + 180 || sy < -110 || sy > canvas.height + 110) continue;
+    projected.push({ sx, sy, text: warning.text, age: warning.age });
   }
   return projected;
 }

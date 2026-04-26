@@ -11,6 +11,7 @@ import {
   createHudState,
   drawHUD,
   drawFloatingResourceTexts,
+  drawWorldWarnings,
   drawVictoryOverlay,
   hitTestContextBar,
   hitTestContextBuildAction,
@@ -27,7 +28,7 @@ import { attachDevNetworkPerf } from "./network-perf.js";
 import { drawTileDebugPanel } from "./tile-debug.js";
 import { drawDevOverlay } from "./dev-overlay.js";
 import { CAMERA_CONFIG, createInitialFrameStats, createRenderWorld } from "./render-world.js";
-import { projectAgentStatusLabels, projectFloatingResourceTexts } from "./world-text.js";
+import { projectAgentStatusLabels, projectFloatingResourceTexts, projectWorldWarnings } from "./world-text.js";
 import { createChatUi } from "./chat-ui.js";
 import { OnboardingController } from "./onboarding.js";
 import { PortalSystem } from "./portal-system.js";
@@ -350,7 +351,7 @@ export function startRender(game: Game) {
         selectedBlob &&
         picked.isOwnedByMe() &&
         picked instanceof BuildingEntity &&
-        picked.getBuildingType() === BuildingType.FARM &&
+        (picked.getBuildingType() === BuildingType.FARM || picked.isUnderConstruction()) &&
         selectedBlob.getUnitType() === UnitType.VILLAGER
       ) {
         game.sendGatherBuildingIntent(selectedBlob.id, picked.id);
@@ -742,6 +743,7 @@ export function startRender(game: Game) {
     );
     drawAgentStatusLabels(hudCanvas, projectAgentStatusLabels(game, camera, hudCanvas));
     drawFloatingResourceTexts(hudCanvas, projectFloatingResourceTexts(game, camera, hudCanvas, now / 1000));
+    drawWorldWarnings(hudCanvas, projectWorldWarnings(game, camera, hudCanvas, now / 1000));
     if (victoryState) drawVictoryOverlay(hudCanvas, victoryState, now / 1000, victoryState.startT);
     onboarding.draw(hudCanvas, game, camera, now / 1000, { buildPanelOpen: hud.buildPanelOpen });
 

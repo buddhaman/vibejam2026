@@ -112,7 +112,7 @@ export const GAME_RULES = {
   START_MATERIAL: 300,
   START_COMPUTE: 200,
   /** Free starting squads spawned with your first town center (release defaults). */
-  START_AGENT_UNIT_COUNT: 3,
+  START_AGENT_UNIT_COUNT: 6,
   START_WARBAND_UNIT_COUNT: 0,
   START_ARCHER_UNIT_COUNT: 0,
   START_SYNTHAUR_UNIT_COUNT: 0,

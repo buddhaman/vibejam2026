@@ -1,6 +1,6 @@
 import type { BuildingType, SquadSpread, TileType, UnitType } from "./game-rules.js";
 
-export const CLIENT_PROTOCOL_VERSION = 1;
+export const CLIENT_PROTOCOL_VERSION = 2;
 
 export const MessageType = {
   INTENT:        "intent",
@@ -67,6 +67,7 @@ export const CarriedResourceType = {
   MATERIAL: 1,
   COMPUTE: 2,
   BIOMASS: 3,
+  BUILDING_BLOCK: 4,
 } as const;
 
 export type CarriedResourceType = (typeof CarriedResourceType)[keyof typeof CarriedResourceType];

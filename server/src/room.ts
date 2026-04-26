@@ -85,6 +85,10 @@ const VILLAGER_CARRY_PER_UNIT = 12;
 const VILLAGER_PICKUP_MS = 1000;
 const VILLAGER_DROPOFF_MS = 1000;
 const VILLAGER_GATHER_RETARGET_RADIUS_TILES = 8;
+const BUILD_BLOCK_RESOURCE_VALUE = 25;
+const BUILD_BLOCK_PICKUP_MS = 650;
+const BUILD_BLOCK_DROPOFF_MS = 900;
+const BUILD_REACH_PADDING = GAME_RULES.TILE_SIZE * 0.35;
 const CHAT_MAX_CHARS = 280;
 const ROUND_RESET_DELAY_MS = 9000;
 
@@ -299,7 +303,13 @@ export class BattleRoom extends Room<{ state: GameState }> {
       const building = typeof msg.buildingId === "string" ? this.state.buildings.get(msg.buildingId) : null;
       if (!tile && !building) return;
       if (tile && (tile.isMountain || (tile.material <= 0 && tile.compute <= 0))) return;
-      if (building && (building.ownerId !== client.sessionId || building.buildingType !== BuildingType.FARM)) return;
+      if (
+        building &&
+        (
+          building.ownerId !== client.sessionId ||
+          (building.buildingType !== BuildingType.FARM && !this.isBuildingUnderConstruction(building))
+        )
+      ) return;
       this.combatRetreatTargets.delete(blob.id);
       this.clearBlobAttackTarget(blob);
       blob.gatherTargetKey = tile?.key ?? "";
@@ -380,12 +390,15 @@ export class BattleRoom extends Room<{ state: GameState }> {
       building.y = snapped.z;
       building.buildingType = msg.type;
       building.health = buildingRules.health;
+      building.constructionBlocksRequired = this.getConstructionBlockCost(msg.type);
+      building.constructionBlocksDelivered = 0;
       this.initializeBuildingSpawnTarget(building);
 
       spendPlayerResources(player, buildingRules.cost);
 
       this.state.buildings.set(building.id, building);
       this.addBuildingFootprint(building);
+      this.assignIdleBuildersToConstruction(building);
     });
 
     this.onMessage(MessageType.TRAIN, (client, raw) => {
@@ -401,7 +414,7 @@ export class BattleRoom extends Room<{ state: GameState }> {
       }
       const buildingRules = getBuildingRules(building.buildingType);
       const trainCost = getUnitTrainCost(msg.unitType);
-      if (!canBuildingProduceUnit(building.buildingType, msg.unitType) || !canAfford(player, trainCost)) return;
+      if (!this.isBuildingComplete(building) || !canBuildingProduceUnit(building.buildingType, msg.unitType) || !canAfford(player, trainCost)) return;
 
       spendPlayerResources(player, trainCost);
       building.productionQueue.push(msg.unitType);
@@ -442,7 +455,7 @@ export class BattleRoom extends Room<{ state: GameState }> {
     this.playerSpawnSlots.set(client.sessionId, playerIndex);
 
     const townCenter = this.spawnTownCenter(client.sessionId, playerIndex);
-    this.spawnStartingBlob(townCenter, UnitType.VILLAGER, CONFIG.START_AGENT_UNIT_COUNT, 0);
+    this.spawnStartingAgents(townCenter);
     this.spawnStartingBlob(townCenter, UnitType.WARBAND, CONFIG.START_WARBAND_UNIT_COUNT, 1);
     this.spawnStartingBlob(townCenter, UnitType.ARCHER, CONFIG.START_ARCHER_UNIT_COUNT, 2);
     this.spawnStartingBlob(townCenter, UnitType.SYNTHAUR, CONFIG.START_SYNTHAUR_UNIT_COUNT, 3);
@@ -975,6 +988,67 @@ export class BattleRoom extends Room<{ state: GameState }> {
     return Math.hypot(rules.selectionWidth * 0.5, rules.selectionDepth * 0.5) + GAME_RULES.TILE_SIZE * 0.8;
   }
 
+  private getConstructionBlockCost(buildingType: BuildingType): number {
+    const rules = getBuildingRules(buildingType);
+    if (!rules.buildable) return 0;
+    if (buildingType === BuildingType.FARM) return 3;
+    const totalCost = rules.cost.biomass + rules.cost.material + rules.cost.compute;
+    const rawBlocks = Math.max(3, Math.ceil(totalCost / BUILD_BLOCK_RESOURCE_VALUE));
+    return Math.ceil(rawBlocks / 3) * 3;
+  }
+
+  private isBuildingUnderConstruction(building: Building): boolean {
+    return (
+      building.constructionBlocksRequired > 0 &&
+      building.constructionBlocksDelivered < building.constructionBlocksRequired
+    );
+  }
+
+  private isBuildingComplete(building: Building): boolean {
+    return !this.isBuildingUnderConstruction(building);
+  }
+
+  private getVillagerBlockCarryCapacity(blob: Blob, building: Building): number {
+    const remaining = Math.max(0, building.constructionBlocksRequired - building.constructionBlocksDelivered);
+    return Math.min(Math.max(1, blob.unitCount), remaining);
+  }
+
+  private getConstructionReach(building: Building): number {
+    const rules = getBuildingRules(building.buildingType);
+    return Math.hypot(rules.selectionWidth * 0.5, rules.selectionDepth * 0.5) + BUILD_REACH_PADDING;
+  }
+
+  private isBlobIdleForAutoBuild(blob: Blob): boolean {
+    if (blob.unitType !== UnitType.VILLAGER) return false;
+    if (blob.carriedAmount > 0 || blob.carriedResourceType !== CarriedResourceType.NONE) return false;
+    if (blob.gatherTargetKey.length > 0 || blob.gatherTargetBuildingId.length > 0) return false;
+    if (blob.attackTargetId.length > 0 || this.blobHasCombatGroup(blob)) return false;
+    if (this.blobPaths.has(blob.id)) return false;
+    if (Math.hypot(blob.vx, blob.vy) > 0.05) return false;
+    return Math.hypot(blob.targetX - blob.x, blob.targetY - blob.y) <= CONFIG.BLOB_STOP_EPSILON * 2;
+  }
+
+  private assignIdleBuildersToConstruction(building: Building): void {
+    if (!this.isBuildingUnderConstruction(building)) return;
+    let best: Blob | null = null;
+    let bestDistance = Infinity;
+    for (const blob of this.state.blobs.values()) {
+      if (blob.ownerId !== building.ownerId || !this.isBlobIdleForAutoBuild(blob)) continue;
+      const distance = Math.hypot(blob.x - building.x, blob.y - building.y);
+      if (distance < bestDistance) {
+        best = blob;
+        bestDistance = distance;
+      }
+    }
+    if (!best) return;
+    best.gatherTargetKey = "";
+    best.gatherTargetBuildingId = building.id;
+    best.gatherPhase = BlobGatherPhase.MOVING_TO_RESOURCE;
+    best.gatherTimerMs = 0;
+    const dropoff = this.getNearestDropoffBuilding(best.ownerId, best.x, best.y);
+    if (dropoff) this.steerBlobTo(best, dropoff.x, dropoff.y, true);
+  }
+
   private steerBlobTo(blob: Blob, x: number, y: number, snapToNearestWalkable = false): void {
     const needNewPath =
       !this.blobPaths.has(blob.id) ||
@@ -1366,7 +1440,7 @@ export class BattleRoom extends Room<{ state: GameState }> {
       player.kothTimeMs = CONFIG.KOTH_START_TIME_MS;
       this.playerSpawnSlots.set(player.sessionId, playerIndex);
       const townCenter = this.spawnTownCenter(player.sessionId, playerIndex);
-      this.spawnStartingBlob(townCenter, UnitType.VILLAGER, CONFIG.START_AGENT_UNIT_COUNT, 0);
+      this.spawnStartingAgents(townCenter);
       this.spawnStartingBlob(townCenter, UnitType.WARBAND, CONFIG.START_WARBAND_UNIT_COUNT, 1);
       this.spawnStartingBlob(townCenter, UnitType.ARCHER, CONFIG.START_ARCHER_UNIT_COUNT, 2);
       this.spawnStartingBlob(townCenter, UnitType.SYNTHAUR, CONFIG.START_SYNTHAUR_UNIT_COUNT, 3);
@@ -1795,6 +1869,81 @@ export class BattleRoom extends Room<{ state: GameState }> {
     if (gathered) this.broadcastTileUpdate(tile.key);
   }
 
+  private stepVillagerConstructionOrder(blob: Blob, building: Building, dtMs: number): boolean {
+    if (!this.isBuildingUnderConstruction(building)) {
+      this.clearBlobGatherTarget(blob);
+      return false;
+    }
+
+    const townCenter = this.getNearestDropoffBuilding(blob.ownerId, blob.x, blob.y);
+    if (!townCenter) {
+      this.clearBlobGatherTarget(blob);
+      return false;
+    }
+
+    if (blob.carriedAmount > 0 && blob.carriedResourceType === CarriedResourceType.BUILDING_BLOCK) {
+      const distance = Math.hypot(blob.x - building.x, blob.y - building.y);
+      if (distance > this.getConstructionReach(building)) {
+        blob.gatherPhase = BlobGatherPhase.RETURNING;
+        this.steerBlobTo(blob, building.x, building.y, true);
+        return true;
+      }
+
+      blob.gatherPhase = BlobGatherPhase.DROPPING_OFF;
+      blob.gatherTimerMs = Math.min(BUILD_BLOCK_DROPOFF_MS, blob.gatherTimerMs + dtMs);
+      blob.targetX = building.x;
+      blob.targetY = building.y;
+      blob.vx = 0;
+      blob.vy = 0;
+      this.clearBlobPath(blob);
+      if (blob.gatherTimerMs < BUILD_BLOCK_DROPOFF_MS) return true;
+
+      const remaining = Math.max(0, building.constructionBlocksRequired - building.constructionBlocksDelivered);
+      building.constructionBlocksDelivered += Math.min(blob.carriedAmount, remaining);
+      blob.carriedAmount = 0;
+      blob.carriedResourceType = CarriedResourceType.NONE;
+      blob.gatherTimerMs = 0;
+
+      if (!this.isBuildingUnderConstruction(building)) {
+        building.constructionBlocksDelivered = building.constructionBlocksRequired;
+        this.clearBlobGatherTarget(blob);
+        return true;
+      }
+
+      blob.gatherPhase = BlobGatherPhase.MOVING_TO_RESOURCE;
+      this.steerBlobTo(blob, townCenter.x, townCenter.y, true);
+      return true;
+    }
+
+    if (blob.carriedAmount > 0) {
+      blob.carriedAmount = 0;
+      blob.carriedResourceType = CarriedResourceType.NONE;
+    }
+
+    const distanceToTownCenter = Math.hypot(blob.x - townCenter.x, blob.y - townCenter.y);
+    if (distanceToTownCenter > this.getBuildingDropoffRadius(townCenter)) {
+      blob.gatherPhase = BlobGatherPhase.MOVING_TO_RESOURCE;
+      this.steerBlobTo(blob, townCenter.x, townCenter.y, true);
+      return true;
+    }
+
+    blob.gatherPhase = BlobGatherPhase.PICKING_UP;
+    blob.gatherTimerMs = Math.min(BUILD_BLOCK_PICKUP_MS, blob.gatherTimerMs + dtMs);
+    blob.targetX = townCenter.x;
+    blob.targetY = townCenter.y;
+    blob.vx = 0;
+    blob.vy = 0;
+    this.clearBlobPath(blob);
+    if (blob.gatherTimerMs < BUILD_BLOCK_PICKUP_MS) return true;
+
+    blob.carriedAmount = this.getVillagerBlockCarryCapacity(blob, building);
+    blob.carriedResourceType = CarriedResourceType.BUILDING_BLOCK;
+    blob.gatherTimerMs = 0;
+    blob.gatherPhase = BlobGatherPhase.RETURNING;
+    this.steerBlobTo(blob, building.x, building.y, true);
+    return true;
+  }
+
   private stepVillagerGatherOrder(blob: Blob, dt: number): boolean {
     if (
       blob.unitType !== UnitType.VILLAGER ||
@@ -1807,6 +1956,15 @@ export class BattleRoom extends Room<{ state: GameState }> {
     const targetBuilding = this.state.buildings.get(blob.gatherTargetBuildingId) ?? null;
     const carryCapacity = this.getVillagerCarryCapacity(blob);
     const dtMs = dt * 1000;
+
+    if (targetBuilding && this.isBuildingUnderConstruction(targetBuilding)) {
+      return this.stepVillagerConstructionOrder(blob, targetBuilding, dtMs);
+    }
+
+    if (blob.carriedResourceType === CarriedResourceType.BUILDING_BLOCK) {
+      blob.carriedAmount = 0;
+      blob.carriedResourceType = CarriedResourceType.NONE;
+    }
 
     if (blob.gatherPhase === BlobGatherPhase.DROPPING_OFF) {
       const dropoff = this.getNearestDropoffBuilding(blob.ownerId, blob.x, blob.y);
@@ -1961,6 +2119,10 @@ export class BattleRoom extends Room<{ state: GameState }> {
   }
 
   private stepBuildingProduction(building: Building, dtMs: number) {
+    if (!this.isBuildingComplete(building)) {
+      building.productionProgressMs = 0;
+      return;
+    }
     if (building.buildingType === BuildingType.FARM) {
       building.farmGrowth = Math.min(1, building.farmGrowth + dtMs / GAME_RULES.FARM_GROWTH_MS);
     }
@@ -2323,7 +2485,7 @@ export class BattleRoom extends Room<{ state: GameState }> {
 
     for (const building of this.state.buildings.values()) {
       const rules = getBuildingRules(building.buildingType);
-      if (rules.damagePerSec <= 0 || rules.attackRange <= 0) {
+      if (!this.isBuildingComplete(building) || rules.damagePerSec <= 0 || rules.attackRange <= 0) {
         building.attackTargetBlobId = "";
         continue;
       }
@@ -2379,6 +2541,14 @@ export class BattleRoom extends Room<{ state: GameState }> {
     if (Math.hypot(rally.x - spawn.x, rally.y - spawn.y) > CONFIG.BLOB_STOP_EPSILON) {
       this.setBlobDestination(blob, rally.x, rally.y, this.getBlobOwnerClient(blob), { snapToNearestWalkable: true });
     }
+  }
+
+  private spawnStartingAgents(building: Building): void {
+    const total = Math.max(0, CONFIG.START_AGENT_UNIT_COUNT);
+    const first = Math.min(3, total);
+    const second = Math.max(0, total - first);
+    this.spawnStartingBlob(building, UnitType.VILLAGER, first, 0);
+    this.spawnStartingBlob(building, UnitType.VILLAGER, second, 0.5);
   }
 
   private spawnStartingBlob(building: Building, unitType: UnitType, unitCount: number, slotIndex: number): void {

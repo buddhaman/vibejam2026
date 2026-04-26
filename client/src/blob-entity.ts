@@ -41,6 +41,7 @@ import {
 } from "./unit-family-renderers.js";
 import {
   CarriedResourceRenderer,
+  createDraggedBuildingBlockInstance,
   createDraggedComputeInstance,
   createDraggedPlantsInstance,
   createDraggedTreeInstance,
@@ -1563,11 +1564,13 @@ export class BlobEntity extends Entity {
         ? this.getGatherPhaseProgress(stepDt, BlobGatherPhase.DROPPING_OFF)
         : 0;
     const carriedDisplayCount =
-      this.blob.gatherPhase === BlobGatherPhase.PICKING_UP && this.blob.unitType === UnitType.VILLAGER
-        ? n
-        : this.blob.carriedAmount > 0
-          ? Math.min(n, Math.ceil(this.blob.carriedAmount / VILLAGER_CARRY_DISPLAY_CHUNK))
-          : 0;
+      this.blob.carriedResourceType === CarriedResourceType.BUILDING_BLOCK
+        ? Math.min(n, this.blob.carriedAmount)
+        : this.blob.gatherPhase === BlobGatherPhase.PICKING_UP && this.blob.unitType === UnitType.VILLAGER
+          ? n
+          : this.blob.carriedAmount > 0
+            ? Math.min(n, Math.ceil(this.blob.carriedAmount / VILLAGER_CARRY_DISPLAY_CHUNK))
+            : 0;
     const carriedResourceInstances: CarriedResourceInstance[] = [];
     const farmingToolInstances: FarmingToolInstance[] = [];
     let farmWanderCenterX = 0;
@@ -1851,7 +1854,39 @@ export class BlobEntity extends Entity {
       });
 
       if (this.blob.unitType === UnitType.VILLAGER && i < carriedDisplayCount) {
-        if (this.blob.carriedResourceType === CarriedResourceType.MATERIAL) {
+        if (this.blob.carriedResourceType === CarriedResourceType.BUILDING_BLOCK) {
+          const source = this.getNearestOwnedDropoffCenter(worldX, worldZ);
+          const target = this.game.findBuildingEntity(this.blob.gatherTargetBuildingId);
+          const stackPose = target?.getConstructionBlockWorldPose(
+            target.getConstructionBlocksDelivered() + i
+          );
+          carriedResourceInstances.push(
+            createDraggedBuildingBlockInstance({
+              localX: worldX,
+              localZ: worldZ,
+              baseY: unitTerrainY,
+              forwardX: stepForwardX,
+              forwardZ: stepForwardZ,
+              sideX,
+              sideZ,
+              scale: unitRules.visualScale,
+            })
+          );
+          const inst = carriedResourceInstances[carriedResourceInstances.length - 1]!;
+          inst.growT = 1;
+          inst.pickupT = pickupProgress;
+          inst.throwT = dropoffProgress;
+          inst.bobPhase = this.combatAnimT * 15.6 + i * 0.7;
+          inst.sourceX = source?.x;
+          inst.sourceY = source?.y;
+          inst.sourceZ = source?.z;
+          inst.targetX = stackPose?.x;
+          inst.targetY = stackPose?.y;
+          inst.targetZ = stackPose?.z;
+          inst.targetRotationY = stackPose?.rotationY;
+          inst.targetTiltX = 0;
+          inst.targetTiltZ = 0;
+        } else if (this.blob.carriedResourceType === CarriedResourceType.MATERIAL) {
           const source = this.getGatherTreeSourcePosition(i);
           const dropoffTarget = this.getNearestOwnedDropoffCenter(worldX, worldZ);
           carriedResourceInstances.push(

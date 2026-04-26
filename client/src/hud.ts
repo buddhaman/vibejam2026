@@ -546,6 +546,46 @@ export function drawFloatingResourceTexts(
   }
 }
 
+export function drawWorldWarnings(
+  canvas: HTMLCanvasElement,
+  warnings: Array<{
+    sx: number;
+    sy: number;
+    text: string;
+    age: number;
+  }>
+): void {
+  if (warnings.length === 0) return;
+  const ctx = canvas.getContext("2d")!;
+  for (const warning of warnings) {
+    const life = 2.4;
+    const u = Math.max(0, Math.min(1, warning.age / life));
+    const alpha = u < 0.12 ? u / 0.12 : 1 - Math.max(0, u - 0.68) / 0.32;
+    const rise = u * 22;
+    const pulse = 1 + Math.sin(Math.min(1, u / 0.22) * Math.PI) * 0.05;
+    const padX = 12;
+    const h = 30;
+
+    ctx.save();
+    ctx.globalAlpha = Math.max(0, alpha);
+    ctx.translate(warning.sx, warning.sy - rise);
+    ctx.scale(pulse, pulse);
+    ctx.font = "800 13px system-ui, -apple-system, BlinkMacSystemFont, sans-serif";
+    const w = Math.min(230, ctx.measureText(warning.text).width + padX * 2);
+    rr(ctx, -w * 0.5, -h * 0.5, w, h, 15);
+    ctx.fillStyle = "rgba(255, 236, 190, 0.94)";
+    ctx.fill();
+    ctx.lineWidth = 2;
+    ctx.strokeStyle = "rgba(116, 74, 26, 0.72)";
+    ctx.stroke();
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.fillStyle = "#513516";
+    ctx.fillText(warning.text, 0, 0.5);
+    ctx.restore();
+  }
+}
+
 // ─── Move markers — divine cyan ripples ──────────────────────────────────────
 
 function drawMoveMarkers(ctx: CanvasRenderingContext2D, hud: HudState, t: number): void {

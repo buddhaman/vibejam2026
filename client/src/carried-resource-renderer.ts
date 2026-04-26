@@ -4,12 +4,18 @@ import { publicAssetUrl } from "./asset-url.js";
 import { createGLTFLoader } from "./gltf-loader.js";
 import { applyStylizedShading } from "./stylized-shading.js";
 import { isStylizedLitMaterial } from "./stylized-shading.js";
+import { createConstructionBlockMesh } from "./construction-blocks.js";
 
 const DUMMY = new THREE.Object3D();
+const START_EULER = new THREE.Euler();
+const END_EULER = new THREE.Euler();
+const START_QUAT = new THREE.Quaternion();
+const END_QUAT = new THREE.Quaternion();
+const RESULT_QUAT = new THREE.Quaternion();
 const GPU_GLB = publicAssetUrl("models/buildings/gpu.glb");
 const CARRIED_GPU_TARGET_HEIGHT = 0.82;
 
-export type CarriedResourceKind = "tree" | "compute" | "plants";
+export type CarriedResourceKind = "tree" | "compute" | "plants" | "building_block";
 
 export type CarriedResourceInstance = {
   kind: CarriedResourceKind;
@@ -25,6 +31,9 @@ export type CarriedResourceInstance = {
   rotationY: number;
   tiltX: number;
   tiltZ?: number;
+  targetRotationY?: number;
+  targetTiltX?: number;
+  targetTiltZ?: number;
   scale: number;
   growT?: number;
   pickupT?: number;
@@ -204,6 +213,10 @@ function buildPlantMeshes(capacity: number): THREE.InstancedMesh[] {
   });
 }
 
+function buildBuildingBlockMeshes(capacity: number): THREE.InstancedMesh[] {
+  return [createConstructionBlockMesh(capacity)];
+}
+
 function createBank(buildMeshes: (capacity: number) => THREE.InstancedMesh[], capacity: number): MeshBank {
   return { meshes: buildMeshes(capacity), capacity };
 }
@@ -231,14 +244,17 @@ export class CarriedResourceRenderer {
   private readonly treeBank: MeshBank;
   private readonly computeBank: MeshBank;
   private readonly plantsBank: MeshBank;
+  private readonly blockBank: MeshBank;
 
   public constructor(capacity: number) {
     this.treeBank = createBank(buildTreeMeshes, capacity);
     this.computeBank = createBank(buildComputeMeshes, capacity);
     this.plantsBank = createBank(buildPlantMeshes, capacity);
+    this.blockBank = createBank(buildBuildingBlockMeshes, capacity);
     for (const mesh of this.treeBank.meshes) this.root.add(mesh);
     for (const mesh of this.computeBank.meshes) this.root.add(mesh);
     for (const mesh of this.plantsBank.meshes) this.root.add(mesh);
+    for (const mesh of this.blockBank.meshes) this.root.add(mesh);
     void this.loadComputeGpuMeshes();
   }
 
@@ -252,14 +268,17 @@ export class CarriedResourceRenderer {
     const treeInstances = instances.filter((instance) => instance.kind === "tree");
     const computeInstances = instances.filter((instance) => instance.kind === "compute");
     const plantsInstances = instances.filter((instance) => instance.kind === "plants");
+    const blockInstances = instances.filter((instance) => instance.kind === "building_block");
 
     ensureCapacity(this.treeBank, treeInstances.length, buildTreeMeshes, this.root);
     ensureCapacity(this.computeBank, computeInstances.length, buildComputeMeshes, this.root);
     ensureCapacity(this.plantsBank, plantsInstances.length, buildPlantMeshes, this.root);
+    ensureCapacity(this.blockBank, blockInstances.length, buildBuildingBlockMeshes, this.root);
 
     this.syncBank(this.treeBank.meshes, treeInstances);
     this.syncBank(this.computeBank.meshes, computeInstances);
     this.syncBank(this.plantsBank.meshes, plantsInstances);
+    this.syncBank(this.blockBank.meshes, blockInstances);
   }
 
   private syncBank(meshes: THREE.InstancedMesh[], instances: CarriedResourceInstance[]): void {
@@ -301,7 +320,16 @@ export class CarriedResourceRenderer {
         GAME_RULES.UNIT_HEIGHT * 1.35,
         Math.min(GAME_RULES.UNIT_HEIGHT * 3.4, throwDistance * 0.28)
       );
-      const arcY = throwT > 0 ? Math.sin(throwEase * Math.PI) * arcPeak : 0;
+      const isBuildingBlock = instance.kind === "building_block";
+      const arcY = throwT > 0
+        ? Math.sin(throwEase * Math.PI) * arcPeak
+        : 0;
+      const landingT = throwT > 0 && isBuildingBlock
+        ? Math.max(0, Math.min(1, (throwEase - 0.72) / 0.28))
+        : 0;
+      const settleBounce = throwT > 0 && isBuildingBlock
+        ? Math.sin(landingT * Math.PI) * GAME_RULES.UNIT_HEIGHT * 0.18
+        : 0;
       const bobPhase = instance.bobPhase ?? 0;
       const bobWave = Math.abs(Math.sin(bobPhase));
       const bobY = throwT > 0 ? 0 : bobWave * GAME_RULES.UNIT_HEIGHT * 0.18;
@@ -314,12 +342,36 @@ export class CarriedResourceRenderer {
           ? instance.rotationY + THREE.MathUtils.lerp(-0.6, 0, pickupEase)
           : instance.rotationY;
       const throwTiltX =
-        throwT > 0 && instance.kind === "tree"
-          ? THREE.MathUtils.lerp(carryTiltX, -1.02, throwEase)
+        throwT > 0
+          ? THREE.MathUtils.lerp(
+              carryTiltX,
+              instance.targetTiltX ?? (instance.kind === "tree" ? -1.02 : carryTiltX),
+              throwEase
+            )
           : carryTiltX;
-      DUMMY.position.set(posX, posYBase + arcY + bobY, posZ);
-      DUMMY.rotation.set(throwTiltX, carryRotationY + throwEase * 1.1, instance.tiltZ ?? 0);
-      DUMMY.scale.setScalar(instance.scale * growT);
+      const throwTiltZ = throwT > 0
+        ? THREE.MathUtils.lerp(instance.tiltZ ?? 0, instance.targetTiltZ ?? instance.tiltZ ?? 0, throwEase)
+        : instance.tiltZ ?? 0;
+      const placementPitch = throwT > 0 && isBuildingBlock
+        ? (1 - throwEase) * 0.22 + Math.sin(landingT * Math.PI) * 0.08
+        : 0;
+      const settleScale = throwT > 0 && isBuildingBlock
+        ? 1 + Math.sin(landingT * Math.PI) * 0.06
+        : 1;
+      DUMMY.position.set(posX, posYBase + arcY + settleBounce + bobY, posZ);
+      if (throwT > 0 && isBuildingBlock) {
+        const rotationEase = THREE.MathUtils.smoothstep(throwEase, 0.42, 1);
+        START_EULER.set(carryTiltX, carryRotationY, instance.tiltZ ?? 0);
+        END_EULER.set(instance.targetTiltX ?? 0, instance.targetRotationY ?? carryRotationY, instance.targetTiltZ ?? 0);
+        START_QUAT.setFromEuler(START_EULER);
+        END_QUAT.setFromEuler(END_EULER);
+        RESULT_QUAT.slerpQuaternions(START_QUAT, END_QUAT, rotationEase);
+        DUMMY.quaternion.copy(RESULT_QUAT);
+        DUMMY.rotateX(placementPitch);
+      } else {
+        DUMMY.rotation.set(throwTiltX, carryRotationY, throwTiltZ);
+      }
+      DUMMY.scale.setScalar(instance.scale * growT * settleScale);
       DUMMY.updateMatrix();
       for (const mesh of meshes) mesh.setMatrixAt(i, DUMMY.matrix);
     }
@@ -397,5 +449,27 @@ export function createDraggedPlantsInstance(params: {
     rotationY: Math.atan2(params.forwardX, params.forwardZ),
     tiltX: Math.PI * 0.04,
     scale: 1.28 * params.scale,
+  };
+}
+
+export function createDraggedBuildingBlockInstance(params: {
+  localX: number;
+  localZ: number;
+  baseY: number;
+  forwardX: number;
+  forwardZ: number;
+  sideX: number;
+  sideZ: number;
+  scale: number;
+}): CarriedResourceInstance {
+  return {
+    kind: "building_block",
+    localX: params.localX + params.sideX * GAME_RULES.UNIT_RADIUS * 0.1 * params.scale,
+    localY: params.baseY + GAME_RULES.UNIT_HEIGHT * 1.28 * params.scale,
+    localZ: params.localZ + params.sideZ * GAME_RULES.UNIT_RADIUS * 0.1 * params.scale,
+    rotationY: Math.atan2(params.forwardX, params.forwardZ),
+    tiltX: 0,
+    tiltZ: 0,
+    scale: 1,
   };
 }

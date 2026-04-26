@@ -114,6 +114,12 @@ export class Game {
     resourceType: number;
     bornAt: number;
   }> = [];
+  private _worldWarnings: Array<{
+    x: number;
+    z: number;
+    text: string;
+    bornAt: number;
+  }> = [];
   private _fogOfWarVisibilityQuery: ((x: number, z: number) => boolean) | null = null;
   private _uiFeed: Array<
     | ({ type: "chat"; senderId: string; senderName: string; text: string; sentAt: number } & { id: string })
@@ -326,6 +332,7 @@ export class Game {
     this._blobCarrySnapshots.clear();
     this._buildingSnapshots.clear();
     this._floatingResourceTexts = [];
+    this._worldWarnings = [];
     this._dirtyTileVisualLayers.add("forest");
     this._dirtyTileVisualLayers.add("datacenters");
     this._allTileVisualsDirty = true;
@@ -508,6 +515,8 @@ export class Game {
         rallySet?: number;
         rallyX?: number;
         rallyY?: number;
+        constructionBlocksRequired?: number;
+        constructionBlocksDelivered?: number;
       });
       this._buildingSnapshots.set(id as string, {
         x: building.x,
@@ -541,6 +550,9 @@ export class Game {
 
     this._floatingResourceTexts = this._floatingResourceTexts.filter(
       (text) => nowSec - text.bornAt < Game.FLOATING_RESOURCE_TEXT_LIFE
+    );
+    this._worldWarnings = this._worldWarnings.filter(
+      (warning) => nowSec - warning.bornAt < 2.4
     );
   }
 
@@ -983,6 +995,23 @@ export class Game {
       .filter((text) => text.age >= 0 && text.age < Game.FLOATING_RESOURCE_TEXT_LIFE);
   }
 
+  public addWorldWarning(x: number, z: number, text: string): void {
+    const nowSec = performance.now() / 1000;
+    this._worldWarnings.push({ x, z, text, bornAt: nowSec });
+    if (this._worldWarnings.length > 8) this._worldWarnings.shift();
+  }
+
+  public getWorldWarnings(nowSec: number): Array<{ x: number; z: number; text: string; age: number }> {
+    return this._worldWarnings
+      .map((warning) => ({
+        x: warning.x,
+        z: warning.z,
+        text: warning.text,
+        age: nowSec - warning.bornAt,
+      }))
+      .filter((warning) => warning.age >= 0 && warning.age < 2.4);
+  }
+
   public getMyTownCenterPosition(): { x: number; z: number } | null {
     let best: { x: number; z: number } | null = null;
     this.room.state.buildings.forEach((building) => {
@@ -1272,8 +1301,9 @@ export class Game {
   }
 
   public sendGatherBuildingIntent(blobId: string, buildingId: string): void {
+    const building = this.findBuildingEntity(buildingId);
     const occupant = this.getAgentPhaseForBuilding(buildingId);
-    if (occupant !== null) {
+    if (!building?.isUnderConstruction() && occupant !== null) {
       this.warn("Farm already has an agent");
       return;
     }
@@ -1289,6 +1319,9 @@ export class Game {
     }
     const snapped = snapWorldToTileCenter(worldX, worldZ);
     this.room.send(MessageType.BUILD, { type, worldX: snapped.x, worldZ: snapped.z } satisfies BuildMessage);
+    if (this.getMyIdleAgentCount() <= 0) {
+      this.addWorldWarning(snapped.x, snapped.z, "Need an idle agent to build");
+    }
     return true;
   }
 
