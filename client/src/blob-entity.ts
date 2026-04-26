@@ -91,6 +91,7 @@ const VISUAL_CATCHUP = 12;
 const SELECTED_RING_THICKNESS_PX = 4;
 const UNSELECTED_RING_THICKNESS_PX = 6;
 const SELECTED_RING_MIN_THICKNESS_WORLD = 0.025;
+const SELECTION_OVAL_SCALE = 1.18;
 const SELECTED_RING_OUTER_SCALE = 1.1;
 const UNSELECTED_RING_OUTER_SCALE = 1.04;
 const DIRECTION_SMOOTHING = 3.2;
@@ -98,8 +99,8 @@ const MIN_DIRECTION_SPEED = 0.2;
 const UNIT_SPRING = 20;
 const UNIT_DAMPING = 0.24;
 const UNIT_WALK_SPEED = 4.4;
-const UNIT_BODY_MAX_SPEED = 10.2;
-const UNIT_BODY_CATCHUP_GAIN = 2.8;
+const UNIT_BODY_MAX_SPEED = 16;
+const UNIT_BODY_CATCHUP_GAIN = 5.4;
 const UNIT_BODY_COMBAT_MAX_SPEED = 4.8;
 const UNIT_BODY_COMBAT_CATCHUP_GAIN = 0;
 const UNIT_MAX_TURN_RATE = Math.PI * 5.2;
@@ -203,6 +204,7 @@ type BlobRenderView = {
   targetY: number;
   vx: number;
   vy: number;
+  radius?: number;
   ownerId: string;
   unitCount: number;
   health: number;
@@ -217,7 +219,7 @@ type BlobRenderView = {
 };
 
 export class BlobEntity extends Entity {
-  public mesh: THREE.Group;
+  public declare mesh: THREE.Group;
   private ovalRoot!: THREE.Group;
   /** Cylinder fallback or instanced parts from `models/units/agent.glb`. */
   private unitsAgent: THREE.InstancedMesh[] = [];
@@ -590,6 +592,7 @@ export class BlobEntity extends Entity {
       targetY: blob.targetY,
       vx: blob.vx,
       vy: blob.vy,
+      radius: blob.radius,
       ownerId: blob.ownerId,
       unitCount: blob.unitCount,
       health: blob.health,
@@ -688,7 +691,7 @@ export class BlobEntity extends Entity {
     if (!this.blob) return null;
     let best: { x: number; y: number; z: number } | null = null;
     let bestDistance = Infinity;
-    this.game.room.state.buildings.forEach((building) => {
+    this.game.room.state.buildings.forEach((building: unknown) => {
       const candidate = building as { ownerId?: string; buildingType?: number; x?: number; y?: number };
       if (candidate.ownerId !== this.blob!.ownerId || candidate.buildingType !== BuildingType.TOWN_CENTER) return;
       const cx = candidate.x ?? 0;
@@ -1396,10 +1399,12 @@ export class BlobEntity extends Entity {
     this.mesh.rotation.y = 0;
     this.ovalRoot.rotation.y = layout.heading;
 
-    this.ovalFill.scale.set(layout.minor, layout.major, 1);
+    const selectionMinor = layout.minor * SELECTION_OVAL_SCALE;
+    const selectionMajor = layout.major * SELECTION_OVAL_SCALE;
+    this.ovalFill.scale.set(selectionMinor, selectionMajor, 1);
     const selectedScale = this.isSelected() ? SELECTED_RING_OUTER_SCALE : UNSELECTED_RING_OUTER_SCALE;
-    const ringOuterMinor = layout.minor * selectedScale;
-    const ringOuterMajor = layout.major * selectedScale;
+    const ringOuterMinor = selectionMinor * selectedScale;
+    const ringOuterMajor = selectionMajor * selectedScale;
     const ringThicknessPx = this.isSelected() ? SELECTED_RING_THICKNESS_PX : UNSELECTED_RING_THICKNESS_PX;
     applySelectionRingScreenThickness(
       this.ovalRing,
@@ -2088,8 +2093,9 @@ export class BlobEntity extends Entity {
     const layout = this.getLayout();
     let { minor, major } = layout;
     const visualSpec = getUnitVisualSpec(this.blob.unitType);
-    minor *= visualSpec.containsEllipseMult;
-    major *= visualSpec.containsEllipseMult;
+    const hitScale = Math.max(SELECTION_OVAL_SCALE, visualSpec.containsEllipseMult);
+    minor *= hitScale;
+    major *= hitScale;
     const cos = Math.cos(-layout.heading);
     const sin = Math.sin(-layout.heading);
     const lx = (x - layout.x) * cos - (z - layout.y) * sin;
