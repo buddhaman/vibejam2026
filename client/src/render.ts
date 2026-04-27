@@ -32,6 +32,10 @@ import { projectAgentStatusLabels, projectFloatingResourceTexts, projectWorldWar
 import { createChatUi } from "./chat-ui.js";
 import { OnboardingController } from "./onboarding.js";
 import { PortalSystem } from "./portal-system.js";
+import { resumeAudioOnUserGesture } from "./audio-mixer.js";
+import { createAudioSettingsUi } from "./audio-settings-ui.js";
+import { updateBattleCryAmbience } from "./battle-cry-ambience.js";
+import { updateThemeBgm } from "./theme-bgm.js";
 
 const WALKABILITY_DEBUG_KEY = "KeyV";
 const TILE_DEBUG_KEY = "Backquote"; // ` key toggles developer mode too
@@ -40,6 +44,7 @@ const DESKTOP_RENDER_HZ = 60;
 const MOBILE_RENDER_HZ = 30;
 
 export function startRender(game: Game) {
+  createAudioSettingsUi();
   const netPerf = attachDevNetworkPerf(game.room);
   const world = createRenderWorld(game);
   const { scene } = game;
@@ -234,6 +239,7 @@ export function startRender(game: Game) {
   }
 
   function handleClick(clientX: number, clientY: number) {
+    resumeAudioOnUserGesture();
     if (devModeVisible) {
       const point = groundHit(clientX, clientY);
       if (point) {
@@ -456,6 +462,7 @@ export function startRender(game: Game) {
   }
 
   canvas.addEventListener("pointerdown", (ev) => {
+    resumeAudioOnUserGesture();
     canvas.setPointerCapture(ev.pointerId);
     activePointers.set(ev.pointerId, { x: ev.clientX, y: ev.clientY });
 
@@ -675,6 +682,8 @@ export function startRender(game: Game) {
     else _selectionColor.setHex(0xffffff);
     selectionOutlinePass.visibleEdgeColor.copy(_selectionColor);
     selectionOutlinePass.hiddenEdgeColor.copy(_selectionColor);
+    updateThemeBgm();
+    updateBattleCryAmbience(game, camera, game.getTiles(), dt);
     composer.render();
     const perf4 = performance.now();
     const chunkStats = game.getChunkLoadStats();

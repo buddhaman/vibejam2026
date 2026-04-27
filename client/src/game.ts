@@ -58,6 +58,7 @@ import type { ArrowFxSystem } from "./arrow-fx.js";
 import type { BuildingDestructionFxSystem } from "./building-destruction-fx.js";
 import { type TileView } from "./terrain.js";
 import { UnitCollisionSystem } from "./unit-collision.js";
+import { playDefaultCommandVoice, playUnitVoiceOrDefault } from "./unit-voice.js";
 
 export class Game {
   private static readonly FLOATING_RESOURCE_TEXT_LIFE = 1.15;
@@ -973,6 +974,10 @@ export class Game {
     return this._tiles.get(getTileKey(tx, tz)) ?? null;
   }
 
+  public getTileByKey(key: string): TileView | null {
+    return this._tiles.get(key) ?? null;
+  }
+
   public getSelectedTile(): TileView | null {
     if (!this.selectedTileKey) return null;
     return this._tiles.get(this.selectedTileKey) ?? null;
@@ -1284,6 +1289,10 @@ export class Game {
     const blob = this.getSelectedMyBlobEntity();
     if (!blob) return;
     this.room.send(MessageType.INTENT, { blobId: blob.id, targetX, targetY } satisfies IntentMessage);
+    {
+      const u = blob.getUnitType() ?? UnitType.VILLAGER;
+      playUnitVoiceOrDefault(u);
+    }
     this.clearSelection();
   }
 
@@ -1293,11 +1302,26 @@ export class Game {
       targetType,
       targetId,
     } satisfies AttackMessage);
+    {
+      const attacker = this.findBlobEntity(blobId);
+      const u = attacker?.getUnitType() ?? UnitType.WARBAND;
+      playUnitVoiceOrDefault(u);
+    }
     if (this.selectedEntityId === blobId) this.clearSelection();
   }
 
   public sendGatherIntent(blobId: string, tileKey: string): void {
     this.room.send(MessageType.GATHER, { blobId, tileKey } satisfies GatherMessage);
+    const tile = this.getTileByKey(tileKey);
+    if (tile && (tile.material > 0 || tile.compute > 0)) {
+      const worker = this.findBlobEntity(blobId);
+      const u = worker?.getUnitType() ?? UnitType.VILLAGER;
+      if (tile.material > 0) {
+        playUnitVoiceOrDefault(u);
+      } else {
+        playUnitVoiceOrDefault(u);
+      }
+    }
     if (this.selectedEntityId === blobId) this.clearSelection();
   }
 
@@ -1309,6 +1333,11 @@ export class Game {
       return;
     }
     this.room.send(MessageType.GATHER, { blobId, buildingId } satisfies GatherMessage);
+    {
+      const w = this.findBlobEntity(blobId);
+      const u = w?.getUnitType() ?? UnitType.VILLAGER;
+      playUnitVoiceOrDefault(u);
+    }
     if (this.selectedEntityId === blobId) this.clearSelection();
   }
 
@@ -1320,6 +1349,7 @@ export class Game {
     }
     const snapped = snapWorldToTileCenter(worldX, worldZ);
     this.room.send(MessageType.BUILD, { type, worldX: snapped.x, worldZ: snapped.z } satisfies BuildMessage);
+    playDefaultCommandVoice();
     if (this.getMyIdleAgentCount() <= 0) {
       this.addWorldWarning(snapped.x, snapped.z, "Needs an agent to build");
     }
@@ -1333,6 +1363,7 @@ export class Game {
       return false;
     }
     this.room.send(MessageType.TRAIN, { buildingId, unitType } satisfies TrainMessage);
+    playUnitVoiceOrDefault(unitType);
     return true;
   }
 
