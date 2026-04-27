@@ -23,8 +23,10 @@ const TREE_SLOT_COUNT = TREE_SLOT_GRID * TREE_SLOT_GRID;
 const TREE_CENTER_CLEAR_RADIUS = GAME_RULES.KOTH_CAPTURE_RADIUS + GAME_RULES.TILE_SIZE * 2.4;
 const ROCK_VARIANT_COUNT = 5;
 const ROCK_LAYER_CAPACITY = 2048;
+const FOLIAGE_VARIANT_COUNT = 3;
+const FOLIAGE_LAYER_CAPACITY = 4096;
 
-type TileVisualLayerId = "forest" | "datacenters" | "rocks";
+type TileVisualLayerId = "forest" | "datacenters" | "rocks" | "foliage";
 
 type RockFormationKind = "pile" | "ridge" | "cliff";
 
@@ -36,6 +38,15 @@ type RockFormation = {
   rotationY: number;
   count: number;
   seed: number;
+  isMountain: boolean;
+};
+
+type FoliageSlot = {
+  x: number;
+  z: number;
+  rotationY: number;
+  scale: number;
+  variantIndex: number;
 };
 
 type TileVisualLayer = {
@@ -401,10 +412,21 @@ function canPlaceRock(x: number, z: number, tiles: Map<string, TileView>) {
   return true;
 }
 
+function canPlaceFoliage(x: number, z: number, tiles: Map<string, TileView>) {
+  const { tx, tz } = getTileCoordsFromWorld(x, z);
+  const tile = tiles.get(getTileKey(tx, tz));
+  if (!tile) return false;
+  if (tile.isMountain) return false;
+  if (!tile.canWalk || !tile.canBuild) return false;
+  if (tile.tileType === TileType.FOREST && tile.maxMaterial > 0) return false;
+  if (tile.compute > 0 || tile.maxCompute > 0) return false;
+  return true;
+}
+
 function generateRockFormationsForTile(tile: TileView): RockFormation[] {
   const formations: RockFormation[] = [];
   const rockyChance =
-    tile.isMountain ? 0.38 :
+    tile.isMountain ? 0.055 :
     tile.tileType === TileType.FOREST ? 0.035 :
     0.028;
   const n = hash(tile.tx * 19.37 + tile.tz * 91.73 + 1200);
@@ -415,19 +437,22 @@ function generateRockFormationsForTile(tile: TileView): RockFormation[] {
   const seed = tile.tx * 73856.093 + tile.tz * 19349.663 + 910.37;
   const kindRoll = rand(seed + 1);
   const kind: RockFormationKind =
-    tile.isMountain && kindRoll < 0.48 ? "cliff" :
+    tile.isMountain ? "cliff" :
     kindRoll < 0.78 ? "ridge" :
     "pile";
   formations.push({
     kind,
     x: center.x + jitter(seed + 2, half * 0.48),
     z: center.z + jitter(seed + 3, half * 0.48),
-    radius: randRange(seed + 4, GAME_RULES.TILE_SIZE * 0.16, GAME_RULES.TILE_SIZE * 0.38),
+    radius: tile.isMountain
+      ? randRange(seed + 4, GAME_RULES.TILE_SIZE * 0.1, GAME_RULES.TILE_SIZE * 0.22)
+      : randRange(seed + 4, GAME_RULES.TILE_SIZE * 0.16, GAME_RULES.TILE_SIZE * 0.38),
     rotationY: randRange(seed + 5, 0, Math.PI * 2),
     count: tile.isMountain
-      ? Math.floor(randRange(seed + 6, 4, 9))
+      ? Math.floor(randRange(seed + 6, 2, 3))
       : Math.floor(randRange(seed + 7, 3, 6)),
     seed,
+    isMountain: tile.isMountain,
   });
   return formations;
 }
@@ -517,15 +542,17 @@ function generateCliffSlabs(
     const x = f.x + dirX * along + sideX * side;
     const z = f.z + dirZ * along + sideZ * side;
     if (!canPlace(x, z)) continue;
-    const baseScale = randRange(seed + 2, 0.9, 1.55);
+    const baseScale = f.isMountain
+      ? randRange(seed + 2, 4.6, 7.4)
+      : randRange(seed + 2, 0.9, 1.55);
     rocks.push({
       x,
       z,
-      y: getHeight(x, z) - baseScale * 0.25,
+      y: getHeight(x, z) - baseScale * (f.isMountain ? 0.55 : 0.25),
       rotationY: f.rotationY + jitter(seed + 3, 0.35),
-      scaleX: baseScale * randRange(seed + 4, 0.75, 1.2),
-      scaleY: baseScale * randRange(seed + 5, 1.35, 2.25),
-      scaleZ: baseScale * randRange(seed + 6, 0.55, 0.95),
+      scaleX: baseScale * randRange(seed + 4, f.isMountain ? 1.35 : 0.75, f.isMountain ? 2.4 : 1.2),
+      scaleY: baseScale * randRange(seed + 5, f.isMountain ? 0.68 : 1.35, f.isMountain ? 1.08 : 2.25),
+      scaleZ: baseScale * randRange(seed + 6, f.isMountain ? 0.9 : 0.55, f.isMountain ? 1.58 : 0.95),
       variantIndex: 2 + pick(seed + 7, 3),
       colorJitter: jitter(seed + 8, 0.09),
     });
@@ -561,6 +588,89 @@ function generateRockSlotsForTiles(tiles: Iterable<TileView>, tileMap: Map<strin
     }
   }
   return allSlots;
+}
+
+function createFoliageMaterial(color: number) {
+  return applyStylizedShading(new THREE.MeshStandardMaterial({
+    color,
+    roughness: 0.94,
+    metalness: 0,
+    flatShading: true,
+  }));
+}
+
+function createFoliagePuff(sx: number, sy: number, sz: number, x: number, y: number, z: number) {
+  return new THREE.DodecahedronGeometry(0.52, 0)
+    .scale(sx, sy, sz)
+    .translate(x, y, z);
+}
+
+function createFoliageVariants(): InstancedVariant[] {
+  const darkLeaf = createFoliageMaterial(0x5f963f);
+  const leaf = createFoliageMaterial(0x75ac4c);
+  const lightLeaf = createFoliageMaterial(0x98bf55);
+  const flower = createFoliageMaterial(0xf2cf5b);
+  const flowerPink = createFoliageMaterial(0xf48ca0);
+
+  return [
+    {
+      parts: [
+        { geometry: createFoliagePuff(1.25, 0.42, 0.9, 0, 0.28, 0), material: leaf, castShadow: true },
+        { geometry: createFoliagePuff(0.84, 0.38, 0.72, -0.48, 0.26, 0.18), material: darkLeaf, castShadow: true },
+        { geometry: createFoliagePuff(0.76, 0.34, 0.66, 0.42, 0.25, -0.18), material: lightLeaf, castShadow: true },
+      ],
+    },
+    {
+      parts: [
+        { geometry: createFoliagePuff(1.05, 0.34, 0.72, 0, 0.24, 0), material: lightLeaf, castShadow: true },
+        { geometry: createFoliagePuff(0.7, 0.3, 0.58, -0.36, 0.22, -0.12), material: leaf, castShadow: true },
+        { geometry: createFoliagePuff(0.62, 0.28, 0.54, 0.34, 0.2, 0.16), material: darkLeaf, castShadow: true },
+      ],
+    },
+    {
+      parts: [
+        { geometry: createFoliagePuff(0.92, 0.4, 0.8, 0, 0.28, 0), material: leaf, castShadow: true },
+        { geometry: createFoliagePuff(0.62, 0.32, 0.58, -0.34, 0.32, 0.12), material: lightLeaf, castShadow: true },
+        { geometry: createFoliagePuff(0.16, 0.16, 0.16, 0.08, 0.74, 0.04), material: flower, castShadow: true },
+        { geometry: createFoliagePuff(0.13, 0.13, 0.13, -0.24, 0.62, 0.14), material: flowerPink, castShadow: true },
+      ],
+    },
+  ];
+}
+
+function generateFoliageSlotsForTiles(tiles: Iterable<TileView>, tileMap: Map<string, TileView>): FoliageSlot[] {
+  const slots: FoliageSlot[] = [];
+  for (const tile of tiles) {
+    const center = getTileCenter(tile.tx, tile.tz);
+    if (Math.hypot(center.x, center.z) < TREE_CENTER_CLEAR_RADIUS * 0.85) continue;
+    if (!canPlaceFoliage(center.x, center.z, tileMap)) continue;
+
+    const seed = tile.tx * 4721.31 + tile.tz * 8521.77 + 312.4;
+    const patch = hash(tile.tx * 37.91 + tile.tz * 81.33 + 822.2);
+    if (patch > 0.075) continue;
+
+    const half = GAME_RULES.TILE_SIZE * 0.5;
+    const clusterX = center.x + jitter(seed + 1, half * 0.46);
+    const clusterZ = center.z + jitter(seed + 2, half * 0.46);
+    const radius = randRange(seed + 3, GAME_RULES.TILE_SIZE * 0.08, GAME_RULES.TILE_SIZE * 0.18);
+    const count = Math.floor(randRange(seed + 4, 2, 5));
+
+    for (let i = 0; i < count; i++) {
+      const slotSeed = seed + i * 67.7;
+      const angle = randRange(slotSeed + 1, 0, Math.PI * 2);
+      const dist = Math.pow(rand(slotSeed + 2), 1.35) * radius;
+      const p = polar(clusterX, clusterZ, angle, dist);
+      if (!canPlaceFoliage(p.x, p.z, tileMap)) continue;
+      slots.push({
+        x: p.x,
+        z: p.z,
+        rotationY: randRange(slotSeed + 3, 0, Math.PI * 2),
+        scale: randRange(slotSeed + 4, 1.45, 2.35),
+        variantIndex: pick(slotSeed + 5, FOLIAGE_VARIANT_COUNT),
+      });
+    }
+  }
+  return slots;
 }
 
 export function ensureTreeSlots(tile: TileView, tiles?: Map<string, TileView>): TreeSlot[] {
@@ -732,6 +842,27 @@ function createRockLayer(): TileVisualLayer {
           if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
         }
       }
+    },
+  };
+}
+
+function createFoliageLayer(): TileVisualLayer {
+  const set = createInstancedVariantSet(createFoliageVariants(), FOLIAGE_LAYER_CAPACITY);
+
+  return {
+    id: "foliage",
+    set,
+    rebuild(tiles, game) {
+      const tileMap = game.getTiles();
+      const transformsByVariant: InstancedTransform[][] = Array.from({ length: FOLIAGE_VARIANT_COUNT }, () => []);
+      for (const slot of generateFoliageSlotsForTiles(tiles, tileMap)) {
+        transformsByVariant[slot.variantIndex]!.push({
+          position: new THREE.Vector3(slot.x, getTerrainHeightAt(slot.x, slot.z, tileMap) + 0.025, slot.z),
+          rotationY: slot.rotationY,
+          scale: new THREE.Vector3(slot.scale, slot.scale, slot.scale),
+        });
+      }
+      syncInstancedVariantSet(set, transformsByVariant);
     },
   };
 }
@@ -952,7 +1083,7 @@ export class TileVisualManager {
     for (const layer of this.layers) {
       this.root.remove(layer.set.root);
     }
-    this.layers = [createForestLayer(), createDatacenterLayer(), createRockLayer()];
+    this.layers = [createForestLayer(), createDatacenterLayer(), createRockLayer(), createFoliageLayer()];
     this.assetVersion = getTileVisualAssetVersion();
     for (const layer of this.layers) this.root.add(layer.set.root);
   }

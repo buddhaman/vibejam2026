@@ -60,7 +60,7 @@ import { type TileView } from "./terrain.js";
 import { UnitCollisionSystem } from "./unit-collision.js";
 import { isMilitaryUnitType, playDefaultCommandVoice, playUnitSpawnVoiceNearCamera, playUnitVoiceOrDefault } from "./unit-voice.js";
 
-type TileVisualLayerId = "forest" | "datacenters" | "rocks";
+type TileVisualLayerId = "forest" | "datacenters" | "rocks" | "foliage";
 
 export class Game {
   private static readonly FLOATING_RESOURCE_TEXT_LIFE = 1.15;
@@ -95,7 +95,7 @@ export class Game {
   private _firstChunkMs: number | null = null;
   private _spawnChunksMs: number | null = null;
   private _fullChunksMs: number | null = null;
-  private _dirtyTileVisualLayers = new Set<TileVisualLayerId>(["forest", "datacenters", "rocks"]);
+  private _dirtyTileVisualLayers = new Set<TileVisualLayerId>(["forest", "datacenters", "rocks", "foliage"]);
   private _allTileVisualsDirty = true;
   private _walkabilityDirty = true;
   private _terrainAllDirty = true;
@@ -273,6 +273,7 @@ export class Game {
       this._dirtyTileVisualLayers.add("forest");
       this._dirtyTileVisualLayers.add("datacenters");
       this._dirtyTileVisualLayers.add("rocks");
+      this._dirtyTileVisualLayers.add("foliage");
       this._walkabilityDirty = true;
       this._dirtyTerrainChunkKeys.add(key);
       return;
@@ -293,6 +294,7 @@ export class Game {
       this._dirtyTileVisualLayers.add("forest");
       this._dirtyTileVisualLayers.add("datacenters");
       this._dirtyTileVisualLayers.add("rocks");
+      this._dirtyTileVisualLayers.add("foliage");
       this._walkabilityDirty = true;
       this.rebuildChunkTileBuckets();
       this._terrainAllDirty = true;
@@ -344,6 +346,7 @@ export class Game {
     this._dirtyTileVisualLayers.add("forest");
     this._dirtyTileVisualLayers.add("datacenters");
     this._dirtyTileVisualLayers.add("rocks");
+    this._dirtyTileVisualLayers.add("foliage");
     this._allTileVisualsDirty = true;
     this._walkabilityDirty = true;
     this._terrainAllDirty = true;
@@ -359,11 +362,13 @@ export class Game {
     if (typeof msg.material === "number") {
       tile.material = msg.material;
       this._dirtyTileVisualLayers.add("forest");
+      this._dirtyTileVisualLayers.add("foliage");
     }
     if (typeof msg.compute === "number") {
       tile.compute = msg.compute;
       this._dirtyTileVisualLayers.add("datacenters");
       this._dirtyTileVisualLayers.add("rocks");
+      this._dirtyTileVisualLayers.add("foliage");
     }
     if (typeof msg.canWalk === "boolean" && tile.canWalk !== msg.canWalk) {
       tile.canWalk = msg.canWalk;
@@ -398,6 +403,7 @@ export class Game {
       this._dirtyTileVisualLayers.add("forest");
       this._dirtyTileVisualLayers.add("datacenters");
       this._dirtyTileVisualLayers.add("rocks");
+      this._dirtyTileVisualLayers.add("foliage");
       this._walkabilityDirty = true;
     }
   }
@@ -973,6 +979,7 @@ export class Game {
     this._dirtyTileVisualLayers.add("forest");
     this._dirtyTileVisualLayers.add("datacenters");
     this._dirtyTileVisualLayers.add("rocks");
+    this._dirtyTileVisualLayers.add("foliage");
   }
 
   public consumeWalkabilityDirty(): boolean {
