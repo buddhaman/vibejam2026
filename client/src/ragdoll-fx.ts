@@ -80,6 +80,7 @@ export class RagdollFxSystem {
   }));
   private readonly torsoCapacity = 512;
   private readonly torsoBanks = new Map<string, THREE.InstancedMesh[]>();
+  private readonly shieldMaterials = new Map<number, THREE.Material>();
   private readonly legMaterial = applyStylizedShading(new THREE.MeshStandardMaterial({
     color: 0x181818,
     roughness: 0.95,
@@ -376,6 +377,18 @@ export class RagdollFxSystem {
     mesh.scale.set(1, length / (GAME_RULES.UNIT_HEIGHT * 0.62), 1);
   }
 
+  private getShieldMaterial(teamColor: number): THREE.Material {
+    const cached = this.shieldMaterials.get(teamColor);
+    if (cached) return cached;
+    const mat = applyStylizedShading(new THREE.MeshStandardMaterial({
+      color: teamColor,
+      roughness: 0.62,
+      metalness: 0.18,
+    }));
+    this.shieldMaterials.set(teamColor, mat);
+    return mat;
+  }
+
   private spawnDebris(
     x: number,
     y: number,
@@ -387,13 +400,7 @@ export class RagdollFxSystem {
   ): void {
     const mesh = new THREE.Mesh(
       type === "shield" ? SHIELD_GEOM : SWORD_GEOM,
-      type === "shield"
-        ? applyStylizedShading(new THREE.MeshStandardMaterial({
-            color: teamColor,
-            roughness: 0.62,
-            metalness: 0.18,
-          }))
-        : this.swordMaterial
+      type === "shield" ? this.getShieldMaterial(teamColor) : this.swordMaterial
     );
     mesh.castShadow = true;
     mesh.receiveShadow = true;

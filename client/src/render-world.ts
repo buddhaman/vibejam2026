@@ -144,6 +144,7 @@ export function createRenderWorld(game: Game): RenderWorld {
   sunLight.shadow.camera.right = SUN.shadowRadius;
   sunLight.shadow.camera.top = SUN.shadowRadius;
   sunLight.shadow.camera.bottom = -SUN.shadowRadius;
+  sunLight.shadow.camera.updateProjectionMatrix();
   scene.add(sunLight);
   scene.add(sunLight.target);
 

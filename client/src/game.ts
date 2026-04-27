@@ -540,7 +540,8 @@ export class Game {
       this._buildingSnapshots.delete(id);
     }
 
-    for (const entity of [...this.entities]) {
+    for (let i = this.entities.length - 1; i >= 0; i--) {
+      const entity = this.entities[i]!;
       if (entity.isStale()) {
         this._blobPaths.delete(entity.id);
         this._blobCarrySnapshots.delete(entity.id);

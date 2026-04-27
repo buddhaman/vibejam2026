@@ -620,6 +620,7 @@ export function startRender(game: Game) {
   const targetFrameMs = 1000 / targetRenderHz;
   let lastFrameTime = performance.now();
   let lastRenderTime = lastFrameTime;
+  const _selectionColor = new THREE.Color();
 
   function tick() {
     requestAnimationFrame(tick);
@@ -664,18 +665,16 @@ export function startRender(game: Game) {
     const perf2 = performance.now();
     game.flushBeamDraws();
     const perf3 = performance.now();
-    sunLight.shadow.camera.updateProjectionMatrix();
     const selectedEntity = game.getSelectedEntity();
     const selectionInfo = selectedEntity?.getSelectionInfo() ?? null;
     const outlineObjects = selectedEntity
       ? selectedEntity.getSelectionOutlineObjects().filter((object) => object.visible)
       : [];
     selectionOutlinePass.selectedObjects = outlineObjects;
-    const selectionColor = selectionInfo
-      ? new THREE.Color().setHex(selectionInfo.color, THREE.SRGBColorSpace)
-      : new THREE.Color(0xffffff);
-    selectionOutlinePass.visibleEdgeColor.copy(selectionColor);
-    selectionOutlinePass.hiddenEdgeColor.copy(selectionColor);
+    if (selectionInfo) _selectionColor.setHex(selectionInfo.color, THREE.SRGBColorSpace);
+    else _selectionColor.setHex(0xffffff);
+    selectionOutlinePass.visibleEdgeColor.copy(_selectionColor);
+    selectionOutlinePass.hiddenEdgeColor.copy(_selectionColor);
     composer.render();
     const perf4 = performance.now();
     const chunkStats = game.getChunkLoadStats();

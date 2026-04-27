@@ -51,7 +51,12 @@ export function createInstancedVariantSet(variants: InstancedVariant[], capacity
 }
 
 function rebuildSet(set: InstancedVariantSet, capacity: number): void {
-  while (set.root.children.length > 0) set.root.remove(set.root.children[0]!);
+  for (const variant of set.variants) {
+    for (const mesh of variant.meshes) {
+      set.root.remove(mesh);
+      mesh.dispose();
+    }
+  }
   set.capacity = capacity;
   set.variants = set.definitions.map((variant) => {
     const meshes = variant.parts.map((part) => {
@@ -115,8 +120,6 @@ export function syncInstancedVariantSet(
     }
     for (const mesh of variant.meshes) {
       mesh.instanceMatrix.needsUpdate = true;
-      mesh.computeBoundingBox();
-      mesh.computeBoundingSphere();
     }
   }
 }
