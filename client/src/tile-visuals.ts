@@ -1,13 +1,14 @@
 import * as THREE from "three";
 import { publicAssetUrl } from "./asset-url.js";
 import { createGLTFLoader } from "./gltf-loader.js";
-import { TileType, GAME_RULES, getTileCenter } from "../../shared/game-rules.js";
+import { TileType, GAME_RULES, getTileCenter, getTileCoordsFromWorld, getTileKey } from "../../shared/game-rules.js";
 import { createInstancedVariantSet, syncInstancedVariantSet, type InstancedTransform, type InstancedVariant } from "./instancing.js";
 import type { Game } from "./game.js";
 import { applyStylizedShading, isStylizedLitMaterial } from "./stylized-shading.js";
 import {
   getTerrainHeightAt,
   type ComputeSlot,
+  type RockSlot,
   type TileView,
   type TreeSlot,
 } from "./terrain.js";
@@ -20,8 +21,22 @@ const TREE_VARIANT_COUNT = 3;
 const TREE_SLOT_GRID = 4;
 const TREE_SLOT_COUNT = TREE_SLOT_GRID * TREE_SLOT_GRID;
 const TREE_CENTER_CLEAR_RADIUS = GAME_RULES.KOTH_CAPTURE_RADIUS + GAME_RULES.TILE_SIZE * 2.4;
+const ROCK_VARIANT_COUNT = 5;
+const ROCK_LAYER_CAPACITY = 2048;
 
-type TileVisualLayerId = "forest" | "datacenters";
+type TileVisualLayerId = "forest" | "datacenters" | "rocks";
+
+type RockFormationKind = "pile" | "ridge" | "cliff";
+
+type RockFormation = {
+  kind: RockFormationKind;
+  x: number;
+  z: number;
+  radius: number;
+  rotationY: number;
+  count: number;
+  seed: number;
+};
 
 type TileVisualLayer = {
   id: TileVisualLayerId;
@@ -56,6 +71,29 @@ function hash01(tx: number, tz: number, salt: number) {
 
 function treeJitter(seed: number, index: number) {
   return hash(seed * 0.173 + index * 13.37 + 0.91);
+}
+
+function rand(seed: number) {
+  return hash(seed);
+}
+
+function randRange(seed: number, min: number, max: number) {
+  return min + (max - min) * rand(seed);
+}
+
+function pick(seed: number, count: number) {
+  return Math.floor(rand(seed) * count);
+}
+
+function jitter(seed: number, amount: number) {
+  return (rand(seed) * 2 - 1) * amount;
+}
+
+function polar(x: number, z: number, angle: number, dist: number) {
+  return {
+    x: x + Math.cos(angle) * dist,
+    z: z + Math.sin(angle) * dist,
+  };
 }
 
 function clamp01(value: number) {
@@ -281,6 +319,250 @@ function createTreeVariants(): InstancedVariant[] {
   ];
 }
 
+function createLowPolyRockGeometry(seed: number, radius = 1) {
+  const sides = 9;
+  const verts: THREE.Vector3[] = [];
+  const xAxis = randRange(seed + 100, 0.9, 1.28);
+  const zAxis = randRange(seed + 101, 0.84, 1.22);
+  const topCenter = new THREE.Vector3(jitter(seed + 1, radius * 0.08), radius * randRange(seed + 2, 0.48, 0.72), jitter(seed + 3, radius * 0.08));
+  const bottomCenter = new THREE.Vector3(jitter(seed + 4, radius * 0.06), -radius * randRange(seed + 5, 0.34, 0.48), jitter(seed + 6, radius * 0.06));
+  const shoulder: THREE.Vector3[] = [];
+  const base: THREE.Vector3[] = [];
+  const crown: THREE.Vector3[] = [];
+
+  for (let i = 0; i < sides; i++) {
+    const angle = (i / sides) * Math.PI * 2 + jitter(seed + 20 + i, 0.12);
+    const c = Math.cos(angle);
+    const s = Math.sin(angle);
+    const shoulderR = radius * randRange(seed + 30 + i, 0.82, 1.15);
+    const baseR = shoulderR * randRange(seed + 50 + i, 0.66, 0.92);
+    const crownR = shoulderR * randRange(seed + 70 + i, 0.42, 0.68);
+    shoulder.push(new THREE.Vector3(
+      c * shoulderR * xAxis,
+      radius * randRange(seed + 90 + i, -0.08, 0.16),
+      s * shoulderR * zAxis
+    ));
+    base.push(new THREE.Vector3(
+      c * baseR * xAxis,
+      -radius * randRange(seed + 110 + i, 0.24, 0.42),
+      s * baseR * zAxis
+    ));
+    crown.push(new THREE.Vector3(
+      c * crownR * xAxis + jitter(seed + 130 + i, radius * 0.04),
+      radius * randRange(seed + 150 + i, 0.32, 0.56),
+      s * crownR * zAxis + jitter(seed + 170 + i, radius * 0.04)
+    ));
+  }
+
+  function addTri(a: THREE.Vector3, b: THREE.Vector3, c: THREE.Vector3) {
+    verts.push(a, b, c);
+  }
+
+  function addOutwardTri(a: THREE.Vector3, b: THREE.Vector3, c: THREE.Vector3) {
+    const normal = new THREE.Vector3().subVectors(b, a).cross(new THREE.Vector3().subVectors(c, a));
+    const center = new THREE.Vector3().add(a).add(b).add(c).multiplyScalar(1 / 3);
+    if (normal.dot(center) < 0) addTri(a, c, b);
+    else addTri(a, b, c);
+  }
+
+  for (let i = 0; i < sides; i++) {
+    const j = (i + 1) % sides;
+    addOutwardTri(topCenter, crown[i]!, crown[j]!);
+    addOutwardTri(crown[i]!, shoulder[i]!, shoulder[j]!);
+    addOutwardTri(crown[i]!, shoulder[j]!, crown[j]!);
+    addOutwardTri(shoulder[i]!, base[i]!, base[j]!);
+    addOutwardTri(shoulder[i]!, base[j]!, shoulder[j]!);
+    addOutwardTri(bottomCenter, base[j]!, base[i]!);
+  }
+
+  const positions: number[] = [];
+  for (const v of verts) positions.push(v.x, v.y, v.z);
+  const geometry = new THREE.BufferGeometry();
+  geometry.setAttribute("position", new THREE.Float32BufferAttribute(positions, 3));
+  geometry.computeVertexNormals();
+  return geometry;
+}
+
+function createRockColor(jitterAmount: number) {
+  return new THREE.Color().setHSL(
+    0.08 + jitterAmount * 0.03,
+    0.18 + jitterAmount * 0.04,
+    0.36 + jitterAmount * 0.10
+  );
+}
+
+function canPlaceRock(x: number, z: number, tiles: Map<string, TileView>) {
+  const { tx, tz } = getTileCoordsFromWorld(x, z);
+  const tile = tiles.get(getTileKey(tx, tz));
+  if (!tile) return false;
+  if (!tile.canWalk && !tile.isMountain) return false;
+  if (tile.tileType === TileType.FOREST && tile.maxMaterial > 0) return false;
+  if (tile.compute > 0 || tile.maxCompute > 0) return false;
+  return true;
+}
+
+function generateRockFormationsForTile(tile: TileView): RockFormation[] {
+  const formations: RockFormation[] = [];
+  const rockyChance =
+    tile.isMountain ? 0.38 :
+    tile.tileType === TileType.FOREST ? 0.035 :
+    0.028;
+  const n = hash(tile.tx * 19.37 + tile.tz * 91.73 + 1200);
+  if (n > rockyChance) return formations;
+
+  const center = getTileCenter(tile.tx, tile.tz);
+  const half = GAME_RULES.TILE_SIZE * 0.5;
+  const seed = tile.tx * 73856.093 + tile.tz * 19349.663 + 910.37;
+  const kindRoll = rand(seed + 1);
+  const kind: RockFormationKind =
+    tile.isMountain && kindRoll < 0.48 ? "cliff" :
+    kindRoll < 0.78 ? "ridge" :
+    "pile";
+  formations.push({
+    kind,
+    x: center.x + jitter(seed + 2, half * 0.48),
+    z: center.z + jitter(seed + 3, half * 0.48),
+    radius: randRange(seed + 4, GAME_RULES.TILE_SIZE * 0.16, GAME_RULES.TILE_SIZE * 0.38),
+    rotationY: randRange(seed + 5, 0, Math.PI * 2),
+    count: tile.isMountain
+      ? Math.floor(randRange(seed + 6, 4, 9))
+      : Math.floor(randRange(seed + 7, 3, 6)),
+    seed,
+  });
+  return formations;
+}
+
+function generateRockPile(
+  f: RockFormation,
+  getHeight: (x: number, z: number) => number,
+  canPlace: (x: number, z: number) => boolean
+): RockSlot[] {
+  const rocks: RockSlot[] = [];
+  for (let i = 0; i < f.count; i++) {
+    const seed = f.seed + i * 101.17;
+    const angle = randRange(seed + 1, 0, Math.PI * 2);
+    const dist = Math.pow(rand(seed + 2), 1.8) * f.radius;
+    const p = polar(f.x, f.z, angle, dist);
+    if (!canPlace(p.x, p.z)) continue;
+    const central = i < 2;
+    const baseScale = central
+      ? randRange(seed + 3, 1.0, 1.7)
+      : randRange(seed + 4, 0.48, 0.9);
+    rocks.push({
+      x: p.x,
+      z: p.z,
+      y: getHeight(p.x, p.z) - baseScale * 0.12,
+      rotationY: randRange(seed + 5, 0, Math.PI * 2),
+      scaleX: baseScale * randRange(seed + 6, 0.75, 1.45),
+      scaleY: baseScale * randRange(seed + 7, 0.55, 1.25),
+      scaleZ: baseScale * randRange(seed + 8, 0.75, 1.45),
+      variantIndex: pick(seed + 9, ROCK_VARIANT_COUNT),
+      colorJitter: jitter(seed + 10, 0.12),
+    });
+  }
+  return rocks;
+}
+
+function generateRockRidge(
+  f: RockFormation,
+  getHeight: (x: number, z: number) => number,
+  canPlace: (x: number, z: number) => boolean
+): RockSlot[] {
+  const rocks: RockSlot[] = [];
+  const dirX = Math.cos(f.rotationY);
+  const dirZ = Math.sin(f.rotationY);
+  const sideX = Math.cos(f.rotationY + Math.PI * 0.5);
+  const sideZ = Math.sin(f.rotationY + Math.PI * 0.5);
+  for (let i = 0; i < f.count; i++) {
+    const seed = f.seed + i * 77.13;
+    const t = f.count <= 1 ? 0 : i / (f.count - 1);
+    const centered = (t - 0.5) * 2;
+    const along = centered * f.radius;
+    const side = jitter(seed + 1, f.radius * 0.18);
+    const x = f.x + dirX * along + sideX * side;
+    const z = f.z + dirZ * along + sideZ * side;
+    if (!canPlace(x, z)) continue;
+    const taper = 1.0 - Math.abs(centered) * 0.45;
+    const baseScale = randRange(seed + 2, 0.7, 1.25) * taper;
+    rocks.push({
+      x,
+      z,
+      y: getHeight(x, z) - baseScale * 0.12,
+      rotationY: f.rotationY + jitter(seed + 3, 0.8),
+      scaleX: baseScale * randRange(seed + 4, 0.85, 1.7),
+      scaleY: baseScale * randRange(seed + 5, 0.65, 1.45),
+      scaleZ: baseScale * randRange(seed + 6, 0.55, 1.15),
+      variantIndex: pick(seed + 7, ROCK_VARIANT_COUNT),
+      colorJitter: jitter(seed + 8, 0.10),
+    });
+  }
+  return rocks;
+}
+
+function generateCliffSlabs(
+  f: RockFormation,
+  getHeight: (x: number, z: number) => number,
+  canPlace: (x: number, z: number) => boolean
+): RockSlot[] {
+  const rocks: RockSlot[] = [];
+  const dirX = Math.cos(f.rotationY);
+  const dirZ = Math.sin(f.rotationY);
+  const sideX = Math.cos(f.rotationY + Math.PI * 0.5);
+  const sideZ = Math.sin(f.rotationY + Math.PI * 0.5);
+  for (let i = 0; i < f.count; i++) {
+    const seed = f.seed + i * 131.9;
+    const t = f.count <= 1 ? 0 : i / (f.count - 1);
+    const along = (t - 0.5) * 2 * f.radius;
+    const side = jitter(seed + 1, f.radius * 0.12);
+    const x = f.x + dirX * along + sideX * side;
+    const z = f.z + dirZ * along + sideZ * side;
+    if (!canPlace(x, z)) continue;
+    const baseScale = randRange(seed + 2, 0.9, 1.55);
+    rocks.push({
+      x,
+      z,
+      y: getHeight(x, z) - baseScale * 0.25,
+      rotationY: f.rotationY + jitter(seed + 3, 0.35),
+      scaleX: baseScale * randRange(seed + 4, 0.75, 1.2),
+      scaleY: baseScale * randRange(seed + 5, 1.35, 2.25),
+      scaleZ: baseScale * randRange(seed + 6, 0.55, 0.95),
+      variantIndex: 2 + pick(seed + 7, 3),
+      colorJitter: jitter(seed + 8, 0.09),
+    });
+  }
+  return rocks;
+}
+
+function generateRockSlotsFromFormation(
+  formation: RockFormation,
+  getHeight: (x: number, z: number) => number,
+  canPlace: (x: number, z: number) => boolean
+): RockSlot[] {
+  switch (formation.kind) {
+    case "pile":
+      return generateRockPile(formation, getHeight, canPlace);
+    case "ridge":
+      return generateRockRidge(formation, getHeight, canPlace);
+    case "cliff":
+      return generateCliffSlabs(formation, getHeight, canPlace);
+  }
+}
+
+function generateRockSlotsForTiles(tiles: Iterable<TileView>, tileMap: Map<string, TileView>): RockSlot[] {
+  const allSlots: RockSlot[] = [];
+  for (const tile of tiles) {
+    const formations = generateRockFormationsForTile(tile);
+    for (const formation of formations) {
+      allSlots.push(...generateRockSlotsFromFormation(
+        formation,
+        (x, z) => getTerrainHeightAt(x, z, tileMap),
+        (x, z) => canPlaceRock(x, z, tileMap)
+      ));
+    }
+  }
+  return allSlots;
+}
+
 export function ensureTreeSlots(tile: TileView, tiles?: Map<string, TileView>): TreeSlot[] {
   if (tile.treeSlots) return tile.treeSlots;
 
@@ -401,6 +683,57 @@ async function loadGpuVariant(): Promise<InstancedVariant> {
     console.warn(`[tile-visuals] Could not load GPU GLB, using procedural fallback: ${GPU_GLB}`, err);
   }
   return createComputeShardVariant();
+}
+
+function createRockLayer(): TileVisualLayer {
+  const material = applyStylizedShading(
+    new THREE.MeshStandardMaterial({
+      color: 0xffffff,
+      roughness: 0.95,
+      metalness: 0,
+      flatShading: true,
+    })
+  );
+  const set = createInstancedVariantSet(
+    [
+      { parts: [{ geometry: createLowPolyRockGeometry(1001), material }] },
+      { parts: [{ geometry: createLowPolyRockGeometry(2002), material }] },
+      { parts: [{ geometry: createLowPolyRockGeometry(3003), material }] },
+      { parts: [{ geometry: createLowPolyRockGeometry(4004), material }] },
+      { parts: [{ geometry: createLowPolyRockGeometry(5005), material }] },
+    ],
+    ROCK_LAYER_CAPACITY
+  );
+  const dummy = new THREE.Object3D();
+
+  return {
+    id: "rocks",
+    set,
+    rebuild(tiles, game) {
+      const slots = generateRockSlotsForTiles(tiles, game.getTiles());
+      const slotsByVariant: RockSlot[][] = Array.from({ length: ROCK_VARIANT_COUNT }, () => []);
+      for (const slot of slots) slotsByVariant[slot.variantIndex % ROCK_VARIANT_COUNT]!.push(slot);
+
+      for (let variantIndex = 0; variantIndex < set.variants.length; variantIndex++) {
+        const variantSlots = slotsByVariant[variantIndex] ?? [];
+        const variant = set.variants[variantIndex]!;
+        for (const mesh of variant.meshes) {
+          mesh.count = Math.min(variantSlots.length, set.capacity);
+          for (let i = 0; i < mesh.count; i++) {
+            const slot = variantSlots[i]!;
+            dummy.position.set(slot.x, slot.y ?? 0, slot.z);
+            dummy.rotation.set(0, slot.rotationY, 0);
+            dummy.scale.set(slot.scaleX, slot.scaleY, slot.scaleZ);
+            dummy.updateMatrix();
+            mesh.setMatrixAt(i, dummy.matrix);
+            mesh.setColorAt(i, createRockColor(slot.colorJitter));
+          }
+          mesh.instanceMatrix.needsUpdate = true;
+          if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
+        }
+      }
+    },
+  };
 }
 
 function createForestLayer(): TileVisualLayer {
@@ -619,7 +952,7 @@ export class TileVisualManager {
     for (const layer of this.layers) {
       this.root.remove(layer.set.root);
     }
-    this.layers = [createForestLayer(), createDatacenterLayer()];
+    this.layers = [createForestLayer(), createDatacenterLayer(), createRockLayer()];
     this.assetVersion = getTileVisualAssetVersion();
     for (const layer of this.layers) this.root.add(layer.set.root);
   }
