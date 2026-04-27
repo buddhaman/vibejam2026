@@ -15,7 +15,7 @@ function fmtTime(ms: number): string {
 const css = (strings: TemplateStringsArray, ...values: unknown[]) =>
   strings.reduce((acc, s, i) => acc + s + (values[i] ?? ""), "").trim();
 
-export function createChatUi(game: Game, getBottomInset: () => number): ChatUi {
+export function createChatUi(game: Game, _getBottomInset: () => number): ChatUi {
   // ── Toggle button — sits inside the bottom bar on the left ────
   const toggleBtn = document.createElement("button");
   toggleBtn.type = "button";
@@ -23,23 +23,26 @@ export function createChatUi(game: Game, getBottomInset: () => number): ChatUi {
   // Matches the bottom bar's lapis style + gold border like the BUILD button
   toggleBtn.style.cssText = css`
     position:fixed;
-    left:8px;
-    bottom:14px;
+    left:136px;
+    top:62px;
+    bottom:auto;
     z-index:32;
-    width:34px;
-    height:34px;
-    border-radius:3px;
-    border:1px solid #C9911E;
-    background:rgba(10,20,42,0.90);
+    width:44px;
+    height:44px;
+    border-radius:12px;
+    border:2px solid oklch(0.77 0.12 83 / 0.72);
+    background:oklch(0.22 0.05 258 / 0.94);
+    color:oklch(0.86 0.13 83);
+    box-shadow:0 8px 18px oklch(0.12 0.03 258 / 0.34), inset 0 1px 0 oklch(0.96 0.03 90 / 0.12);
     cursor:pointer;
     display:flex;
     align-items:center;
     justify-content:center;
     touch-action:manipulation;
-    transition:border-color 0.15s,background 0.15s;
+    transition:transform 0.16s cubic-bezier(0.22, 1, 0.36, 1),border-color 0.15s,background 0.15s;
     padding:0;
   `;
-  toggleBtn.innerHTML = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#F0C060" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:block;flex-shrink:0;">
+  toggleBtn.innerHTML = `<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.25" stroke-linecap="round" stroke-linejoin="round" style="display:block;flex-shrink:0;">
     <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
   </svg>`;
 
@@ -48,17 +51,18 @@ export function createChatUi(game: Game, getBottomInset: () => number): ChatUi {
   badge.style.cssText = css`
     display:none;
     position:absolute;
-    top:-5px;
-    right:-5px;
+    top:-6px;
+    right:-6px;
     min-width:16px;
     height:16px;
     padding:0 4px;
     border-radius:8px;
-    background:#c9611e;
-    color:#fff;
+    background:oklch(0.61 0.18 35);
+    color:oklch(0.98 0.02 83);
     font:700 9px/16px system-ui;
     text-align:center;
     pointer-events:none;
+    box-shadow:0 2px 6px oklch(0.16 0.04 35 / 0.42);
   `;
   toggleBtn.appendChild(badge);
 
@@ -66,11 +70,12 @@ export function createChatUi(game: Game, getBottomInset: () => number): ChatUi {
   const panel = document.createElement("div");
   panel.style.cssText = css`
     position:fixed;
-    left:8px;
-    bottom:76px;
+    left:136px;
+    top:112px;
+    bottom:auto;
     z-index:31;
     width:min(340px, calc(100vw - 16px));
-    max-height:min(70vh, 480px);
+    max-height:min(calc(100vh - 124px), 480px);
     background:rgba(6,14,26,0.94);
     border:1px solid rgba(214,185,112,0.28);
     border-radius:16px;
@@ -82,8 +87,8 @@ export function createChatUi(game: Game, getBottomInset: () => number): ChatUi {
     transform:translateY(12px) scale(0.97);
     opacity:0;
     pointer-events:none;
-    transition:transform 0.22s cubic-bezier(0.34,1.56,0.64,1),opacity 0.18s ease;
-    transform-origin:bottom left;
+    transition:transform 0.2s cubic-bezier(0.22,1,0.36,1),opacity 0.18s ease;
+    transform-origin:top left;
   `;
 
   // ── Header ─────────────────────────────────────────────────────
@@ -298,14 +303,20 @@ export function createChatUi(game: Game, getBottomInset: () => number): ChatUi {
   let lastKnownName = "";
   let unreadCount = 0;
   let lastSeenFeedLength = 0;
-  let lastBottomInset = -1;
 
   function syncPosition(): void {
-    const inset = Math.max(78, getBottomInset());
-    if (Math.abs(inset - lastBottomInset) < 1) return;
-    lastBottomInset = inset;
-    toggleBtn.style.bottom = `${Math.round(inset + 10)}px`;
-    panel.style.bottom = `${Math.round(inset + 56)}px`;
+    const compact = window.innerWidth < 420;
+    const left = compact ? 10 : 136;
+    const buttonTop = compact ? 152 : 53;
+    const panelTop = buttonTop + 52;
+    toggleBtn.style.left = `${left}px`;
+    toggleBtn.style.top = `${buttonTop}px`;
+    toggleBtn.style.bottom = "auto";
+    panel.style.left = `${left}px`;
+    panel.style.top = `${panelTop}px`;
+    panel.style.bottom = "auto";
+    panel.style.width = compact ? "min(340px, calc(100vw - 20px))" : "min(340px, calc(100vw - 148px))";
+    panel.style.maxHeight = `min(calc(100vh - ${panelTop + 12}px), 480px)`;
   }
 
   function openPanel() {
@@ -314,10 +325,10 @@ export function createChatUi(game: Game, getBottomInset: () => number): ChatUi {
     panel.style.transform = "translateY(0) scale(1)";
     panel.style.opacity = "1";
     panel.style.pointerEvents = "auto";
-    toggleBtn.style.borderColor = "#C9911E";
-    toggleBtn.style.background = "#C9911E";
-    const svg = toggleBtn.querySelector("svg");
-    if (svg) svg.setAttribute("stroke", "#08102A");
+    toggleBtn.style.borderColor = "oklch(0.86 0.13 83)";
+    toggleBtn.style.background = "oklch(0.77 0.12 83)";
+    toggleBtn.style.color = "oklch(0.22 0.05 258)";
+    toggleBtn.style.transform = "translateY(-1px)";
     // Clear unread
     unreadCount = 0;
     badge.style.display = "none";
@@ -330,10 +341,10 @@ export function createChatUi(game: Game, getBottomInset: () => number): ChatUi {
     panel.style.transform = "translateY(12px) scale(0.97)";
     panel.style.opacity = "0";
     panel.style.pointerEvents = "none";
-    toggleBtn.style.borderColor = "#C9911E";
-    toggleBtn.style.background = "rgba(10,20,42,0.90)";
-    const svg = toggleBtn.querySelector("svg");
-    if (svg) svg.setAttribute("stroke", "#F0C060");
+    toggleBtn.style.borderColor = "oklch(0.77 0.12 83 / 0.72)";
+    toggleBtn.style.background = "oklch(0.22 0.05 258 / 0.94)";
+    toggleBtn.style.color = "oklch(0.86 0.13 83)";
+    toggleBtn.style.transform = "translateY(0)";
     closeNameEditor();
   }
 
@@ -400,6 +411,8 @@ export function createChatUi(game: Game, getBottomInset: () => number): ChatUi {
     }
   };
   window.addEventListener("keydown", onWindowKeyDown);
+  window.addEventListener("resize", syncPosition);
+  syncPosition();
 
   // Prevent game from receiving pointer events that land on the panel/button
   panel.addEventListener("pointerdown", (e) => e.stopPropagation());
@@ -473,6 +486,7 @@ export function createChatUi(game: Game, getBottomInset: () => number): ChatUi {
 
     destroy() {
       window.removeEventListener("keydown", onWindowKeyDown);
+      window.removeEventListener("resize", syncPosition);
       toggleBtn.remove();
       panel.remove();
     },

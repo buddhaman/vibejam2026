@@ -162,6 +162,7 @@ export class BattleRoom extends Room<{ state: GameState }> {
   /** Active A* paths per blob — server-side only, not part of schema. */
   private blobPaths = new Map<string, { waypoints: Waypoint[]; index: number }>();
   private autoBuildAfterMoveBlobIds = new Set<string>();
+  private constructionOrderBlobIds = new Set<string>();
   /** Pairwise "do not instantly re-engage" locks, used when fast units break contact. */
   private disengageLocks = new Set<string>();
   /** Latched enemy contact graph for melee combat; components become combat groups. */
@@ -270,11 +271,12 @@ export class BattleRoom extends Room<{ state: GameState }> {
       const blob = this.state.blobs.get(msg.blobId);
       if (!blob || blob.ownerId !== client.sessionId) return;
       this.autoBuildAfterMoveBlobIds.delete(blob.id);
+      this.constructionOrderBlobIds.delete(blob.id);
       const target = this.getAttackableTarget(msg.targetType, msg.targetId);
       if (!target || target.entity.ownerId === client.sessionId) return;
 
       this.combatRetreatTargets.delete(blob.id);
-      blob.gatherTargetKey = "";
+      this.clearBlobGatherTarget(blob);
       blob.attackTargetType = msg.targetType;
       blob.attackTargetId = msg.targetId;
       const approach = this.getBlobAttackApproachPoint(blob, target);
@@ -323,6 +325,11 @@ export class BattleRoom extends Room<{ state: GameState }> {
       blob.gatherTargetBuildingId = building?.id ?? "";
       blob.gatherPhase = BlobGatherPhase.MOVING_TO_RESOURCE;
       blob.gatherTimerMs = 0;
+      if (building && this.isBuildingUnderConstruction(building)) {
+        this.constructionOrderBlobIds.add(blob.id);
+      } else {
+        this.constructionOrderBlobIds.delete(blob.id);
+      }
     });
 
     this.onMessage(MessageType.BLOB_AGGRO, (client, raw) => {
@@ -483,6 +490,7 @@ export class BattleRoom extends Room<{ state: GameState }> {
       this.combatRetreatTargets.delete(id);
       this.blobPaths.delete(id);
       this.autoBuildAfterMoveBlobIds.delete(id);
+      this.constructionOrderBlobIds.delete(id);
       this.state.blobs.delete(id);
     }
 
@@ -550,6 +558,7 @@ export class BattleRoom extends Room<{ state: GameState }> {
     blob.gatherTargetBuildingId = "";
     blob.gatherPhase = BlobGatherPhase.NONE;
     blob.gatherTimerMs = 0;
+    this.constructionOrderBlobIds.delete(blob.id);
   }
 
   private clearBlobEngagedTarget(blob: Blob): void {
@@ -1065,17 +1074,39 @@ export class BattleRoom extends Room<{ state: GameState }> {
       const rawY = clamp(building.y + dirY * pushDist, CONFIG.WORLD_MIN, CONFIG.WORLD_MAX);
       const safe =
         this.findNearestWalkablePoint(rawX, rawY, 3) ??
-        this.findNearestWalkablePoint(blob.x, blob.y, 4) ??
         { x: rawX, y: rawY };
+      const safeInside =
+        Math.abs(safe.x - building.x) < limitX &&
+        Math.abs(safe.y - building.y) < limitY;
 
-      blob.x = safe.x;
-      blob.y = safe.y;
+      blob.x = safeInside ? rawX : safe.x;
+      blob.y = safeInside ? rawY : safe.y;
       blob.vx = 0;
       blob.vy = 0;
-      if (!this.blobPaths.has(blob.id)) {
-        blob.targetX = safe.x;
-        blob.targetY = safe.y;
+      blob.targetX = blob.x;
+      blob.targetY = blob.y;
+      this.clearBlobPath(blob);
+    }
+  }
+
+  private completeBuildingConstruction(building: Building): void {
+    building.constructionBlocksDelivered = building.constructionBlocksRequired;
+    this.addBuildingWalkBlockingFootprint(building);
+    this.evacuateBlobsFromCompletedBuilding(building);
+
+    for (const blob of this.state.blobs.values()) {
+      if (blob.gatherTargetBuildingId !== building.id || !this.constructionOrderBlobIds.has(blob.id)) continue;
+      if (blob.carriedResourceType === CarriedResourceType.BUILDING_BLOCK) {
+        blob.carriedAmount = 0;
+        blob.carriedResourceType = CarriedResourceType.NONE;
       }
+      this.clearBlobGatherTarget(blob);
+      blob.targetX = blob.x;
+      blob.targetY = blob.y;
+      blob.vx = 0;
+      blob.vy = 0;
+      this.clearBlobPath(blob);
+      this.assignIdleBlobToPendingConstruction(blob);
     }
   }
 
@@ -1105,6 +1136,7 @@ export class BattleRoom extends Room<{ state: GameState }> {
     }
     if (!best) return;
     this.autoBuildAfterMoveBlobIds.delete(best.id);
+    this.constructionOrderBlobIds.add(best.id);
     best.gatherTargetKey = "";
     best.gatherTargetBuildingId = building.id;
     best.gatherPhase = BlobGatherPhase.MOVING_TO_RESOURCE;
@@ -1127,6 +1159,7 @@ export class BattleRoom extends Room<{ state: GameState }> {
     }
     if (!best) return false;
     this.autoBuildAfterMoveBlobIds.delete(blob.id);
+    this.constructionOrderBlobIds.add(blob.id);
     blob.gatherTargetKey = "";
     blob.gatherTargetBuildingId = best.id;
     blob.gatherPhase = BlobGatherPhase.MOVING_TO_RESOURCE;
@@ -1507,6 +1540,7 @@ export class BattleRoom extends Room<{ state: GameState }> {
     this.playerSpawnSlots.clear();
     this.blobPaths.clear();
     this.autoBuildAfterMoveBlobIds.clear();
+    this.constructionOrderBlobIds.clear();
     this.disengageLocks.clear();
     this.combatLinks.clear();
     this.combatRetreatTargets.clear();
@@ -1630,8 +1664,9 @@ export class BattleRoom extends Room<{ state: GameState }> {
       const shouldAutoBuildAfterMove = this.autoBuildAfterMoveBlobIds.has(blob.id);
       this.advanceBlobAlongPath(blob, dt);
       if (shouldAutoBuildAfterMove && !this.blobPaths.has(blob.id)) {
-        this.autoBuildAfterMoveBlobIds.delete(blob.id);
-        this.assignIdleBlobToPendingConstruction(blob);
+        if (this.assignIdleBlobToPendingConstruction(blob) || this.isBlobIdleForAutoBuild(blob)) {
+          this.autoBuildAfterMoveBlobIds.delete(blob.id);
+        }
       }
     }
 
@@ -2016,16 +2051,7 @@ export class BattleRoom extends Room<{ state: GameState }> {
       blob.gatherTimerMs = 0;
 
       if (!this.isBuildingUnderConstruction(building)) {
-        building.constructionBlocksDelivered = building.constructionBlocksRequired;
-        this.addBuildingWalkBlockingFootprint(building);
-        this.evacuateBlobsFromCompletedBuilding(building);
-        this.clearBlobGatherTarget(blob);
-        blob.targetX = blob.x;
-        blob.targetY = blob.y;
-        blob.vx = 0;
-        blob.vy = 0;
-        this.clearBlobPath(blob);
-        this.assignIdleBlobToPendingConstruction(blob);
+        this.completeBuildingConstruction(building);
         return true;
       }
 
@@ -2075,6 +2101,25 @@ export class BattleRoom extends Room<{ state: GameState }> {
     const targetBuilding = this.state.buildings.get(blob.gatherTargetBuildingId) ?? null;
     const carryCapacity = this.getVillagerCarryCapacity(blob);
     const dtMs = dt * 1000;
+
+    if (
+      targetBuilding &&
+      !this.isBuildingUnderConstruction(targetBuilding) &&
+      this.constructionOrderBlobIds.has(blob.id)
+    ) {
+      if (blob.carriedResourceType === CarriedResourceType.BUILDING_BLOCK) {
+        blob.carriedAmount = 0;
+        blob.carriedResourceType = CarriedResourceType.NONE;
+      }
+      this.clearBlobGatherTarget(blob);
+      blob.targetX = blob.x;
+      blob.targetY = blob.y;
+      blob.vx = 0;
+      blob.vy = 0;
+      this.clearBlobPath(blob);
+      this.assignIdleBlobToPendingConstruction(blob);
+      return false;
+    }
 
     if (targetBuilding && this.isBuildingUnderConstruction(targetBuilding)) {
       return this.stepVillagerConstructionOrder(blob, targetBuilding, dtMs);
@@ -2353,6 +2398,7 @@ export class BattleRoom extends Room<{ state: GameState }> {
     this.blobPaths.delete(donor.id);
     this.combatRetreatTargets.delete(donor.id);
     this.autoBuildAfterMoveBlobIds.delete(donor.id);
+    this.constructionOrderBlobIds.delete(donor.id);
     this.state.blobs.delete(donor.id);
   }
 
@@ -2392,6 +2438,7 @@ export class BattleRoom extends Room<{ state: GameState }> {
       this.blobPaths.delete(deadId);
       this.combatRetreatTargets.delete(deadId);
       this.autoBuildAfterMoveBlobIds.delete(deadId);
+      this.constructionOrderBlobIds.delete(deadId);
       this.state.blobs.delete(deadId);
     }
     if (removed.size > 0) this.clearDeadBlobTargetRefs(removed);
@@ -2485,6 +2532,7 @@ export class BattleRoom extends Room<{ state: GameState }> {
     for (const deadId of deadIds) {
       this.blobPaths.delete(deadId);
       this.autoBuildAfterMoveBlobIds.delete(deadId);
+      this.constructionOrderBlobIds.delete(deadId);
       this.state.blobs.delete(deadId);
     }
     this.clearDeadBlobTargetRefs(deadIds);
@@ -2523,6 +2571,7 @@ export class BattleRoom extends Room<{ state: GameState }> {
     for (const deadId of deadBlobIds) {
       this.blobPaths.delete(deadId);
       this.autoBuildAfterMoveBlobIds.delete(deadId);
+      this.constructionOrderBlobIds.delete(deadId);
       this.state.blobs.delete(deadId);
     }
     this.clearDeadBlobTargetRefs(deadBlobIds);
@@ -2632,6 +2681,7 @@ export class BattleRoom extends Room<{ state: GameState }> {
     for (const deadId of deadBlobIds) {
       this.blobPaths.delete(deadId);
       this.autoBuildAfterMoveBlobIds.delete(deadId);
+      this.constructionOrderBlobIds.delete(deadId);
       this.state.blobs.delete(deadId);
     }
     this.clearDeadBlobTargetRefs(deadBlobIds);
@@ -2664,6 +2714,13 @@ export class BattleRoom extends Room<{ state: GameState }> {
     this.state.blobs.set(blob.id, blob);
     if (Math.hypot(rally.x - spawn.x, rally.y - spawn.y) > CONFIG.BLOB_STOP_EPSILON) {
       this.setBlobDestination(blob, rally.x, rally.y, this.getBlobOwnerClient(blob), { snapToNearestWalkable: true });
+    }
+    if (unitType === UnitType.VILLAGER) {
+      if (this.blobPaths.has(blob.id)) {
+        this.autoBuildAfterMoveBlobIds.add(blob.id);
+      } else {
+        this.assignIdleBlobToPendingConstruction(blob);
+      }
     }
   }
 

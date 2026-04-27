@@ -4,12 +4,16 @@
   z-index: 2000;
   inset: 0;
   pointer-events: none;
-  font-family: system-ui, "Segoe UI", Roboto, sans-serif;
+  font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   font-size: 13px;
-  color: #e8e4dc;
-  --as-gold: #c9a15c;
-  --as-panel: rgba(8, 16, 34, 0.97);
-  --as-border: rgba(201, 145, 30, 0.32);
+  color: oklch(0.94 0.03 91);
+  --as-gold: oklch(0.77 0.12 83);
+  --as-gold-bright: oklch(0.86 0.13 83);
+  --as-panel: oklch(0.22 0.05 258 / 0.97);
+  --as-panel-soft: oklch(0.27 0.06 258 / 0.94);
+  --as-border: oklch(0.77 0.12 83 / 0.34);
+  --as-ink: oklch(0.94 0.03 91);
+  --as-muted: oklch(0.78 0.03 91 / 0.72);
 }
 
 .audio-settings-layer * {
@@ -21,10 +25,10 @@
   position: absolute;
   inset: 0;
   z-index: 0;
-  background: rgba(0, 0, 0, 0.42);
+  background: oklch(0.14 0.03 258 / 0.46);
   pointer-events: none;
   opacity: 0;
-  transition: opacity 0.12s ease;
+  transition: opacity 0.14s ease;
 }
 
 .audio-settings-backdrop[aria-hidden="false"] {
@@ -32,10 +36,10 @@
   opacity: 1;
 }
 
-/* Top-left: gear + popover above backdrop */
+/* Top-left utility rail, beside the resource stack. */
 .audio-settings-dock {
   position: absolute;
-  top: 10px;
+  top: 5px;
   left: 136px;
   z-index: 1;
   display: flex;
@@ -45,46 +49,46 @@
   pointer-events: auto;
 }
 
-/* Subtle gear: low contrast by default, clearer on focus/hover */
 .audio-settings-gear {
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 34px;
-  height: 34px;
+  width: 44px;
+  height: 44px;
   padding: 0;
   margin: 0;
-  border: 1px solid rgba(201, 145, 30, 0.15);
-  border-radius: 8px;
-  background: rgba(8, 16, 34, 0.35);
-  color: var(--as-gold);
-  opacity: 0.42;
+  border: 2px solid oklch(0.77 0.12 83 / 0.72);
+  border-radius: 12px;
+  background: oklch(0.22 0.05 258 / 0.94);
+  color: var(--as-gold-bright);
+  box-shadow: 0 8px 18px oklch(0.12 0.03 258 / 0.34), inset 0 1px 0 oklch(0.96 0.03 90 / 0.12);
   cursor: pointer;
-  transition: opacity 0.15s ease, background 0.15s ease, border-color 0.15s ease;
+  transition: transform 0.16s cubic-bezier(0.22, 1, 0.36, 1), background 0.15s ease, border-color 0.15s ease;
   -webkit-tap-highlight-color: transparent;
 }
 
 .audio-settings-gear:hover,
 .audio-settings-gear:focus {
-  opacity: 0.92;
-  background: rgba(8, 16, 34, 0.72);
-  border-color: rgba(201, 145, 30, 0.4);
+  transform: translateY(-1px);
+  background: oklch(0.27 0.06 258 / 0.98);
+  border-color: var(--as-gold-bright);
   outline: none;
 }
 
 .audio-settings-gear[aria-expanded="true"] {
-  opacity: 0.95;
-  background: rgba(20, 36, 64, 0.88);
-  border-color: rgba(201, 145, 30, 0.5);
+  transform: translateY(-1px);
+  background: var(--as-gold);
+  border-color: var(--as-gold-bright);
+  color: oklch(0.22 0.05 258);
 }
 
 .as-gear-icon {
   display: block;
-  font-size: 17px;
-  line-height: 1;
-  color: inherit;
-  opacity: 0.9;
-  transform: translateY(0.5px);
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2.25;
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }
 
 /* Popover card */
@@ -93,13 +97,16 @@
 }
 
 .audio-settings-popover {
+  position: absolute;
+  top: 0;
+  left: 52px;
   min-width: 280px;
-  max-width: min(320px, calc(100vw - 24px));
+  max-width: min(320px, calc(100vw - 200px));
   padding: 0;
-  border-radius: 10px;
+  border-radius: 16px;
   background: var(--as-panel);
   border: 1px solid var(--as-border);
-  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+  box-shadow: 0 18px 44px oklch(0.12 0.03 258 / 0.48), inset 0 1px 0 oklch(0.96 0.03 90 / 0.08);
   overflow: hidden;
 }
 
@@ -107,17 +114,19 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 10px 12px 8px 14px;
+  padding: 12px 12px 10px 14px;
   border-bottom: 1px solid var(--as-border);
+  background: oklch(0.28 0.06 258 / 0.64);
 }
 
 .as-popover-head h2 {
   margin: 0;
-  font-family: "Cinzel", serif;
-  font-weight: 600;
-  font-size: 0.8rem;
-  letter-spacing: 0.1em;
-  color: #f0c060;
+  font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-weight: 800;
+  font-size: 0.78rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--as-gold-bright);
 }
 
 .as-popover-close {
@@ -129,9 +138,9 @@
   margin: 0;
   padding: 0;
   border: 1px solid var(--as-border);
-  border-radius: 6px;
-  background: rgba(0, 0, 0, 0.2);
-  color: #e8e4dc;
+  border-radius: 9px;
+  background: oklch(0.18 0.04 258 / 0.44);
+  color: var(--as-ink);
   font-size: 1.1rem;
   line-height: 1;
   cursor: pointer;
@@ -139,83 +148,89 @@
 
 .as-popover-close:hover,
 .as-popover-close:focus {
-  background: rgba(201, 145, 30, 0.12);
+  background: oklch(0.77 0.12 83 / 0.18);
   outline: none;
 }
 
 .as-popover-body {
-  padding: 12px 14px 14px 14px;
+  padding: 14px;
   display: flex;
   flex-direction: column;
-  gap: 14px;
+  gap: 12px;
 }
 
 .as-row {
   display: grid;
-  grid-template-columns: 50px 1fr auto;
+  grid-template-columns: 52px 1fr auto;
   align-items: center;
   gap: 10px;
   column-gap: 12px;
+  min-height: 44px;
+  padding: 8px 10px;
+  border: 1px solid oklch(0.77 0.12 83 / 0.14);
+  border-radius: 12px;
+  background: var(--as-panel-soft);
 }
 
 .as-row label[for] {
   font-size: 0.72rem;
-  font-weight: 600;
+  font-weight: 800;
   text-transform: uppercase;
   letter-spacing: 0.05em;
-  color: #a8a4a0;
+  color: var(--as-muted);
   margin: 0;
 }
 
 .as-row input[type="range"] {
   width: 100%;
   min-width: 0;
-  height: 6px;
+  height: 8px;
   -webkit-appearance: none;
   appearance: none;
-  background: linear-gradient(90deg, #3a5080, #5a6ca0);
-  border-radius: 4px;
+  background: linear-gradient(90deg, oklch(0.49 0.1 151), oklch(0.76 0.12 83));
+  border-radius: 999px;
   outline: none;
   cursor: pointer;
 }
 
 .as-row input[type="range"]::-webkit-slider-thumb {
   -webkit-appearance: none;
-  width: 14px;
-  height: 14px;
+  width: 18px;
+  height: 18px;
   border-radius: 50%;
-  background: #e8c86a;
-  border: 1px solid #8a6a2a;
-  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.35);
+  background: var(--as-gold-bright);
+  border: 2px solid oklch(0.36 0.06 83);
+  box-shadow: 0 2px 6px oklch(0.12 0.03 258 / 0.36);
   cursor: grab;
 }
 
 .as-row input[type="range"]::-moz-range-thumb {
-  width: 14px;
-  height: 14px;
+  width: 18px;
+  height: 18px;
   border-radius: 50%;
-  background: #e8c86a;
-  border: 1px solid #8a6a2a;
+  background: var(--as-gold-bright);
+  border: 2px solid oklch(0.36 0.06 83);
   cursor: grab;
 }
 
 .as-mute {
   display: flex;
   align-items: center;
-  gap: 4px;
+  gap: 6px;
   font-size: 0.7rem;
-  color: #b0aca8;
+  font-weight: 700;
+  color: var(--as-muted);
   white-space: nowrap;
   cursor: pointer;
   user-select: none;
 }
 
 .as-mute input {
-  width: 14px;
-  height: 14px;
+  width: 16px;
+  height: 16px;
   margin: 0;
   cursor: pointer;
-  accent-color: #c9a15c;
+  accent-color: oklch(0.77 0.12 83);
 }
 
 .sr-only {
@@ -232,5 +247,12 @@
 @media (max-width: 400px) {
   .audio-settings-dock {
     left: 10px;
+    top: 104px;
+  }
+
+  .audio-settings-popover {
+    top: 52px;
+    left: 0;
+    max-width: calc(100vw - 20px);
   }
 }

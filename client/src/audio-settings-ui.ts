@@ -40,18 +40,27 @@ export function createAudioSettingsUi(): void {
   gear.setAttribute("aria-label", "Open audio settings");
   gear.setAttribute("aria-haspopup", "dialog");
   gear.setAttribute("aria-expanded", "false");
-  gear.innerHTML = '<span class="as-gear-icon" aria-hidden="true">⚙</span>';
+  gear.innerHTML = `
+    <svg class="as-gear-icon" width="20" height="20" viewBox="0 0 24 24" aria-hidden="true">
+      <path d="M4 7h9" />
+      <path d="M17 7h3" />
+      <circle cx="15" cy="7" r="2" />
+      <path d="M4 17h3" />
+      <path d="M11 17h9" />
+      <circle cx="9" cy="17" r="2" />
+    </svg>
+  `;
 
   const pop = document.createElement("div");
   pop.className = "audio-settings-popover";
   pop.setAttribute("role", "dialog");
-  pop.setAttribute("aria-label", "Audio");
+  pop.setAttribute("aria-label", "Audio settings");
   pop.setAttribute("aria-modal", "true");
   pop.hidden = true;
 
   pop.innerHTML = `
     <div class="as-popover-head">
-      <h2>Audio</h2>
+      <h2>Sound</h2>
       <button type="button" class="as-popover-close" aria-label="Close" data-as-close>×</button>
     </div>
     <div class="as-popover-body">
