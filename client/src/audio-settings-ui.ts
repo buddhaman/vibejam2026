@@ -55,7 +55,6 @@ export function createAudioSettingsUi(): void {
       <button type="button" class="as-popover-close" aria-label="Close" data-as-close>×</button>
     </div>
     <div class="as-popover-body">
-      <p class="as-hint">SFX: unit barks. Music: main theme, battle atmosphere — both on the same bus.</p>
       <div class="as-row">
         <label for="as-sfx">SFX</label>
         <input type="range" id="as-sfx" name="sfx" min="0" max="1" step="0.01" />
@@ -67,7 +66,7 @@ export function createAudioSettingsUi(): void {
       <div class="as-row as-row--music">
         <label for="as-mu">Music</label>
         <input type="range" id="as-mu" name="music" min="0" max="1" step="0.01" />
-        <label class="as-mute as-mute-mu" title="Mute music bus">
+        <label class="as-mute as-mute-mu" title="Mute music">
           <input type="checkbox" id="as-mu-m" />
           <span>Mute</span>
         </label>

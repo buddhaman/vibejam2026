@@ -42,7 +42,8 @@ export const CAMERA_CONFIG = {
   distanceStart: 165,
   distanceMin: 14,
   distanceMax: 420,
-  zoomFactor: 1.035,
+  /** >1: each wheel step. Scroll up = zoom in (closer) — see `zoom()`. */
+  zoomFactor: 1.07,
   fov: 52,
   arrowYawDegPerSec: 78,
   arrowPitchDegPerSec: 52,
@@ -410,7 +411,9 @@ function createCameraRig(game: Game, sunLight: THREE.DirectionalLight): CameraRi
   }
 
   function zoom(deltaY: number) {
-    const factor = deltaY < 0 ? CAMERA_CONFIG.zoomFactor : 1 / CAMERA_CONFIG.zoomFactor;
+    if (deltaY === 0) return;
+    // scroll down (deltaY>0) → out / farther; scroll up (deltaY<0) → in / closer
+    const factor = deltaY > 0 ? CAMERA_CONFIG.zoomFactor : 1 / CAMERA_CONFIG.zoomFactor;
     rig.distance = THREE.MathUtils.clamp(
       rig.distance * factor,
       CAMERA_CONFIG.distanceMin,

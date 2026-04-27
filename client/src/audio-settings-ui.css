@@ -218,13 +218,6 @@
   accent-color: #c9a15c;
 }
 
-.as-hint {
-  margin: 0 0 4px 0;
-  font-size: 0.65rem;
-  color: #6a6864;
-  line-height: 1.35;
-}
-
 .sr-only {
   position: absolute;
   width: 1px;
