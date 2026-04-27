@@ -1,9 +1,9 @@
 import * as THREE from "three";
 import { applyStylizedShading } from "./stylized-shading.js";
 
-export const CONSTRUCTION_BLOCK_WIDTH = 1.68;
-export const CONSTRUCTION_BLOCK_HEIGHT = 1.02;
-export const CONSTRUCTION_BLOCK_DEPTH = 1.32;
+export const CONSTRUCTION_BLOCK_WIDTH = 1.9;
+export const CONSTRUCTION_BLOCK_HEIGHT = 1.12;
+export const CONSTRUCTION_BLOCK_DEPTH = 1.5;
 
 const GEOMETRY = new THREE.BoxGeometry(
   CONSTRUCTION_BLOCK_WIDTH,

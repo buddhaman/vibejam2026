@@ -2185,7 +2185,10 @@ export class BlobEntity extends Entity {
     if (this.blob.carriedAmount > 0 && this.blob.carriedResourceType !== CarriedResourceType.NONE) {
       return this.blob.carriedResourceType;
     }
-    if (this.blob.gatherTargetBuildingId.length > 0) return CarriedResourceType.BIOMASS;
+    if (this.blob.gatherTargetBuildingId.length > 0) {
+      const building = this.game.findBuildingEntity(this.blob.gatherTargetBuildingId);
+      return building?.isUnderConstruction() ? CarriedResourceType.BUILDING_BLOCK : CarriedResourceType.BIOMASS;
+    }
     if (this.blob.gatherTargetKey.length > 0) {
       const tile = this.game.getTiles().get(this.blob.gatherTargetKey);
       if (tile?.maxCompute && tile.maxCompute > 0) return CarriedResourceType.COMPUTE;

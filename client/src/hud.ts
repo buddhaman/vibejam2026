@@ -626,6 +626,7 @@ function resourceLabel(resourceType: number): string {
     case CarriedResourceType.MATERIAL: return "material";
     case CarriedResourceType.COMPUTE: return "compute";
     case CarriedResourceType.BIOMASS: return "biomass";
+    case CarriedResourceType.BUILDING_BLOCK: return "blocks";
     default: return "resource";
   }
 }
@@ -635,6 +636,7 @@ function resourceGlyph(resourceType: number): string {
     case CarriedResourceType.MATERIAL: return "◼";
     case CarriedResourceType.COMPUTE: return "◈";
     case CarriedResourceType.BIOMASS: return "✿";
+    case CarriedResourceType.BUILDING_BLOCK: return "▣";
     default: return "+";
   }
 }
@@ -670,6 +672,7 @@ function resourceColor(resourceType: number): string {
     case CarriedResourceType.MATERIAL: return "#D4A84C";
     case CarriedResourceType.COMPUTE: return DIVINE_CYAN;
     case CarriedResourceType.BIOMASS: return "#59B96A";
+    case CarriedResourceType.BUILDING_BLOCK: return "#D08A42";
     default: return MARBLE_TEXT;
   }
 }

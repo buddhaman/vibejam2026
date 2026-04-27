@@ -341,6 +341,10 @@ export class CarriedResourceRenderer {
         instance.kind === "tree" && pickupT < 1
           ? instance.rotationY + THREE.MathUtils.lerp(-0.6, 0, pickupEase)
           : instance.rotationY;
+      const stableTravelYaw =
+        isBuildingBlock && typeof instance.targetX === "number" && typeof instance.targetZ === "number"
+          ? Math.atan2(instance.targetX - posAfterPickupX, instance.targetZ - posAfterPickupZ)
+          : carryRotationY;
       const throwTiltX =
         throwT > 0
           ? THREE.MathUtils.lerp(
@@ -352,24 +356,23 @@ export class CarriedResourceRenderer {
       const throwTiltZ = throwT > 0
         ? THREE.MathUtils.lerp(instance.tiltZ ?? 0, instance.targetTiltZ ?? instance.tiltZ ?? 0, throwEase)
         : instance.tiltZ ?? 0;
-      const placementPitch = throwT > 0 && isBuildingBlock
-        ? (1 - throwEase) * 0.22 + Math.sin(landingT * Math.PI) * 0.08
-        : 0;
       const settleScale = throwT > 0 && isBuildingBlock
         ? 1 + Math.sin(landingT * Math.PI) * 0.06
         : 1;
       DUMMY.position.set(posX, posYBase + arcY + settleBounce + bobY, posZ);
       if (throwT > 0 && isBuildingBlock) {
-        const rotationEase = THREE.MathUtils.smoothstep(throwEase, 0.42, 1);
-        START_EULER.set(carryTiltX, carryRotationY, instance.tiltZ ?? 0);
-        END_EULER.set(instance.targetTiltX ?? 0, instance.targetRotationY ?? carryRotationY, instance.targetTiltZ ?? 0);
+        START_EULER.set(0, stableTravelYaw, 0);
+        END_EULER.set(0, instance.targetRotationY ?? stableTravelYaw, 0);
         START_QUAT.setFromEuler(START_EULER);
         END_QUAT.setFromEuler(END_EULER);
-        RESULT_QUAT.slerpQuaternions(START_QUAT, END_QUAT, rotationEase);
+        RESULT_QUAT.slerpQuaternions(START_QUAT, END_QUAT, throwEase);
         DUMMY.quaternion.copy(RESULT_QUAT);
-        DUMMY.rotateX(placementPitch);
       } else {
-        DUMMY.rotation.set(throwTiltX, carryRotationY, throwTiltZ);
+        DUMMY.rotation.set(
+          isBuildingBlock ? 0 : throwTiltX,
+          stableTravelYaw,
+          isBuildingBlock ? 0 : throwTiltZ
+        );
       }
       DUMMY.scale.setScalar(instance.scale * growT * settleScale);
       DUMMY.updateMatrix();

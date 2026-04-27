@@ -1320,7 +1320,7 @@ export class Game {
     const snapped = snapWorldToTileCenter(worldX, worldZ);
     this.room.send(MessageType.BUILD, { type, worldX: snapped.x, worldZ: snapped.z } satisfies BuildMessage);
     if (this.getMyIdleAgentCount() <= 0) {
-      this.addWorldWarning(snapped.x, snapped.z, "Need an idle agent to build");
+      this.addWorldWarning(snapped.x, snapped.z, "Needs an agent to build");
     }
     return true;
   }

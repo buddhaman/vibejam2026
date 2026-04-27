@@ -85,7 +85,6 @@ const VILLAGER_CARRY_PER_UNIT = 12;
 const VILLAGER_PICKUP_MS = 1000;
 const VILLAGER_DROPOFF_MS = 1000;
 const VILLAGER_GATHER_RETARGET_RADIUS_TILES = 8;
-const BUILD_BLOCK_RESOURCE_VALUE = 25;
 const BUILD_BLOCK_PICKUP_MS = 650;
 const BUILD_BLOCK_DROPOFF_MS = 900;
 const BUILD_REACH_PADDING = GAME_RULES.TILE_SIZE * 0.35;
@@ -989,12 +988,19 @@ export class BattleRoom extends Room<{ state: GameState }> {
   }
 
   private getConstructionBlockCost(buildingType: BuildingType): number {
-    const rules = getBuildingRules(buildingType);
-    if (!rules.buildable) return 0;
-    if (buildingType === BuildingType.FARM) return 3;
-    const totalCost = rules.cost.biomass + rules.cost.material + rules.cost.compute;
-    const rawBlocks = Math.max(3, Math.ceil(totalCost / BUILD_BLOCK_RESOURCE_VALUE));
-    return Math.ceil(rawBlocks / 3) * 3;
+    switch (buildingType) {
+      case BuildingType.FARM:
+        return 3;
+      case BuildingType.ARCHERY_RANGE:
+        return 6;
+      case BuildingType.BARRACKS:
+      case BuildingType.TOWER:
+        return 9;
+      case BuildingType.STABLE:
+        return 12;
+      default:
+        return 0;
+    }
   }
 
   private isBuildingUnderConstruction(building: Building): boolean {
@@ -1031,12 +1037,14 @@ export class BattleRoom extends Room<{ state: GameState }> {
   private assignIdleBuildersToConstruction(building: Building): void {
     if (!this.isBuildingUnderConstruction(building)) return;
     let best: Blob | null = null;
+    let bestUnitCount = -1;
     let bestDistance = Infinity;
     for (const blob of this.state.blobs.values()) {
       if (blob.ownerId !== building.ownerId || !this.isBlobIdleForAutoBuild(blob)) continue;
       const distance = Math.hypot(blob.x - building.x, blob.y - building.y);
-      if (distance < bestDistance) {
+      if (blob.unitCount > bestUnitCount || (blob.unitCount === bestUnitCount && distance < bestDistance)) {
         best = blob;
+        bestUnitCount = blob.unitCount;
         bestDistance = distance;
       }
     }
@@ -1872,6 +1880,11 @@ export class BattleRoom extends Room<{ state: GameState }> {
   private stepVillagerConstructionOrder(blob: Blob, building: Building, dtMs: number): boolean {
     if (!this.isBuildingUnderConstruction(building)) {
       this.clearBlobGatherTarget(blob);
+      blob.targetX = blob.x;
+      blob.targetY = blob.y;
+      blob.vx = 0;
+      blob.vy = 0;
+      this.clearBlobPath(blob);
       return false;
     }
 
@@ -1907,6 +1920,11 @@ export class BattleRoom extends Room<{ state: GameState }> {
       if (!this.isBuildingUnderConstruction(building)) {
         building.constructionBlocksDelivered = building.constructionBlocksRequired;
         this.clearBlobGatherTarget(blob);
+        blob.targetX = blob.x;
+        blob.targetY = blob.y;
+        blob.vx = 0;
+        blob.vy = 0;
+        this.clearBlobPath(blob);
         return true;
       }
 

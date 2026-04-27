@@ -32,7 +32,7 @@ type OnboardingStep = {
   complete: (game: Game) => boolean;
 };
 
-const STARTING_AGENT_COUNT = 3;
+const STARTING_AGENT_COUNT = 6;
 const CARD_W = 336;
 const CARD_PAD = 14;
 const SAFE_EDGE = 44;
@@ -49,7 +49,7 @@ const STEPS: OnboardingStep[] = [
   {
     id: "build-farm",
     title: "Build a farm",
-    body: "Double tap bright ground, then choose Farm.",
+    body: "Double tap bright ground, then choose Farm. Agents carry blocks to build it.",
     target: (game) => {
       const farm = game.getMyBuildingsOfType(BuildingType.FARM)[0];
       if (farm) {
@@ -66,7 +66,7 @@ const STEPS: OnboardingStep[] = [
   {
     id: "assign-farm",
     title: "Put an agent on it",
-    body: "Tap an agent, then tap the farm.",
+    body: "When the farm is built, tap an agent, then tap the farm.",
     target: (game) => {
       const farm = game.getMyBuildingsOfType(BuildingType.FARM)[0];
       const center = farm?.getWorldCenter() ?? game.getFirstIdleAgentBlob()?.getPredictedWorldCenter();
@@ -75,7 +75,7 @@ const STEPS: OnboardingStep[] = [
     },
     complete: (game) => {
       const farm = game.getMyBuildingsOfType(BuildingType.FARM)[0];
-      return !!farm && game.hasMyGathererForBuilding(farm.id);
+      return !!farm && !farm.isUnderConstruction() && game.hasMyGathererForBuilding(farm.id);
     },
   },
   {
@@ -94,7 +94,7 @@ const STEPS: OnboardingStep[] = [
   {
     id: "build-barracks",
     title: "Add a barracks",
-    body: "Double tap ground again, then choose Barracks.",
+    body: "Double tap ground again, then choose Barracks. Agents are needed to build it.",
     target: (game) => {
       const barracks = game.getMyBuildingsOfType(BuildingType.BARRACKS)[0];
       if (barracks) {

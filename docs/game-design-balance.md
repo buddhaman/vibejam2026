@@ -1,6 +1,6 @@
 # Game Design Balance
 
-Last updated: 2026-04-25
+Last updated: 2026-04-26
 
 This document is the living balance reference for `shared/game-rules.ts`. The game should stay fast paced: first combat should happen quickly, scouting and raids should matter, and static defense should buy time without locking the map.
 
@@ -8,7 +8,7 @@ This document is the living balance reference for `shared/game-rules.ts`. The ga
 
 Agents move at `12` world units per second, carry `12` resources per body, spend `1s` picking up, and spend `1s` dropping off. Ordered forest and GPU gathering uses the carry loop, so distance matters more than the raw legacy idle gather constants. The default agent blob cap is `3`, so a full small work crew carries `36`.
 
-Starting resources are `500 biomass`, `300 material`, and `200 compute`, with `3` starting agents and no free combat squads.
+Starting resources are `500 biomass`, `300 material`, and `200 compute`, with two `3`-agent starting blobs and no free combat squads. This lets the player immediately split one crew to construction and one crew to gathering.
 
 ### Distance Math
 
@@ -57,15 +57,30 @@ Agents merge into `3`-body work crews so economy management has fewer tiny blobs
 
 ## Building And Defense Targets
 
-Current buildings are placed instantly. When agent-built construction is added, use these target build durations as the starting point:
+Buildings now place as scaffolds and complete when agents deliver construction blocks. A full `3`-agent blob carries `3` blocks, so block counts are tuned in multiples of three: one full-crew trip per tier. More agent blobs can work on the same building to trade attention/economy for faster tech.
 
-| Building | Current cost | Future build duration target | Design intent |
-| --- | ---: | ---: | --- |
-| Farm | `70M` | `8s` | Quick biomass setup, vulnerable to raids. |
-| Barracks | `175M` | `18s` | Main melee tech; first combat path. |
-| Archery Range | `150M / 30C` | `16s` | Faster tech switch with some compute commitment. |
-| Stable | `210M / 80C` | `22s` | Premium tech path. |
-| Tower | `125M / 50C` | `20s` | Defensive time-buying, not map lockdown. |
+| Building | Cost | Build blocks | Full-crew trips | Design intent |
+| --- | ---: | ---: | ---: | --- |
+| Farm | `70M` | `3` | `1` | Quick biomass setup. Cheap enough to expand immediately, still raidable before payoff. |
+| Archery Range | `150M / 30C` | `6` | `2` | Fastest military tech switch. Compute cost is the commitment, construction should not lag behind Barracks. |
+| Barracks | `175M` | `9` | `3` | Main melee tech and default first-combat path. Slower than Archery because it asks only material. |
+| Tower | `125M / 50C` | `9` | `3` | Defensive time-buying. Equal build effort to Barracks prevents instant reactive tower walls. |
+| Stable | `210M / 80C` | `12` | `4` | Premium tech path. Highest construction commitment matches high compute cost and raid potential. |
+
+### Construction Tuning Notes
+
+Keep block counts explicit rather than deriving them directly from resource totals. Resource cost and construction time do different jobs:
+
+- Resource cost controls what economy route the player needs.
+- Block count controls map exposure, worker commitment, and how interruptible the tech choice feels.
+- Multiples of three keep the visuals and pacing legible because one full agent blob carries exactly one row of `3` blocks.
+
+Initial targets:
+
+- `3` blocks: one quick setup trip, only for farms.
+- `6` blocks: fast tech switch, currently Archery Range.
+- `9` blocks: standard tech/defense commitment, Barracks and Tower.
+- `12` blocks: premium tech commitment, Stable.
 
 Tower range is now `48` world units plus the target blob radius, down from `92`. That is roughly `4` tiles before blob size, instead of almost `8` tiles. Tower damage is now `7 DPS`, down from `18 DPS`.
 
@@ -83,7 +98,7 @@ Development/debug keeps the same unit and building costs as release. Only pacing
 
 ## Balance Watchlist
 
-Watch whether the added material cost makes early barracks plus first army too material starved once agent-built construction lands. If it does, reduce Barracks build time before reducing hoplite material cost.
+Watch whether the added material cost makes early barracks plus first army too material starved now that Barracks also needs `9` build blocks. If it does, reduce Barracks blocks from `9` to `6` before reducing hoplite material cost.
 
 Watch whether towers still stall center fights. If they do, lower range first; keep damage high enough that lone raiders cannot ignore them.
 
