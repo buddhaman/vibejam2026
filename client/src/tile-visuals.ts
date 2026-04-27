@@ -590,6 +590,38 @@ function generateRockSlotsForTiles(tiles: Iterable<TileView>, tileMap: Map<strin
   return allSlots;
 }
 
+function getFoliageClusterCenters(tile: TileView, tileMap: Map<string, TileView>) {
+  const centers: Array<{ x: number; z: number; radius: number; count: number; seed: number }> = [];
+  const center = getTileCenter(tile.tx, tile.tz);
+  if (Math.hypot(center.x, center.z) < TREE_CENTER_CLEAR_RADIUS * 0.85) return centers;
+  if (!canPlaceFoliage(center.x, center.z, tileMap)) return centers;
+
+  const half = GAME_RULES.TILE_SIZE * 0.5;
+  const seed = tile.tx * 4721.31 + tile.tz * 8521.77 + 312.4;
+  for (const formation of generateRockFormationsForTile(tile)) {
+    if (formation.isMountain) continue;
+    centers.push({
+      x: formation.x + jitter(formation.seed + 200, formation.radius * 0.35),
+      z: formation.z + jitter(formation.seed + 201, formation.radius * 0.35),
+      radius: formation.radius * randRange(formation.seed + 202, 0.45, 0.82),
+      count: Math.floor(randRange(formation.seed + 203, 3, 6)),
+      seed: formation.seed + 240,
+    });
+  }
+
+  const patch = hash(tile.tx * 37.91 + tile.tz * 81.33 + 822.2);
+  if (patch <= 0.045) {
+    centers.push({
+      x: center.x + jitter(seed + 1, half * 0.46),
+      z: center.z + jitter(seed + 2, half * 0.46),
+      radius: randRange(seed + 3, GAME_RULES.TILE_SIZE * 0.08, GAME_RULES.TILE_SIZE * 0.18),
+      count: Math.floor(randRange(seed + 4, 3, 6)),
+      seed,
+    });
+  }
+  return centers;
+}
+
 function createFoliageMaterial(color: number) {
   return applyStylizedShading(new THREE.MeshStandardMaterial({
     color,
@@ -641,33 +673,21 @@ function createFoliageVariants(): InstancedVariant[] {
 function generateFoliageSlotsForTiles(tiles: Iterable<TileView>, tileMap: Map<string, TileView>): FoliageSlot[] {
   const slots: FoliageSlot[] = [];
   for (const tile of tiles) {
-    const center = getTileCenter(tile.tx, tile.tz);
-    if (Math.hypot(center.x, center.z) < TREE_CENTER_CLEAR_RADIUS * 0.85) continue;
-    if (!canPlaceFoliage(center.x, center.z, tileMap)) continue;
-
-    const seed = tile.tx * 4721.31 + tile.tz * 8521.77 + 312.4;
-    const patch = hash(tile.tx * 37.91 + tile.tz * 81.33 + 822.2);
-    if (patch > 0.075) continue;
-
-    const half = GAME_RULES.TILE_SIZE * 0.5;
-    const clusterX = center.x + jitter(seed + 1, half * 0.46);
-    const clusterZ = center.z + jitter(seed + 2, half * 0.46);
-    const radius = randRange(seed + 3, GAME_RULES.TILE_SIZE * 0.08, GAME_RULES.TILE_SIZE * 0.18);
-    const count = Math.floor(randRange(seed + 4, 2, 5));
-
-    for (let i = 0; i < count; i++) {
-      const slotSeed = seed + i * 67.7;
-      const angle = randRange(slotSeed + 1, 0, Math.PI * 2);
-      const dist = Math.pow(rand(slotSeed + 2), 1.35) * radius;
-      const p = polar(clusterX, clusterZ, angle, dist);
-      if (!canPlaceFoliage(p.x, p.z, tileMap)) continue;
-      slots.push({
-        x: p.x,
-        z: p.z,
-        rotationY: randRange(slotSeed + 3, 0, Math.PI * 2),
-        scale: randRange(slotSeed + 4, 1.45, 2.35),
-        variantIndex: pick(slotSeed + 5, FOLIAGE_VARIANT_COUNT),
-      });
+    for (const cluster of getFoliageClusterCenters(tile, tileMap)) {
+      for (let i = 0; i < cluster.count; i++) {
+        const slotSeed = cluster.seed + i * 67.7;
+        const angle = randRange(slotSeed + 1, 0, Math.PI * 2);
+        const dist = Math.pow(rand(slotSeed + 2), 1.35) * cluster.radius;
+        const p = polar(cluster.x, cluster.z, angle, dist);
+        if (!canPlaceFoliage(p.x, p.z, tileMap)) continue;
+        slots.push({
+          x: p.x,
+          z: p.z,
+          rotationY: randRange(slotSeed + 3, 0, Math.PI * 2),
+          scale: randRange(slotSeed + 4, 1.45, 2.35),
+          variantIndex: pick(slotSeed + 5, FOLIAGE_VARIANT_COUNT),
+        });
+      }
     }
   }
   return slots;

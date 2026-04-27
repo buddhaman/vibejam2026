@@ -235,13 +235,20 @@ function getForestGroundColor(tile: TileView, wx: number, wz: number, fx: number
   const nz = fz * 2 - 1;
   const canopyPool = smoothstep(clamp01((1.12 - Math.hypot(nx * 0.92, nz * 1.08)) / 0.82));
   const dapple = valueNoise2D(wx * 0.28, wz * 0.28, 2687);
+  const leafPatch = valueNoise2D(wx * 0.075 + 12.4, wz * 0.075 - 37.2, 3381);
+  const leafDetail = valueNoise2D(wx * 0.32 - 18.9, wz * 0.32 + 7.7, 3382);
   const richness = clamp01(tile.maxMaterial / GAME_RULES.FOREST_WOOD_MAX);
   const canopyShade = (0.18 + richness * 0.22) * canopyPool * (0.82 + dapple * 0.28);
   const wholeTileShade = 0.22 + richness * 0.1;
   const shade = clamp01(wholeTileShade + canopyShade);
 
   const forestTint = new THREE.Color().setHSL(0.31 + dapple * 0.025, 0.82, 0.24 + dapple * 0.035);
-  return base.lerp(forestTint, shade).multiplyScalar(1 - shade * 0.34);
+  const leafLitter = new THREE.Color().setHSL(0.115 + leafDetail * 0.03, 0.62, 0.36 + leafDetail * 0.08);
+  const moss = new THREE.Color().setHSL(0.26 + dapple * 0.025, 0.7, 0.31 + leafDetail * 0.05);
+  const forest = base.lerp(forestTint, shade).multiplyScalar(1 - shade * 0.34);
+  forest.lerp(leafLitter, sharpenedMask(leafPatch + leafDetail * 0.12, 0.58, 0.82) * canopyPool * 0.36);
+  forest.lerp(moss, sharpenedMask(1 - leafPatch + dapple * 0.1, 0.6, 0.86) * canopyPool * 0.18);
+  return forest;
 }
 
 function pushTerrainTop(
