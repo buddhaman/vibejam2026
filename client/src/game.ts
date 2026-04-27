@@ -60,6 +60,8 @@ import { type TileView } from "./terrain.js";
 import { UnitCollisionSystem } from "./unit-collision.js";
 import { isMilitaryUnitType, playDefaultCommandVoice, playUnitSpawnVoiceNearCamera, playUnitVoiceOrDefault } from "./unit-voice.js";
 
+type TileVisualLayerId = "forest" | "datacenters";
+
 export class Game {
   private static readonly FLOATING_RESOURCE_TEXT_LIFE = 1.15;
   private static readonly UI_FEED_MAX = 32;
@@ -93,7 +95,7 @@ export class Game {
   private _firstChunkMs: number | null = null;
   private _spawnChunksMs: number | null = null;
   private _fullChunksMs: number | null = null;
-  private _dirtyTileVisualLayers = new Set<"forest" | "datacenters">(["forest", "datacenters"]);
+  private _dirtyTileVisualLayers = new Set<TileVisualLayerId>(["forest", "datacenters"]);
   private _allTileVisualsDirty = true;
   private _walkabilityDirty = true;
   private _terrainAllDirty = true;
@@ -951,7 +953,7 @@ export class Game {
     return counts;
   }
 
-  public consumeTileVisualDirty(): { all: boolean; layers: Set<"forest" | "datacenters"> } {
+  public consumeTileVisualDirty(): { all: boolean; layers: Set<TileVisualLayerId> } {
     const dirty = {
       all: this._allTileVisualsDirty,
       layers: new Set(this._dirtyTileVisualLayers),

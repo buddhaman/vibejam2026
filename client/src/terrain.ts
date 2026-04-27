@@ -21,6 +21,7 @@ export type TileView = {
   canWalk: boolean;
   treeSlots?: TreeSlot[];
   computeSlots?: ComputeSlot[];
+  rockSlots?: RockSlot[];
 };
 
 export type TreeSlot = {
@@ -39,6 +40,29 @@ export type ComputeSlot = {
   rotationY: number;
   scale: number;
 };
+
+export type RockSlot = {
+  x: number;
+  z: number;
+  y?: number;
+  rotationY: number;
+  scaleX: number;
+  scaleY: number;
+  scaleZ: number;
+  variantIndex: number;
+  colorJitter: number;
+};
+
+const TERRAIN_SUBDIVISIONS = 4;
+const GRASS_BROAD_HEIGHT = 0.08;
+const GRASS_DETAIL_HEIGHT = 0.035;
+const MOUNTAIN_RIDGE_HEIGHT = 0.45;
+const MOUNTAIN_DETAIL_HEIGHT = 0.18;
+const MOUNTAIN_PLATEAU_STRENGTH = 0.45;
+const MOUNTAIN_STEP_SIZE = 0.75;
+const DRY_PATCH_SCALE = 0.045;
+const LUSH_PATCH_SCALE = 0.055;
+const PATCH_DETAIL_SCALE = 0.22;
 
 function hash(n: number) {
   const x = Math.sin(n * 127.1) * 43758.5453123;
@@ -69,33 +93,91 @@ function valueNoise2D(x: number, z: number, seed: number) {
   return nx0 + (nx1 - nx0) * fz;
 }
 
-function getGroundVertexColor(vx: number, vz: number, height: number) {
-  const dry = valueNoise2D(vx * 0.17 + 30.7, vz * 0.17 - 14.2, 4103);
-  const lush = valueNoise2D(vx * 0.09 - 8.4, vz * 0.09 + 18.6, 9201);
-  const forestBoost = valueNoise2D(vx * 0.13 + 4.8, vz * 0.13 - 21.4, 1777);
-  const patch = valueNoise2D(vx * 0.28 - 41.3, vz * 0.28 + 7.9, 6121);
+function remap01(value: number, low: number, high: number) {
+  return clamp01((value - low) / (high - low));
+}
 
-  // Hue: vivid mid-green range (Snakebird grass). Dry patches drift toward yellow-green.
-  const baseHue   = 0.29 + lush * 0.06 - dry * 0.11 + forestBoost * 0.03 - patch * 0.02;
-  // Saturation: boldly saturated — never muddy.
-  const baseSat   = 0.86 + lush * 0.10 - dry * 0.08 + patch * 0.04;
-  // Lightness: bright! The old 0.2 base was the main culprit.
-  const baseLight = 0.48 + lush * 0.06 - dry * 0.09 + patch * 0.03 + Math.min(0.02, height * 0.001);
+function sharpenedMask(value: number, low: number, high: number) {
+  return smoothstep(remap01(value, low, high));
+}
 
-  // Rock / mountain: warm stone, noticeably brighter than before.
-  const rockHue   = 0.09 + dry * 0.02;
-  const rockSat   = 0.18 + dry * 0.06;
-  const rockLight = 0.38 + Math.min(0.16, height * 0.008);
+function visualNoise(wx: number, wz: number, scale: number, seed: number) {
+  return valueNoise2D(wx * scale, wz * scale, seed);
+}
+
+function centeredNoise(wx: number, wz: number, scale: number, seed: number) {
+  return visualNoise(wx, wz, scale, seed) * 2 - 1;
+}
+
+function applyGrasslandVisualHeight(_tile: TileView, wx: number, wz: number, y: number): number {
+  const broad = centeredNoise(wx, wz, 0.045, 3101);
+  const detail = centeredNoise(wx, wz, 0.14, 3102);
+  return y + broad * GRASS_BROAD_HEIGHT + detail * GRASS_DETAIL_HEIGHT;
+}
+
+function applyMountainVisualHeight(_tile: TileView, wx: number, wz: number, y: number): number {
+  const ridge = centeredNoise(wx, wz, 0.075, 7201);
+  const chunk = centeredNoise(wx, wz, 0.18, 7202);
+  y += ridge * MOUNTAIN_RIDGE_HEIGHT;
+  y += chunk * MOUNTAIN_DETAIL_HEIGHT;
+
+  const stepped = Math.round(y / MOUNTAIN_STEP_SIZE) * MOUNTAIN_STEP_SIZE;
+  return y * (1 - MOUNTAIN_PLATEAU_STRENGTH) + stepped * MOUNTAIN_PLATEAU_STRENGTH;
+}
+
+export function getVisualTerrainHeight(
+  tile: TileView,
+  wx: number,
+  wz: number,
+  baseHeight: number
+): number {
+  const grassHeight = applyGrasslandVisualHeight(tile, wx, wz, baseHeight);
+  const mountainHeight = applyMountainVisualHeight(tile, wx, wz, baseHeight);
+  const mountainBlend = smoothstep(
+    clamp01(
+      (baseHeight - GAME_RULES.MOUNTAIN_THRESHOLD * 0.54) /
+      (GAME_RULES.MOUNTAIN_THRESHOLD * 0.42)
+    )
+  );
+  return grassHeight + (mountainHeight - grassHeight) * mountainBlend;
+}
+
+function getMountainRockColor(wx: number, wz: number, height: number) {
+  const warm = valueNoise2D(wx * 0.065, wz * 0.065, 8111);
+  const dark = valueNoise2D(wx * 0.18, wz * 0.18, 8112);
+  const hue = 0.075 + warm * 0.035;
+  const sat = 0.16 + warm * 0.08;
+  const light = 0.30 + Math.min(0.18, height * 0.008) + dark * 0.08;
+  return new THREE.Color().setHSL(hue, sat, light);
+}
+
+function getGroundVertexColor(wx: number, wz: number, height: number) {
+  const dryLarge = valueNoise2D(wx * DRY_PATCH_SCALE + 30.7, wz * DRY_PATCH_SCALE - 14.2, 4103);
+  const lushLarge = valueNoise2D(wx * LUSH_PATCH_SCALE - 8.4, wz * LUSH_PATCH_SCALE + 18.6, 9201);
+  const detail = valueNoise2D(wx * PATCH_DETAIL_SCALE - 41.3, wz * PATCH_DETAIL_SCALE + 7.9, 6121);
+  const stonePatch = valueNoise2D(wx * 0.038 + 68.2, wz * 0.038 - 33.7, 1881);
+  const stoneBreakup = valueNoise2D(wx * 0.19 - 11.8, wz * 0.19 + 52.4, 1882);
+
+  const dryMask = sharpenedMask(dryLarge, 0.48, 0.72);
+  const lushMask = sharpenedMask(lushLarge, 0.56, 0.78);
+  const detailAmount = (detail - 0.5) * 0.10;
+
+  const grass = new THREE.Color().setHSL(0.29, 0.78, 0.50);
+  const yellowGrass = new THREE.Color().setHSL(0.18, 0.75, 0.57);
+  const lushGrass = new THREE.Color().setHSL(0.34, 0.72, 0.39);
+  const color = grass.clone();
+
+  color.lerp(yellowGrass, clamp01(dryMask * 0.72 + detailAmount));
+  color.lerp(lushGrass, clamp01(lushMask * 0.55));
+  color.lerp(getMountainRockColor(wx, wz, height), sharpenedMask(stonePatch + stoneBreakup * 0.14, 0.86, 0.96) * 0.5);
 
   const mountainBlend = smoothstep(
-    Math.max(0, Math.min(1, (height - GAME_RULES.MOUNTAIN_THRESHOLD * 0.58) / (GAME_RULES.MOUNTAIN_THRESHOLD * 0.62)))
+    clamp01(
+      (height - GAME_RULES.MOUNTAIN_THRESHOLD * 0.55) /
+      (GAME_RULES.MOUNTAIN_THRESHOLD * 0.65)
+    )
   );
-
-  return new THREE.Color().setHSL(
-    baseHue   + (rockHue   - baseHue)   * mountainBlend,
-    baseSat   + (rockSat   - baseSat)   * mountainBlend,
-    baseLight + (rockLight - baseLight) * mountainBlend
-  );
+  return color.lerp(getMountainRockColor(wx, wz, height), mountainBlend);
 }
 
 function pushTri(
@@ -145,20 +227,19 @@ function getTileSurfacePoint(
   return new THREE.Vector3(x, y, z);
 }
 
-function getForestGroundColor(tile: TileView, fx: number, fz: number, height: number): THREE.Color {
-  const base = getGroundVertexColor(tile.tx + fx, tile.tz + fz, height);
+function getForestGroundColor(tile: TileView, wx: number, wz: number, fx: number, fz: number, height: number): THREE.Color {
+  const base = getGroundVertexColor(wx, wz, height);
   if (tile.tileType !== TileType.FOREST || tile.maxMaterial <= 0) return base;
 
   const nx = fx * 2 - 1;
   const nz = fz * 2 - 1;
   const canopyPool = smoothstep(clamp01((1.12 - Math.hypot(nx * 0.92, nz * 1.08)) / 0.82));
-  const dapple = valueNoise2D(tile.tx * 1.7 + fx * 4.6, tile.tz * 1.7 + fz * 4.6, 2687);
+  const dapple = valueNoise2D(wx * 0.28, wz * 0.28, 2687);
   const richness = clamp01(tile.maxMaterial / GAME_RULES.FOREST_WOOD_MAX);
   const canopyShade = (0.18 + richness * 0.22) * canopyPool * (0.82 + dapple * 0.28);
   const wholeTileShade = 0.22 + richness * 0.1;
   const shade = clamp01(wholeTileShade + canopyShade);
 
-  // Keep the Snakebird-like saturated grass, but make forest floors read clearly darker.
   const forestTint = new THREE.Color().setHSL(0.31 + dapple * 0.025, 0.82, 0.24 + dapple * 0.035);
   return base.lerp(forestTint, shade).multiplyScalar(1 - shade * 0.34);
 }
@@ -170,7 +251,7 @@ function pushTerrainTop(
   center: { x: number; z: number },
   half: number
 ) {
-  const divisions = tile.tileType === TileType.FOREST && tile.maxMaterial > 0 ? 4 : 1;
+  const divisions = TERRAIN_SUBDIVISIONS;
   const points: THREE.Vector3[][] = [];
   const vertexColors: THREE.Color[][] = [];
 
@@ -181,8 +262,11 @@ function pushTerrainTop(
     for (let x = 0; x <= divisions; x++) {
       const fx = x / divisions;
       const point = getTileSurfacePoint(tile, center, half, fx, fz);
+      if (x > 0 && x < divisions && z > 0 && z < divisions) {
+        point.y = getVisualTerrainHeight(tile, point.x, point.z, point.y);
+      }
       pointRow.push(point);
-      colorRow.push(getForestGroundColor(tile, fx, fz, point.y));
+      colorRow.push(getForestGroundColor(tile, point.x, point.z, fx, fz, point.y));
     }
     points.push(pointRow);
     vertexColors.push(colorRow);
@@ -253,9 +337,9 @@ export function createTerrainMesh(tiles: Iterable<TileView>): THREE.Mesh {
   for (const tile of tiles) {
     const center = getTileCenter(tile.tx, tile.tz);
     const dirt = tile.isMountain
-      ? new THREE.Color().setHSL(0.09, 0.22, 0.28 + Math.min(0.14, tile.height * 0.007))
-      : new THREE.Color().setHSL(0.07, 0.68, 0.30);
-    const dirtDark = dirt.clone().multiplyScalar(0.74);
+      ? getMountainRockColor(center.x, center.z, tile.height).multiplyScalar(0.82)
+      : new THREE.Color().setHSL(0.09, 0.55, 0.32);
+    const dirtDark = dirt.clone().multiplyScalar(tile.isMountain ? 0.62 : 0.74);
 
     const t00 = new THREE.Vector3(center.x - half, tile.h00, center.z - half);
     const t10 = new THREE.Vector3(center.x + half, tile.h10, center.z - half);
@@ -283,6 +367,7 @@ export function createTerrainMesh(tiles: Iterable<TileView>): THREE.Mesh {
     vertexColors: true,
     roughness: 0.88,
     metalness: 0,
+    flatShading: true,
   }));
 
   const mesh = new THREE.Mesh(geometry, material);

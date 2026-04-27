@@ -5,7 +5,12 @@ import { TileType, GAME_RULES, getTileCenter } from "../../shared/game-rules.js"
 import { createInstancedVariantSet, syncInstancedVariantSet, type InstancedTransform, type InstancedVariant } from "./instancing.js";
 import type { Game } from "./game.js";
 import { applyStylizedShading, isStylizedLitMaterial } from "./stylized-shading.js";
-import { getTerrainHeightAt, type ComputeSlot, type TileView, type TreeSlot } from "./terrain.js";
+import {
+  getTerrainHeightAt,
+  type ComputeSlot,
+  type TileView,
+  type TreeSlot,
+} from "./terrain.js";
 
 const COMPUTE_MINE_GLB = publicAssetUrl("models/buildings/compute_mine.glb");
 const GPU_GLB = publicAssetUrl("models/buildings/gpu.glb");
@@ -397,7 +402,6 @@ async function loadGpuVariant(): Promise<InstancedVariant> {
   }
   return createComputeShardVariant();
 }
-
 
 function createForestLayer(): TileVisualLayer {
   const set = createInstancedVariantSet(createTreeVariants(), 8192);
