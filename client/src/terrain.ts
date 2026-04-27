@@ -63,6 +63,7 @@ const MOUNTAIN_STEP_SIZE = 0.75;
 const DRY_PATCH_SCALE = 0.045;
 const LUSH_PATCH_SCALE = 0.055;
 const PATCH_DETAIL_SCALE = 0.22;
+const FLAT_TILE_HEIGHT_EPSILON = 1e-4;
 
 function hash(n: number) {
   const x = Math.sin(n * 127.1) * 43758.5453123;
@@ -227,6 +228,18 @@ function getTileSurfacePoint(
   return new THREE.Vector3(x, y, z);
 }
 
+function getFlatVisualTileHeight(tile: TileView): number | null {
+  if (
+    Math.abs(tile.h00 - tile.h10) > FLAT_TILE_HEIGHT_EPSILON ||
+    Math.abs(tile.h10 - tile.h11) > FLAT_TILE_HEIGHT_EPSILON ||
+    Math.abs(tile.h11 - tile.h01) > FLAT_TILE_HEIGHT_EPSILON ||
+    Math.abs(tile.h01 - tile.h00) > FLAT_TILE_HEIGHT_EPSILON
+  ) {
+    return null;
+  }
+  return (tile.h00 + tile.h10 + tile.h11 + tile.h01) * 0.25;
+}
+
 function getForestGroundColor(tile: TileView, wx: number, wz: number, fx: number, fz: number, height: number): THREE.Color {
   const base = getGroundVertexColor(wx, wz, height);
   if (tile.tileType !== TileType.FOREST || tile.maxMaterial <= 0) return base;
@@ -259,6 +272,7 @@ function pushTerrainTop(
   half: number
 ) {
   const divisions = TERRAIN_SUBDIVISIONS;
+  const flatVisualHeight = getFlatVisualTileHeight(tile);
   const points: THREE.Vector3[][] = [];
   const vertexColors: THREE.Color[][] = [];
 
@@ -269,7 +283,9 @@ function pushTerrainTop(
     for (let x = 0; x <= divisions; x++) {
       const fx = x / divisions;
       const point = getTileSurfacePoint(tile, center, half, fx, fz);
-      if (x > 0 && x < divisions && z > 0 && z < divisions) {
+      if (flatVisualHeight !== null) {
+        point.y = flatVisualHeight;
+      } else if (x > 0 && x < divisions && z > 0 && z < divisions) {
         point.y = getVisualTerrainHeight(tile, point.x, point.z, point.y);
       }
       pointRow.push(point);
@@ -343,15 +359,20 @@ export function createTerrainMesh(tiles: Iterable<TileView>): THREE.Mesh {
 
   for (const tile of tiles) {
     const center = getTileCenter(tile.tx, tile.tz);
+    const flatVisualHeight = getFlatVisualTileHeight(tile);
+    const h00 = flatVisualHeight ?? tile.h00;
+    const h10 = flatVisualHeight ?? tile.h10;
+    const h11 = flatVisualHeight ?? tile.h11;
+    const h01 = flatVisualHeight ?? tile.h01;
     const dirt = tile.isMountain
       ? getMountainRockColor(center.x, center.z, tile.height).multiplyScalar(0.82)
       : new THREE.Color().setHSL(0.09, 0.55, 0.32);
     const dirtDark = dirt.clone().multiplyScalar(tile.isMountain ? 0.62 : 0.74);
 
-    const t00 = new THREE.Vector3(center.x - half, tile.h00, center.z - half);
-    const t10 = new THREE.Vector3(center.x + half, tile.h10, center.z - half);
-    const t11 = new THREE.Vector3(center.x + half, tile.h11, center.z + half);
-    const t01 = new THREE.Vector3(center.x - half, tile.h01, center.z + half);
+    const t00 = new THREE.Vector3(center.x - half, h00, center.z - half);
+    const t10 = new THREE.Vector3(center.x + half, h10, center.z - half);
+    const t11 = new THREE.Vector3(center.x + half, h11, center.z + half);
+    const t01 = new THREE.Vector3(center.x - half, h01, center.z + half);
 
     const b00 = new THREE.Vector3(center.x - half, 0, center.z - half);
     const b10 = new THREE.Vector3(center.x + half, 0, center.z - half);

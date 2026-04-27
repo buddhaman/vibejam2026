@@ -406,7 +406,7 @@ function canPlaceRock(x: number, z: number, tiles: Map<string, TileView>) {
   const { tx, tz } = getTileCoordsFromWorld(x, z);
   const tile = tiles.get(getTileKey(tx, tz));
   if (!tile) return false;
-  if (!tile.canWalk && !tile.isMountain) return false;
+  if (!tile.isMountain && (!tile.canWalk || !tile.canBuild)) return false;
   if (tile.tileType === TileType.FOREST && tile.maxMaterial > 0) return false;
   if (tile.compute > 0 || tile.maxCompute > 0) return false;
   return true;

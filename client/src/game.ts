@@ -373,8 +373,14 @@ export class Game {
     if (typeof msg.canWalk === "boolean" && tile.canWalk !== msg.canWalk) {
       tile.canWalk = msg.canWalk;
       this._walkabilityDirty = true;
+      this._dirtyTileVisualLayers.add("rocks");
+      this._dirtyTileVisualLayers.add("foliage");
     }
-    if (typeof msg.canBuild === "boolean") tile.canBuild = msg.canBuild;
+    if (typeof msg.canBuild === "boolean" && tile.canBuild !== msg.canBuild) {
+      tile.canBuild = msg.canBuild;
+      this._dirtyTileVisualLayers.add("rocks");
+      this._dirtyTileVisualLayers.add("foliage");
+    }
     let heightChanged = false;
     if (typeof msg.h00 === "number" && tile.h00 !== msg.h00) {
       tile.h00 = msg.h00;
