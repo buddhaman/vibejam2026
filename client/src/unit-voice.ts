@@ -26,6 +26,9 @@ const POOL_BY_SUBDIR: Record<string, readonly string[]> = {
   military: [...MILITARY_POOL],
 };
 
+const SPAWN_VOICE_FULL_DISTANCE = 34;
+const SPAWN_VOICE_CUTOFF_DISTANCE = 185;
+
 /**
  * `villager` = economy; `military` = WARBAND / ARCHER / SYNTHAUR (all play the same 5-clip pool).
  */
@@ -43,16 +46,16 @@ export function isMilitaryUnitType(u: UnitTypeValue): boolean {
   return u !== UnitType.VILLAGER;
 }
 
-function playOneShot(url: string): void {
-  void playExclusiveSfxFromUrl(url, { clipLinear: 0.5, pitchCentsMax: 11 });
+function playOneShot(url: string, clipLinear = 0.5): void {
+  void playExclusiveSfxFromUrl(url, { clipLinear, pitchCentsMax: 11 });
 }
 
-function playRandomForSubdir(subdir: string): void {
+function playRandomForSubdir(subdir: string, clipLinear = 0.5): void {
   const pool = POOL_BY_SUBDIR[subdir];
   if (pool == null || pool.length === 0) return;
   const name = pool[Math.floor(Math.random() * pool.length)] ?? pool[0];
   if (!name) return;
-  playOneShot(publicAssetUrl(`audio/voice/${subdir}/${name}`));
+  playOneShot(publicAssetUrl(`audio/voice/${subdir}/${name}`), clipLinear);
 }
 
 function getSubdirForUnit(unitType: UnitTypeValue): string | null {
@@ -78,5 +81,21 @@ export function playUnitVoiceOrDefault(unitType: UnitTypeValue): void {
     playUnitVoice(unitType);
   } else {
     playDefaultCommandVoice();
+  }
+}
+
+export function playUnitSpawnVoiceNearCamera(unitType: UnitTypeValue, distanceToCamera: number): void {
+  if (!Number.isFinite(distanceToCamera) || distanceToCamera >= SPAWN_VOICE_CUTOFF_DISTANCE) return;
+  const t =
+    distanceToCamera <= SPAWN_VOICE_FULL_DISTANCE
+      ? 1
+      : 1 - (distanceToCamera - SPAWN_VOICE_FULL_DISTANCE) / (SPAWN_VOICE_CUTOFF_DISTANCE - SPAWN_VOICE_FULL_DISTANCE);
+  const clipLinear = 0.12 + Math.max(0, Math.min(1, t)) * 0.38;
+  if (hasUnitVoiceSet(unitType)) {
+    const sub = getSubdirForUnit(unitType);
+    if (sub) playRandomForSubdir(sub, clipLinear);
+  } else {
+    const sub = getSubdirForUnit(DEFAULT_COMMAND_VOICE_UNIT);
+    if (sub) playRandomForSubdir(sub, clipLinear);
   }
 }

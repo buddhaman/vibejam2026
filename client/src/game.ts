@@ -58,7 +58,7 @@ import type { ArrowFxSystem } from "./arrow-fx.js";
 import type { BuildingDestructionFxSystem } from "./building-destruction-fx.js";
 import { type TileView } from "./terrain.js";
 import { UnitCollisionSystem } from "./unit-collision.js";
-import { isMilitaryUnitType, playDefaultCommandVoice, playUnitVoiceOrDefault } from "./unit-voice.js";
+import { isMilitaryUnitType, playDefaultCommandVoice, playUnitSpawnVoiceNearCamera, playUnitVoiceOrDefault } from "./unit-voice.js";
 
 export class Game {
   private static readonly FLOATING_RESOURCE_TEXT_LIFE = 1.15;
@@ -135,6 +135,9 @@ export class Game {
   private _orbitCameraDistanceMin = 26;
   private _orbitCameraDistanceMax = 420;
   private _orbitCameraFovDeg = 52;
+  private _orbitCameraWorldX = 0;
+  private _orbitCameraWorldY = 0;
+  private _orbitCameraWorldZ = 0;
 
   public constructor(room: Room) {
     this.room = room;
@@ -397,11 +400,22 @@ export class Game {
     return typeof player?.color === "number" ? player.color : 0x8899aa;
   }
 
-  public setOrbitCameraForFrame(distance: number, distanceMin: number, distanceMax: number, fovDeg: number): void {
+  public setOrbitCameraForFrame(
+    distance: number,
+    distanceMin: number,
+    distanceMax: number,
+    fovDeg: number,
+    cameraWorldPosition?: THREE.Vector3
+  ): void {
     this._orbitCameraDistance = distance;
     this._orbitCameraDistanceMin = distanceMin;
     this._orbitCameraDistanceMax = distanceMax;
     this._orbitCameraFovDeg = fovDeg;
+    if (cameraWorldPosition) {
+      this._orbitCameraWorldX = cameraWorldPosition.x;
+      this._orbitCameraWorldY = cameraWorldPosition.y;
+      this._orbitCameraWorldZ = cameraWorldPosition.z;
+    }
   }
 
   /** Approximate world-units occupied by one screen pixel at the current orbit distance. */
@@ -1363,7 +1377,16 @@ export class Game {
       return false;
     }
     this.room.send(MessageType.TRAIN, { buildingId, unitType } satisfies TrainMessage);
-    playUnitVoiceOrDefault(unitType);
+    const building = this.findBuildingEntity(buildingId);
+    const center = building?.getWorldCenter();
+    const distanceToCamera = center
+      ? Math.hypot(
+          center.x - this._orbitCameraWorldX,
+          this._orbitCameraWorldY,
+          center.z - this._orbitCameraWorldZ
+        )
+      : this._orbitCameraDistance;
+    playUnitSpawnVoiceNearCamera(unitType, distanceToCamera);
     return true;
   }
 
