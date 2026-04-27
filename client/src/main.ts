@@ -4,6 +4,7 @@ import { startRender } from "./render.js";
 import { ensureBuildingModelsLoaded } from "./building-model-registry.js";
 import { ensureUnitInstancedModelsLoaded } from "./unit-instanced-models.js";
 import { ensureTileVisualAssetsLoaded } from "./tile-visuals.js";
+import { initProfiling, profileMark, profileMeasure, profileMeasureAsync } from "./profile.js";
 
 const bootStart = performance.now();
 
@@ -29,38 +30,42 @@ function tameVibeJamWidget(): void {
 }
 
 async function boot() {
+  initProfiling();
   bootLog("script started");
+  profileMark("boot script started");
   tameVibeJamWidget();
   const joinStart = performance.now();
-  const room = await joinBattle();
+  const room = await profileMeasureAsync("startup joinBattle", () => joinBattle());
   bootLog("joined room", { ms: Math.round(performance.now() - joinStart) });
   // Register Colyseus custom message handlers before any await — the server can broadcast
   // `tile_update` during onJoin (e.g. town-center footprint) while we are still syncing.
   const game = new Game(room);
   const stateStart = performance.now();
-  await waitForSyncedGameState(room);
+  await profileMeasureAsync("startup waitForSyncedGameState", () => waitForSyncedGameState(room));
   bootLog("state synced", { ms: Math.round(performance.now() - stateStart) });
   const spawnChunkStart = performance.now();
-  await game.streamSpawnChunks();
+  await profileMeasureAsync("startup streamSpawnChunks", () => game.streamSpawnChunks());
   bootLog("spawn chunks ready", { ms: Math.round(performance.now() - spawnChunkStart) });
-  startRender(game);
+  profileMeasure("startup startRender", () => {
+    startRender(game);
+  });
   bootLog("first render started");
   void game.streamRemainingChunks().catch((err) => console.warn("[boot] background chunk streaming failed", err));
   window.setTimeout(() => {
     const unitStart = performance.now();
-    const unitModelsPromise = ensureUnitInstancedModelsLoaded().catch((err) => {
+    const unitModelsPromise = profileMeasureAsync("startup unit models", () => ensureUnitInstancedModelsLoaded()).catch((err) => {
       console.warn("[boot] unit models failed to load", err);
     }).then(() => {
       bootLog("unit models ready", { ms: Math.round(performance.now() - unitStart) });
     });
     const buildingStart = performance.now();
-    const buildingModelsPromise = ensureBuildingModelsLoaded().catch((err) => {
+    const buildingModelsPromise = profileMeasureAsync("startup building models", () => ensureBuildingModelsLoaded()).catch((err) => {
       console.warn("[boot] building models failed to load", err);
     }).then(() => {
       bootLog("building models ready", { ms: Math.round(performance.now() - buildingStart) });
     });
     const tileVisualStart = performance.now();
-    const tileVisualsPromise = ensureTileVisualAssetsLoaded().catch((err) => {
+    const tileVisualsPromise = profileMeasureAsync("startup tile visual assets", () => ensureTileVisualAssetsLoaded()).catch((err) => {
       console.warn("[boot] tile visuals failed to load", err);
     }).then(() => {
       bootLog("tile visuals ready", { ms: Math.round(performance.now() - tileVisualStart) });

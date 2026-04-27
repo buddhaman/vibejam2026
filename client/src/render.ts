@@ -36,6 +36,7 @@ import { resumeAudioOnUserGesture } from "./audio-mixer.js";
 import { createAudioSettingsUi } from "./audio-settings-ui.js";
 import { updateBattleCryAmbience } from "./battle-cry-ambience.js";
 import { updateThemeBgm } from "./theme-bgm.js";
+import { isProfilingEnabled, recordProfileTime } from "./profile.js";
 
 const WALKABILITY_DEBUG_KEY = "KeyV";
 const TILE_DEBUG_KEY = "Backquote"; // ` key toggles developer mode too
@@ -673,7 +674,15 @@ export function startRender(game: Game) {
     fogOfWar.update(game, now / 1000);
     const perf1 = performance.now();
     game.beginUnitCollisionFrame();
-    for (const entity of game.entities) entity.render(dt);
+    if (isProfilingEnabled()) {
+      for (const entity of game.entities) {
+        const entityStart = performance.now();
+        entity.render(dt);
+        recordProfileTime(`entity ${entity.constructor.name}`, performance.now() - entityStart);
+      }
+    } else {
+      for (const entity of game.entities) entity.render(dt);
+    }
     portalSystem.update(dt, game);
     const perf2 = performance.now();
     game.flushBeamDraws();
@@ -692,6 +701,13 @@ export function startRender(game: Game) {
     updateBattleCryAmbience(game, camera, game.getTiles(), dt);
     composer.render();
     const perf4 = performance.now();
+    recordProfileTime("frame total work", perf4 - perfSync0, { entities: game.entities.length });
+    recordProfileTime("frame sync", perfSync1 - perfSync0);
+    recordProfileTime("frame tileVisuals", perfTile1 - perfTile0);
+    recordProfileTime("frame world effects", perf1 - perf0);
+    recordProfileTime("frame entity render", perf2 - perf1);
+    recordProfileTime("frame beam flush", perf3 - perf2);
+    recordProfileTime("frame composer render", perf4 - perf3);
     const chunkStats = game.getChunkLoadStats();
     frameStats = {
       fps: dt > 0 ? 1 / dt : 0,

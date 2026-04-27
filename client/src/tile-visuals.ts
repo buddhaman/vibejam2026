@@ -5,6 +5,7 @@ import { TileType, GAME_RULES, getTileCenter, getTileCoordsFromWorld, getTileKey
 import { createInstancedVariantSet, syncInstancedVariantSet, type InstancedTransform, type InstancedVariant } from "./instancing.js";
 import type { Game } from "./game.js";
 import { applyStylizedShading, isStylizedLitMaterial } from "./stylized-shading.js";
+import { profileMeasure, recordProfileTime } from "./profile.js";
 import {
   getTerrainHeightAt,
   type ComputeSlot,
@@ -25,6 +26,8 @@ const ROCK_VARIANT_COUNT = 5;
 const ROCK_LAYER_CAPACITY = 2048;
 const FOLIAGE_VARIANT_COUNT = 3;
 const FOLIAGE_LAYER_CAPACITY = 4096;
+const SCATTERED_ROCK_SCALE_MULTIPLIER = 1.5;
+const FOLIAGE_SCALE_MULTIPLIER = 1.5;
 
 type TileVisualLayerId = "forest" | "datacenters" | "rocks" | "foliage";
 
@@ -470,9 +473,9 @@ function generateRockPile(
     const p = polar(f.x, f.z, angle, dist);
     if (!canPlace(p.x, p.z)) continue;
     const central = i < 2;
-    const baseScale = central
+    const baseScale = (central
       ? randRange(seed + 3, 1.0, 1.7)
-      : randRange(seed + 4, 0.48, 0.9);
+      : randRange(seed + 4, 0.48, 0.9)) * SCATTERED_ROCK_SCALE_MULTIPLIER;
     rocks.push({
       x: p.x,
       z: p.z,
@@ -508,7 +511,7 @@ function generateRockRidge(
     const z = f.z + dirZ * along + sideZ * side;
     if (!canPlace(x, z)) continue;
     const taper = 1.0 - Math.abs(centered) * 0.45;
-    const baseScale = randRange(seed + 2, 0.7, 1.25) * taper;
+    const baseScale = randRange(seed + 2, 0.7, 1.25) * taper * SCATTERED_ROCK_SCALE_MULTIPLIER;
     rocks.push({
       x,
       z,
@@ -544,7 +547,7 @@ function generateCliffSlabs(
     if (!canPlace(x, z)) continue;
     const baseScale = f.isMountain
       ? randRange(seed + 2, 4.6, 7.4)
-      : randRange(seed + 2, 0.9, 1.55);
+      : randRange(seed + 2, 0.9, 1.55) * SCATTERED_ROCK_SCALE_MULTIPLIER;
     rocks.push({
       x,
       z,
@@ -600,22 +603,23 @@ function getFoliageClusterCenters(tile: TileView, tileMap: Map<string, TileView>
   const seed = tile.tx * 4721.31 + tile.tz * 8521.77 + 312.4;
   for (const formation of generateRockFormationsForTile(tile)) {
     if (formation.isMountain) continue;
+    if (hash(formation.seed + 260) > 0.66) continue;
     centers.push({
       x: formation.x + jitter(formation.seed + 200, formation.radius * 0.35),
       z: formation.z + jitter(formation.seed + 201, formation.radius * 0.35),
-      radius: formation.radius * randRange(formation.seed + 202, 0.45, 0.82),
-      count: Math.floor(randRange(formation.seed + 203, 3, 6)),
+      radius: formation.radius * randRange(formation.seed + 202, 0.72, 1.16),
+      count: Math.floor(randRange(formation.seed + 203, 1, 4)),
       seed: formation.seed + 240,
     });
   }
 
   const patch = hash(tile.tx * 37.91 + tile.tz * 81.33 + 822.2);
-  if (patch <= 0.045) {
+  if (patch <= 0.03) {
     centers.push({
       x: center.x + jitter(seed + 1, half * 0.46),
       z: center.z + jitter(seed + 2, half * 0.46),
-      radius: randRange(seed + 3, GAME_RULES.TILE_SIZE * 0.08, GAME_RULES.TILE_SIZE * 0.18),
-      count: Math.floor(randRange(seed + 4, 3, 6)),
+      radius: randRange(seed + 3, GAME_RULES.TILE_SIZE * 0.14, GAME_RULES.TILE_SIZE * 0.27),
+      count: Math.floor(randRange(seed + 4, 1, 4)),
       seed,
     });
   }
@@ -684,7 +688,7 @@ function generateFoliageSlotsForTiles(tiles: Iterable<TileView>, tileMap: Map<st
           x: p.x,
           z: p.z,
           rotationY: randRange(slotSeed + 3, 0, Math.PI * 2),
-          scale: randRange(slotSeed + 4, 1.45, 2.35),
+          scale: randRange(slotSeed + 4, 1.45, 2.35) * FOLIAGE_SCALE_MULTIPLIER,
           variantIndex: pick(slotSeed + 5, FOLIAGE_VARIANT_COUNT),
         });
       }
@@ -1109,8 +1113,9 @@ export class TileVisualManager {
   }
 
   public sync(game: Game): void {
+    const start = performance.now();
     if (this.assetVersion !== getTileVisualAssetVersion()) {
-      this.rebuildLayers();
+      profileMeasure("tileVisuals rebuildLayers", () => this.rebuildLayers());
       game.markAllTileVisualsDirty();
     }
     const dirty = game.consumeTileVisualDirty();
@@ -1121,8 +1126,20 @@ export class TileVisualManager {
     if (!dirty.all && layerDirty.size === 0) return;
 
     const tiles = game.getTilesOrdered();
+    let rebuiltLayers = 0;
     for (const layer of this.layers) {
-      if (dirty.all || layerDirty.has(layer.id)) layer.rebuild(tiles, game);
+      if (dirty.all || layerDirty.has(layer.id)) {
+        rebuiltLayers += 1;
+        profileMeasure(`tileVisuals rebuild ${layer.id}`, () => layer.rebuild(tiles, game), {
+          tiles: tiles.length,
+        });
+      }
     }
+    recordProfileTime("tileVisuals sync dirty", performance.now() - start, {
+      dirtyAll: dirty.all,
+      dirtyLayers: Array.from(layerDirty),
+      rebuiltLayers,
+      tiles: tiles.length,
+    });
   }
 }

@@ -17,6 +17,7 @@ import { CentralServerRenderer } from "./central-server-renderer.js";
 import { ChunkDebugOverlay } from "./chunk-debug-overlay.js";
 import { FogOfWarOverlay } from "./fog-of-war.js";
 import { TrueColorOutlinePass } from "./true-color-outline-pass.js";
+import { profileMeasure, recordProfileTime } from "./profile.js";
 
 const SCENE_ENVIRONMENT_INTENSITY = 0.08;
 
@@ -200,6 +201,9 @@ export function createRenderWorld(game: Game): RenderWorld {
   }
 
   function rebuildTerrain(chunkKeys?: Iterable<string>) {
+    const start = performance.now();
+    let rebuiltChunks = 0;
+    let rebuiltTiles = 0;
     if (chunkKeys == null) {
       const loadedKeys = new Set(game.getLoadedChunkKeys());
       for (const [key, mesh] of terrainMeshes.entries()) {
@@ -214,11 +218,15 @@ export function createRenderWorld(game: Game): RenderWorld {
           terrain.remove(prev);
           disposeTerrainMesh(prev);
         }
-        const mesh = createTerrainMesh(game.getTilesForChunk(key));
+        const tiles = game.getTilesForChunk(key);
+        rebuiltChunks += 1;
+        rebuiltTiles += tiles.length;
+        const mesh = profileMeasure("terrain createTerrainMesh", () => createTerrainMesh(tiles), { key, tiles: tiles.length });
         terrain.add(mesh);
         terrainMeshes.set(key, mesh);
       }
       world.terrain = terrain;
+      recordProfileTime("terrain rebuildTerrain", performance.now() - start, { mode: "all", rebuiltChunks, rebuiltTiles });
       return;
     }
     for (const key of chunkKeys) {
@@ -230,11 +238,14 @@ export function createRenderWorld(game: Game): RenderWorld {
       }
       const tiles = game.getTilesForChunk(key);
       if (tiles.length === 0) continue;
-      const mesh = createTerrainMesh(tiles);
+      rebuiltChunks += 1;
+      rebuiltTiles += tiles.length;
+      const mesh = profileMeasure("terrain createTerrainMesh", () => createTerrainMesh(tiles), { key, tiles: tiles.length });
       terrain.add(mesh);
       terrainMeshes.set(key, mesh);
     }
     world.terrain = terrain;
+    recordProfileTime("terrain rebuildTerrain", performance.now() - start, { mode: "dirty", rebuiltChunks, rebuiltTiles });
   }
 
   rebuildTerrain();
