@@ -1761,7 +1761,7 @@ function drawKothPanel(
   const PAD = 10;
   const panelW = 188;
   const headerH = 46;
-  const entryCount = koth.entries.length;
+  const entryCount = Math.max(2, koth.entries.length);
   const panelH = headerH + entryCount * ROW_H + PAD;
   const px = W - panelW - 10;
   const py = 10;
@@ -1895,6 +1895,33 @@ function drawKothPanel(
     ctx.textAlign = "right";
     ctx.textBaseline = "middle";
     ctx.fillText(formatKothTime(entry.timeMs), px + panelW - 10, rowY);
+    ctx.restore();
+  }
+
+  if (koth.entries.length === 1) {
+    const rowY = py + headerH + ROW_H + ROW_H / 2;
+
+    ctx.save();
+    ctx.font = F_NUM_SM;
+    ctx.fillStyle = MARBLE_MUTED;
+    ctx.textAlign = "left";
+    ctx.textBaseline = "middle";
+    ctx.fillText("2.", px + 10, rowY);
+    ctx.restore();
+
+    ctx.save();
+    ctx.beginPath();
+    ctx.arc(px + 32, rowY, 4, 0, Math.PI * 2);
+    ctx.fillStyle = "rgba(242, 237, 215, 0.18)";
+    ctx.fill();
+    ctx.restore();
+
+    ctx.save();
+    ctx.font = "10px system-ui, sans-serif";
+    ctx.fillStyle = MARBLE_MUTED;
+    ctx.textAlign = "left";
+    ctx.textBaseline = "middle";
+    ctx.fillText("Waiting for other players", px + 42, rowY);
     ctx.restore();
   }
 }

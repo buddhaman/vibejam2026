@@ -627,6 +627,21 @@ export class BattleRoom extends Room<{ state: GameState }> {
     this.combatRetreatTargets.delete(blob.id);
   }
 
+  private tryRetaliateAgainstAttacker(defender: Blob, attacker: Blob): void {
+    if (defender.id === attacker.id) return;
+    if (defender.ownerId === attacker.ownerId) return;
+    if (defender.health <= 0 || defender.unitCount <= 0) return;
+    if (attacker.health <= 0 || attacker.unitCount <= 0) return;
+    if (this.blobHasRetreatIntent(defender)) return;
+    if (this.blobHasCombatGroup(defender)) return;
+    if (defender.attackTargetType === AttackTargetType.BLOB && defender.attackTargetId === attacker.id) return;
+
+    this.clearBlobGatherTarget(defender);
+    defender.attackTargetType = AttackTargetType.BLOB;
+    defender.attackTargetId = attacker.id;
+    this.combatRetreatTargets.delete(defender.id);
+  }
+
   private isBlobRangedAttackActive(blob: Blob, target: AttackableTarget): boolean {
     const rules = getUnitRules(blob.unitType);
     if (rules.attackStyle !== "ranged") return false;
@@ -2572,6 +2587,7 @@ export class BattleRoom extends Room<{ state: GameState }> {
       if (target.type === AttackTargetType.BLOB) {
         target.entity.health -= damage;
         this.syncBlobHealthToUnitCount(target.entity);
+        this.tryRetaliateAgainstAttacker(target.entity, blob);
         if (target.entity.unitCount <= 0 || target.entity.health <= 0) deadBlobIds.add(target.entity.id);
       } else {
         target.entity.health = Math.max(0, target.entity.health - damage);

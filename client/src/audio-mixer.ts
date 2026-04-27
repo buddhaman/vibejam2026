@@ -47,7 +47,12 @@ let ac: AudioContext | null = null;
 let sfxBus: GainNode | null = null;
 let musicBus: GainNode | null = null;
 const bufferByUrl = new Map<string, Promise<AudioBuffer | null>>();
+const mediaSourceByElement = new WeakMap<HTMLMediaElement, MediaElementAudioSourceNode>();
 let exclusiveBarkSource: AudioBufferSourceNode | null = null;
+
+function logAudioProfile(label: string, extra?: Record<string, unknown>): void {
+  console.info(`[audio] ${label}`, extra ?? "");
+}
 
 function ensureContext(): AudioContext {
   if (ac) return ac;
@@ -85,11 +90,23 @@ function loadBuffer(url: string): Promise<AudioBuffer | null> {
   if (p) return p;
   const ctx = ensureContext();
   p = (async () => {
+    const startedAt = performance.now();
     try {
       const r = await fetch(url);
       if (!r.ok) return null;
+      const fetchedAt = performance.now();
       const arr = await r.arrayBuffer();
-      return await ctx.decodeAudioData(arr);
+      const decodeStart = performance.now();
+      const decoded = await ctx.decodeAudioData(arr);
+      logAudioProfile("decoded buffered audio", {
+        url,
+        fetchMs: Math.round(fetchedAt - startedAt),
+        bytesMs: Math.round(decodeStart - fetchedAt),
+        decodeMs: Math.round(performance.now() - decodeStart),
+        totalMs: Math.round(performance.now() - startedAt),
+        kb: Math.round(arr.byteLength / 1024),
+      });
+      return decoded;
     } catch {
       return null;
     }
@@ -207,4 +224,74 @@ export function setMusicMuted(m: boolean): void {
 export function getMusicGainNodeForRouting(): GainNode {
   ensureContext();
   return musicBus!;
+}
+
+export type StreamedMusicTrack = {
+  element: HTMLAudioElement;
+  gain: GainNode;
+  play: () => Promise<boolean>;
+};
+
+export function createStreamedMusicTrack(url: string, innerGain = 1): StreamedMusicTrack {
+  const bus = getMusicGainNodeForRouting();
+  const ctx = bus.context;
+  const element = new Audio();
+  element.src = url;
+  element.loop = true;
+  element.preload = "metadata";
+  element.crossOrigin = "anonymous";
+  element.playsInline = true;
+
+  let source = mediaSourceByElement.get(element);
+  if (!source) {
+    source = ctx.createMediaElementSource(element);
+    mediaSourceByElement.set(element, source);
+  }
+
+  const gain = ctx.createGain();
+  gain.gain.value = Math.min(1, Math.max(0, innerGain));
+  source.connect(gain);
+  gain.connect(bus);
+
+  const createdAt = performance.now();
+  element.addEventListener(
+    "loadedmetadata",
+    () => {
+      logAudioProfile("theme metadata ready", {
+        url,
+        waitMs: Math.round(performance.now() - createdAt),
+        durationSec: Number.isFinite(element.duration) ? Math.round(element.duration) : null,
+      });
+    },
+    { once: true },
+  );
+  element.addEventListener(
+    "canplay",
+    () => {
+      logAudioProfile("theme can play", {
+        url,
+        waitMs: Math.round(performance.now() - createdAt),
+      });
+    },
+    { once: true },
+  );
+
+  return {
+    element,
+    gain,
+    async play(): Promise<boolean> {
+      const playStartedAt = performance.now();
+      try {
+        await element.play();
+        logAudioProfile("theme playback started", {
+          url,
+          waitMs: Math.round(performance.now() - playStartedAt),
+        });
+        return true;
+      } catch (error) {
+        console.warn("[audio] theme playback failed", error);
+        return false;
+      }
+    },
+  };
 }

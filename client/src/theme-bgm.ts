@@ -1,4 +1,4 @@
-import { getDecodedBufferFromUrl, getMusicGainNodeForRouting, resumeAudioOnUserGesture } from "./audio-mixer.js";
+import { createStreamedMusicTrack, resumeAudioOnUserGesture, type StreamedMusicTrack } from "./audio-mixer.js";
 import { publicAssetUrl } from "./asset-url.js";
 
 const THEME_URL = publicAssetUrl("audio/bgm/agi_theme.ogg");
@@ -8,6 +8,7 @@ const THEME_INNER = 0.3;
 type BgmState = "off" | "loading" | "on";
 
 let state: BgmState = "off";
+let track: StreamedMusicTrack | null = null;
 
 /**
  * Call each frame. Starts a single looping main theme the first time the
@@ -19,25 +20,17 @@ export function updateThemeBgm(): void {
   void (async () => {
     try {
       resumeAudioOnUserGesture();
-      const bus = getMusicGainNodeForRouting();
-      const ctx = bus.context;
-      if (ctx.state === "suspended") {
+      if (!track) track = createStreamedMusicTrack(THEME_URL, THEME_INNER);
+      const ctx = track.gain.context;
+      if (ctx.state !== "running") {
         state = "off";
         return;
       }
-      const buf = await getDecodedBufferFromUrl(THEME_URL);
-      if (!buf) {
+      const started = await track.play();
+      if (!started) {
         state = "off";
         return;
       }
-      const s = ctx.createBufferSource();
-      s.buffer = buf;
-      s.loop = true;
-      const g = ctx.createGain();
-      g.gain.value = THEME_INNER;
-      s.connect(g);
-      g.connect(bus);
-      s.start(0);
       state = "on";
     } catch {
       state = "off";
