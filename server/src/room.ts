@@ -1145,15 +1145,27 @@ export class BattleRoom extends Room<{ state: GameState }> {
     if (dropoff) this.steerBlobTo(best, dropoff.x, dropoff.y, true);
   }
 
+  private getAssignedConstructionUnitCount(buildingId: string): number {
+    let assigned = 0;
+    for (const blob of this.state.blobs.values()) {
+      if (!this.constructionOrderBlobIds.has(blob.id) || blob.gatherTargetBuildingId !== buildingId) continue;
+      assigned += Math.max(1, blob.unitCount);
+    }
+    return assigned;
+  }
+
   private assignIdleBlobToPendingConstruction(blob: Blob): boolean {
     if (!this.isBlobIdleForAutoBuild(blob)) return false;
     let best: Building | null = null;
+    let bestAssignedUnits = Infinity;
     let bestDistance = Infinity;
     for (const building of this.state.buildings.values()) {
       if (building.ownerId !== blob.ownerId || !this.isBuildingUnderConstruction(building)) continue;
+      const assignedUnits = this.getAssignedConstructionUnitCount(building.id);
       const distance = Math.hypot(blob.x - building.x, blob.y - building.y);
-      if (distance < bestDistance) {
+      if (assignedUnits < bestAssignedUnits || (assignedUnits === bestAssignedUnits && distance < bestDistance)) {
         best = building;
+        bestAssignedUnits = assignedUnits;
         bestDistance = distance;
       }
     }
