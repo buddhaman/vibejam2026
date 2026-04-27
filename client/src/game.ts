@@ -58,7 +58,7 @@ import type { ArrowFxSystem } from "./arrow-fx.js";
 import type { BuildingDestructionFxSystem } from "./building-destruction-fx.js";
 import { type TileView } from "./terrain.js";
 import { UnitCollisionSystem } from "./unit-collision.js";
-import { playDefaultCommandVoice, playUnitVoiceOrDefault } from "./unit-voice.js";
+import { isMilitaryUnitType, playDefaultCommandVoice, playUnitVoiceOrDefault } from "./unit-voice.js";
 
 export class Game {
   private static readonly FLOATING_RESOURCE_TEXT_LIFE = 1.15;
@@ -1373,11 +1373,21 @@ export class Game {
 
   public sendSquadSpreadIntent(blobId: string, spread: SquadSpreadValue): void {
     this.room.send(MessageType.SQUAD_SPREAD, { blobId, spread } satisfies SquadSpreadMessage);
+    {
+      const b = this.findBlobEntity(blobId);
+      const u = b?.getUnitType() ?? UnitType.WARBAND;
+      if (isMilitaryUnitType(u)) playUnitVoiceOrDefault(u);
+    }
     if (this.selectedEntityId === blobId) this.clearSelection();
   }
 
   public sendBlobAggroIntent(blobId: string, aggroMode: BlobAggroMode): void {
     this.room.send(MessageType.BLOB_AGGRO, { blobId, aggroMode } satisfies BlobAggroMessage);
+    {
+      const b = this.findBlobEntity(blobId);
+      const u = b?.getUnitType() ?? UnitType.WARBAND;
+      if (isMilitaryUnitType(u)) playUnitVoiceOrDefault(u);
+    }
     if (this.selectedEntityId === blobId) this.clearSelection();
   }
 

@@ -2,11 +2,7 @@ import { playExclusiveSfxFromUrl } from "./audio-mixer.js";
 import { publicAssetUrl } from "./asset-url.js";
 import { UnitType, type UnitType as UnitTypeValue } from "../../shared/game-rules.js";
 
-/**
- * Pooled lines under `public/audio/voice/{unit}/` — one clip per `ACTION_POOL` entry.
- * On each bark we pick a random file from the pool (no per-action mapping yet).
- */
-const ACTION_POOL = [
+const VILLAGER_POOL = [
   "action0.ogg",
   "action1.ogg",
   "action2.ogg",
@@ -16,19 +12,35 @@ const ACTION_POOL = [
   "action6.ogg",
 ] as const;
 
+/** 5 latest military command lines — random pick on each user action. */
+const MILITARY_POOL = [
+  "action0.ogg",
+  "action1.ogg",
+  "action2.ogg",
+  "action3.ogg",
+  "action4.ogg",
+] as const;
+
+const POOL_BY_SUBDIR: Record<string, readonly string[]> = {
+  villager: VILLAGER_POOL as unknown as string[],
+  military: [...MILITARY_POOL],
+};
+
 /**
- * Maps game unit type → subdirectory of `public/audio/voice/`.
- * Copy the same `action*.ogg` set into each new unit folder and bump `ACTION_POOL` if you add more clips.
+ * `villager` = economy; `military` = WARBAND / ARCHER / SYNTHAUR (all play the same 5-clip pool).
  */
 export const VOICE_DIR_BY_UNIT: Partial<Record<UnitTypeValue, string>> = {
   [UnitType.VILLAGER]: "villager",
+  [UnitType.WARBAND]: "military",
+  [UnitType.ARCHER]: "military",
+  [UnitType.SYNTHAUR]: "military",
 };
 
 export const DEFAULT_COMMAND_VOICE_UNIT = UnitType.VILLAGER;
 
-function randomActionFilename(): (typeof ACTION_POOL)[number] {
-  const i = Math.floor(Math.random() * ACTION_POOL.length);
-  return ACTION_POOL[i] ?? ACTION_POOL[0]!;
+/** In this build, the only non-villager controllable units are the three military line types. */
+export function isMilitaryUnitType(u: UnitTypeValue): boolean {
+  return u !== UnitType.VILLAGER;
 }
 
 function playOneShot(url: string): void {
@@ -36,8 +48,11 @@ function playOneShot(url: string): void {
 }
 
 function playRandomForSubdir(subdir: string): void {
-  const url = publicAssetUrl(`audio/voice/${subdir}/${randomActionFilename()}`);
-  playOneShot(url);
+  const pool = POOL_BY_SUBDIR[subdir];
+  if (pool == null || pool.length === 0) return;
+  const name = pool[Math.floor(Math.random() * pool.length)] ?? pool[0];
+  if (!name) return;
+  playOneShot(publicAssetUrl(`audio/voice/${subdir}/${name}`));
 }
 
 function getSubdirForUnit(unitType: UnitTypeValue): string | null {
